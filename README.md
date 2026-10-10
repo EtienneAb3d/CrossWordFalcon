@@ -263,8 +263,9 @@ On the page:
    language of the specific word they're about. The **"Symmetry"** menu,
    right of the black-cell rate, makes the black cells come in mirrored
    groups (horizontal, vertical, diagonal, both ways, or "Rotation" — four cells turned by quarter turns — for a
-   square grid); it shapes the starting layout, and the finished grid can
-   still lose a little of that symmetry as the generator adjusts it.
+   square grid); every black cell the generator later adds, removes or
+   moves follows the same symmetry (words in the way are removed first),
+   so the finished grid stays symmetric.
 2. Two optional fields sit right above the **"Generate grid"** button,
    both built the same way: type a word and click **+** (or just type a
    space, comma, or other punctuation right after it) to add it to the

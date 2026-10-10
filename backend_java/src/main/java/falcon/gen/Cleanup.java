@@ -784,6 +784,13 @@ public final class Cleanup {
     /** Returns {grid, slots, assignment} or null. */
     public static Object[] plugIsolatedCells(char[][] grid, int rows, int cols, List<int[]> slots, String[] assignment,
                                              DualIndex index, Map<Integer, Character> permanentLocked) {
+        return plugIsolatedCells(grid, rows, cols, slots, assignment, index, permanentLocked, null);
+    }
+
+    /** symmetry: a cell is only plugged with its images ({@link Grids#blackGroup}), every image already black or an
+     * isolated cell plugged too, otherwise nothing is plugged (null). Mirrors _plug_isolated_cells. */
+    public static Object[] plugIsolatedCells(char[][] grid, int rows, int cols, List<int[]> slots, String[] assignment,
+                                             DualIndex index, Map<Integer, Character> permanentLocked, String symmetry) {
         Map<Integer, Character> known = knownFromAssignment(slots, assignment, null);
         Set<Integer> unfilled = new LinkedHashSet<>();
         for (int r = 0; r < rows; r++) for (int c = 0; c < cols; c++) {
@@ -795,6 +802,9 @@ public final class Cleanup {
             if (unfilled.contains(Cells.of(r - 1, c)) || unfilled.contains(Cells.of(r + 1, c))
                     || (c > 0 && unfilled.contains(Cells.of(r, c - 1))) || unfilled.contains(Cells.of(r, c + 1))) {
                 return null;
+            }
+            for (int image : Grids.blackGroup(rows, cols, cell, symmetry)) {
+                if (grid[Cells.r(image)][Cells.c(image)] != BLACK && !unfilled.contains(image)) return null;
             }
         }
         char[][] ng = Grids.copy(grid);
@@ -822,6 +832,17 @@ public final class Cleanup {
                                           boolean excludeImpossibleLocked, char[][] seedGrid, DualIndex index, Rng rng,
                                           Map<Integer, Character> permanentLocked, Set<Integer> permanentBlack,
                                           boolean deep) {
+        return buildRetrySeed(grid, rows, cols, slots, assignment, impossibleSlots, lockedLetters,
+                excludeImpossibleLocked, seedGrid, index, rng, permanentLocked, permanentBlack, deep, null);
+    }
+
+    /** symmetry: a black cell is reopened only together with every black image of it, each of them reopenable on
+     * its own. Mirrors _build_retry_seed. */
+    public static Object[] buildRetrySeed(char[][] grid, int rows, int cols, List<int[]> slots, String[] assignment,
+                                          List<Integer> impossibleSlots, Map<Integer, Character> lockedLetters,
+                                          boolean excludeImpossibleLocked, char[][] seedGrid, DualIndex index, Rng rng,
+                                          Map<Integer, Character> permanentLocked, Set<Integer> permanentBlack,
+                                          boolean deep, String symmetry) {
         Object[] cleaned = cleanBlockedSlots(slots, assignment, impossibleSlots, lockedLetters, excludeImpossibleLocked,
                 index, rng, null, null, null, permanentLocked, null, null, deep);
         String[] asg = (String[]) cleaned[0];
@@ -850,15 +871,32 @@ public final class Cleanup {
             for (int r = 0; r < rows; r++) for (int c = 0; c < cols; c++) if (seedGrid[r][c] == BLACK) protectedCells.add(Cells.of(r, c));
         }
         if (permanentBlack != null) protectedCells.addAll(permanentBlack);
-        char[][] ng = Grids.copy(grid);
+        TreeSet<Integer> reopened = new TreeSet<>();
         for (int r = 0; r < rows; r++) {
             for (int c = 0; c < cols; c++) {
-                if (ng[r][c] == BLACK && !protectedCells.contains(Cells.of(r, c))) {
-                    if (fullySurroundedByBlack(grid, rows, cols, r, c)) continue;
-                    ng[r][c] = WHITE;
+                if (grid[r][c] == BLACK && !protectedCells.contains(Cells.of(r, c))
+                        && !fullySurroundedByBlack(grid, rows, cols, r, c)) {
+                    reopened.add(Cells.of(r, c));
                 }
             }
         }
+        if (Grids.isSymmetric(symmetry)) {
+            boolean changed = true;
+            while (changed) {
+                changed = false;
+                for (int cell : new ArrayList<>(reopened)) {
+                    for (int image : Grids.blackGroup(rows, cols, cell, symmetry)) {
+                        if (grid[Cells.r(image)][Cells.c(image)] == BLACK && !reopened.contains(image)) {
+                            reopened.remove(cell);
+                            changed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        char[][] ng = Grids.copy(grid);
+        for (int cell : reopened) ng[Cells.r(cell)][Cells.c(cell)] = WHITE;
         return new Object[]{ng, confirmed};
     }
 
@@ -869,6 +907,97 @@ public final class Cleanup {
             if (!(rr >= 0 && rr < rows && cc >= 0 && cc < cols) || grid[rr][cc] != BLACK) return false;
         }
         return true;
+    }
+
+    /**
+     * Extends every black-cell change from {@code before} to {@code after} to the changed cell's images under
+     * {@code symmetry}. Returns {grid, letters}. Each change is a unit — one cell, or a move ({@code moves}:
+     * {freed cell, new black cell or -1} pairs, kept or undone together). A unit's images take the value its own cells
+     * took; an image blackened may not hold a permanentLocked letter, an image freed may not be a permanentBlack cell,
+     * and the grid must stay structurally valid (min interior free 1). A unit that cannot be extended is undone, unless
+     * undoing it breaks structural validity. Every word of {@code after} (a slot fully covered by {@code letters})
+     * whose cells no longer form a slot of the final grid is removed: its letters are erased, except those a kept word
+     * or a permanentLocked cell carries; a letter on a cell now black is erased too.
+     * Mirrors crossword_gen._symmetrize_black_changes.
+     */
+    public static Object[] symmetrizeBlackChanges(char[][] before, char[][] after, int rows, int cols,
+                                                  Map<Integer, Character> letters, String symmetry,
+                                                  Map<Integer, Character> permanentLocked, Set<Integer> permanentBlack,
+                                                  List<int[]> moves) {
+        char[][] grid = Grids.copy(after);
+        if (!Grids.isSymmetric(symmetry)) return new Object[]{grid, new LinkedHashMap<>(letters)};
+        Map<Integer, Character> perm = permanentLocked == null ? Map.of() : permanentLocked;
+        Set<Integer> permBlack = permanentBlack == null ? Set.of() : permanentBlack;
+        List<Integer> changed = new ArrayList<>();
+        for (int r = 0; r < rows; r++) for (int c = 0; c < cols; c++) {
+            if ((before[r][c] == BLACK) != (after[r][c] == BLACK)) changed.add(Cells.of(r, c));
+        }
+        Set<Integer> changedSet = new HashSet<>(changed);
+        List<List<Integer>> units = new ArrayList<>();
+        Set<Integer> inMove = new HashSet<>();
+        for (int[] move : moves == null ? List.<int[]>of() : moves) {
+            List<Integer> unit = new ArrayList<>();
+            unit.add(move[0]);
+            if (move[1] >= 0) unit.add(move[1]);
+            boolean all = true;
+            for (int cell : unit) if (!changedSet.contains(cell) || inMove.contains(cell)) all = false;
+            if (all) {
+                units.add(unit);
+                inMove.addAll(unit);
+            }
+        }
+        for (int cell : changed) if (!inMove.contains(cell)) units.add(List.of(cell));
+        for (List<Integer> unit : units) {
+            Map<Integer, Boolean> targets = new LinkedHashMap<>();
+            boolean ok = true;
+            for (int cell : unit) {
+                boolean wantBlack = after[Cells.r(cell)][Cells.c(cell)] == BLACK;
+                for (int image : Grids.blackGroup(rows, cols, cell, symmetry)) {
+                    if (unit.contains(image) || (grid[Cells.r(image)][Cells.c(image)] == BLACK) == wantBlack) continue;
+                    Boolean prev = targets.get(image);
+                    if (prev != null && prev != wantBlack) ok = false;
+                    else if (wantBlack && perm.containsKey(image)) ok = false;
+                    else if (!wantBlack && permBlack.contains(image)) ok = false;
+                    targets.put(image, wantBlack);
+                }
+            }
+            if (targets.isEmpty()) continue;
+            if (ok) {
+                for (Map.Entry<Integer, Boolean> e : targets.entrySet()) {
+                    grid[Cells.r(e.getKey())][Cells.c(e.getKey())] = e.getValue() ? BLACK : WHITE;
+                }
+                if (Grids.isStructurallyValid(grid, rows, cols, 1)) continue;
+                for (Map.Entry<Integer, Boolean> e : targets.entrySet()) {
+                    grid[Cells.r(e.getKey())][Cells.c(e.getKey())] = e.getValue() ? WHITE : BLACK;
+                }
+            }
+            for (int cell : unit) {
+                int r = Cells.r(cell), c = Cells.c(cell);
+                grid[r][c] = before[r][c] == BLACK ? BLACK : WHITE;
+            }
+            if (!Grids.isStructurallyValid(grid, rows, cols, 1)) {
+                for (int cell : unit) {
+                    int r = Cells.r(cell), c = Cells.c(cell);
+                    grid[r][c] = after[r][c] == BLACK ? BLACK : WHITE;
+                }
+            }
+        }
+        Set<Cells.Key> finalSlots = new HashSet<>();
+        for (int[] cells : Grids.extractSlots(grid, rows, cols)) finalSlots.add(Cells.key(cells));
+        Set<Integer> keptCells = new HashSet<>(perm.keySet());
+        Set<Integer> droppedCells = new HashSet<>();
+        for (int[] cells : Grids.extractSlots(after, rows, cols)) {
+            if (!Grids.allKnown(cells, letters)) continue;
+            Set<Integer> target = finalSlots.contains(Cells.key(cells)) ? keptCells : droppedCells;
+            for (int cell : cells) target.add(cell);
+        }
+        Map<Integer, Character> out = new LinkedHashMap<>();
+        for (Map.Entry<Integer, Character> e : letters.entrySet()) {
+            int cell = e.getKey();
+            if (grid[Cells.r(cell)][Cells.c(cell)] == BLACK) continue;
+            if (keptCells.contains(cell) || !droppedCells.contains(cell)) out.put(cell, e.getValue());
+        }
+        return new Object[]{grid, out};
     }
 
     // ================================================================== scores / pools
@@ -908,6 +1037,16 @@ public final class Cleanup {
                                                  Rng rng, long deadlineChecks, AtomicBoolean cancelEvent,
                                                  Map<Integer, Character> permanentLocked, Set<Integer> permanentBlack,
                                                  Set<String> challenge) {
+        return optimizeBeforeCleanup(candGrid, candDiag, rows, cols, index, rng, deadlineChecks, cancelEvent,
+                permanentLocked, permanentBlack, challenge, null);
+    }
+
+    /** symmetry: a black cell is only removed together with every black image of it, each of them removable on its
+     * own, the whole group tried at once. Mirrors _optimize_before_cleanup. */
+    public static Object[] optimizeBeforeCleanup(char[][] candGrid, Diag candDiag, int rows, int cols, DualIndex index,
+                                                 Rng rng, long deadlineChecks, AtomicBoolean cancelEvent,
+                                                 Map<Integer, Character> permanentLocked, Set<Integer> permanentBlack,
+                                                 Set<String> challenge, String symmetry) {
         List<int[]> candSlots = Grids.extractSlots(candGrid, rows, cols);
         char[][] example = candDiag.exampleGrid;
         Set<Cells.Key> emptyTuples = new HashSet<>();
@@ -984,8 +1123,15 @@ public final class Cleanup {
                 if (cancelEvent != null && cancelEvent.get()) throw new GenerationCancelled();
                 int r = Cells.r(cell), c = Cells.c(cell);
                 if (grid[r][c] != BLACK) continue;
-                char saved = grid[r][c];
-                grid[r][c] = WHITE;
+                List<Integer> group = new ArrayList<>();
+                boolean blocked = false;
+                for (int g : Grids.blackGroup(rows, cols, cell, symmetry)) {
+                    if (grid[Cells.r(g)][Cells.c(g)] != BLACK) continue;
+                    if (lockedBlack.contains(g) || (permanentBlack != null && permanentBlack.contains(g))) blocked = true;
+                    group.add(g);
+                }
+                if (blocked) continue;
+                for (int g : group) grid[Cells.r(g)][Cells.c(g)] = WHITE;
                 if (Grids.isStructurallyValid(grid, rows, cols, 1)) {
                     Fill.Result res = tryComplete.apply(grid);
                     if (res != null) {
@@ -995,7 +1141,7 @@ public final class Cleanup {
                         continue;
                     }
                 }
-                grid[r][c] = saved;
+                for (int g : group) grid[Cells.r(g)][Cells.c(g)] = BLACK;
             }
         }
         List<int[]> lcSlots = Grids.extractSlots(grid, rows, cols);
@@ -1044,6 +1190,19 @@ public final class Cleanup {
                                                            DualIndex index, Rng rng,
                                                            Map<Integer, Character> permanentLocked,
                                                            Set<Integer> permanentBlack, Set<String> challenge) {
+        return cleanContinueCandidate(candGrid, candDiag, rows, cols, index, rng, permanentLocked, permanentBlack,
+                challenge, null);
+    }
+
+    /** symmetry: every black cell this cleanup added, freed or moved (a lengthened word's boundary, the move kept or
+     * undone whole) is extended to its images ({@link #symmetrizeBlackChanges}), the words those images modify
+     * being removed; a change whose images cannot follow is undone. Mirrors _clean_continue_candidate. */
+    public static ContinueCandidate cleanContinueCandidate(char[][] candGrid, Diag candDiag, int rows, int cols,
+                                                           DualIndex index, Rng rng,
+                                                           Map<Integer, Character> permanentLocked,
+                                                           Set<Integer> permanentBlack, Set<String> challenge,
+                                                           String symmetry) {
+        char[][] originalGrid = Grids.copy(candGrid);
         List<int[]> slots0 = Grids.extractSlots(candGrid, rows, cols);
         Zones z = shortenImpossibleZones(candGrid, rows, cols, slots0, candDiag.assignment, candDiag.impossibleSlots,
                 index, rng, permanentLocked, challenge);
@@ -1061,10 +1220,24 @@ public final class Cleanup {
         Set<Integer> newBlack = (Set<Integer>) cleaned[2];
         @SuppressWarnings("unchecked")
         Set<Integer> reopened = (Set<Integer>) cleaned[3];
-        if (!newBlack.isEmpty() || !reopened.isEmpty()) {
-            char[][] seed = Grids.copy(z.grid());
-            for (int c : newBlack) seed[Cells.r(c)][Cells.c(c)] = BLACK;
-            for (int c : reopened) seed[Cells.r(c)][Cells.c(c)] = WHITE;
+        char[][] seed = Grids.copy(z.grid());
+        for (int c : newBlack) seed[Cells.r(c)][Cells.c(c)] = BLACK;
+        for (int c : reopened) seed[Cells.r(c)][Cells.c(c)] = WHITE;
+        if (Grids.isSymmetric(symmetry) && !Arrays.deepEquals(seed, originalGrid)) {
+            List<int[]> moves = new ArrayList<>();
+            for (Link link : z.links().values()) {
+                if (link.kind().equals("lengthen")) {
+                    moves.add(new int[]{link.boundary(), link.newBoundary() == null ? -1 : link.newBoundary()});
+                }
+            }
+            Object[] sym = symmetrizeBlackChanges(originalGrid, seed, rows, cols, confirmed, symmetry, permanentLocked,
+                    permanentBlack, moves);
+            seed = (char[][]) sym[0];
+            @SuppressWarnings("unchecked")
+            Map<Integer, Character> symConfirmed = (Map<Integer, Character>) sym[1];
+            confirmed = symConfirmed;
+        }
+        if (!newBlack.isEmpty() || !reopened.isEmpty() || !Arrays.deepEquals(seed, z.grid())) {
             List<int[]> newSlots = Grids.extractSlots(seed, rows, cols);
             String[] preseed = new String[newSlots.size()];
             for (int j = 0; j < newSlots.size(); j++) preseed[j] = Grids.wordAt(newSlots.get(j), confirmed);

@@ -514,8 +514,26 @@ own rng drawn from the parent's in candidate order:
    white is a candidate satisfying the hard constraints on its own, no cell
    of the group touches a black cell or another cell of the group, and the
    grid with the whole group blackened passes `is_structurally_valid`; the
-   short-slot limit reopens a bounding cell with its images. Pre-fill, the
-   cross-palier repairs, reshapes and minimization stay unpaired. A
+   short-slot limit reopens a bounding cell with its images. Every later
+   black-cell change of an automatic generation follows the symmetry too:
+   pre-fill places a cell with its images under the draw's own rules
+   (`_prefill_group_allowed`); the "reprise telle quelle" cleanup
+   (`_clean_continue_candidate`) extends every cell it blackened, freed or
+   moved to its images (`_symmetrize_black_changes`, Java `Cleanup.
+   symmetrizeBlackChanges`: a lengthened word's boundary move is one unit;
+   an image blackened may not hold a permanent letter, one freed may not be
+   a permanent black cell, the grid must stay valid, otherwise the change
+   is undone; every word of the step's output whose cells no longer form a
+   slot is removed, its letters erased except those a kept word or a
+   permanent letter carries); `_build_retry_seed` reopens a cell only with
+   all its black images, each reopenable; `_optimize_before_cleanup` and
+   `minimize_black_squares` remove a whole group of black images at once;
+   `_plug_isolated_cells` plugs a cell only if each image is black or
+   plugged too; an in-search reshape extends its changes to their images
+   (`Filler._symmetric_reshape_changes`, `try_fill(reshape_symmetry=)`,
+   Java `Filler.reshapeSymmetry`/`FillArgs.reshapeSymmetry`), held to the
+   same option rules. Every one takes `symmetry` (workers read
+   `_worker_black_symmetry`; Java `Ctx.blackSymmetry`). A
    pre-fill phase (`_prefill_unfillable_slots`) runs first (and again
    after ratio-based placement, whenever letters are already locked) to
    blacken any slot whose length has too few dictionary candidates

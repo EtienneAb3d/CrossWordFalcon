@@ -302,6 +302,7 @@ public final class Generator {
         a.preseedAssignment = preseed;
         a.lockedLetters = locked;
         a.reshapeBlackCells = true;
+        a.reshapeSymmetry = ctx.blackSymmetry;
         a.earlyHardcleanPercent = Filler.EARLY_HARDCLEAN_PERCENT;
         a.sameWordLimit = Filler.MAX_SAME_WORD_PLACEMENTS;
         a.permanentLocked = permanentLocked;
@@ -407,6 +408,7 @@ public final class Generator {
             a.lockedLetters = searchLocked.isEmpty() ? null : searchLocked;
         }
         a.reshapeBlackCells = true;
+        a.reshapeSymmetry = ctx.blackSymmetry;
         a.earlyHardcleanPercent = Filler.EARLY_HARDCLEAN_PERCENT;
         a.sameWordLimit = Filler.MAX_SAME_WORD_PLACEMENTS;
         a.permanentLocked = permanentLocked;
@@ -1113,7 +1115,7 @@ public final class Generator {
                         if (res.result() == null && !attemptDoneEvent.get()
                                 && Cleanup.plugIsolatedCells(res.grid(), rows, cols,
                                         Grids.extractSlots(res.grid(), rows, cols), res.diag().assignment, index,
-                                        permanentLocked) == null) {
+                                        permanentLocked, ctx.blackSymmetry) == null) {
                             String stateKey = blockedStateKey(res.grid(), res.diag().assignment, rows, cols);
                             if (chainKeys == null || !chainKeys.contains(stateKey)) {
                                 secondChance = chainKeys == null ? new HashSet<>() : new HashSet<>(chainKeys);
@@ -1200,7 +1202,8 @@ public final class Generator {
                     Outcome o = outcomes.get(k);
                     if (o.result() != null) continue;
                     Object[] plugged = Cleanup.plugIsolatedCells(o.grid(), rows, cols,
-                            Grids.extractSlots(o.grid(), rows, cols), o.diag().assignment, index, permanentLocked);
+                            Grids.extractSlots(o.grid(), rows, cols), o.diag().assignment, index, permanentLocked,
+                            ctx.blackSymmetry);
                     if (plugged == null) continue;
                     @SuppressWarnings("unchecked")
                     List<int[]> ps = (List<int[]>) plugged[1];
@@ -1235,7 +1238,7 @@ public final class Generator {
                         final long ts = rng.seed31();
                         trials.add(executor.submit(() -> Fill.minimizeBlackSquares(gcopy, o.result(), rows, cols, index,
                                 new Rng(ts), 6000, p.cancelEvent, properNouns, maxProperNouns, nonGloss, maxNonGloss,
-                                priority, permanentLocked, permanentBlack, challenge)));
+                                priority, permanentLocked, permanentBlack, challenge, ctx.blackSymmetry)));
                     }
                     Object[] bestScored = null;
                     for (int k = 0; k < accumulatedSuccesses.size(); k++) {
@@ -1371,7 +1374,8 @@ public final class Generator {
                 for (Outcome o : failedPairs) {
                     final Rng taskRng = new Rng(rng.seed31());
                     optimizing.add(executor.submit(() -> Cleanup.optimizeBeforeCleanup(o.grid(), o.diag(), rows, cols,
-                            index, taskRng, 6000, p.cancelEvent, permanentLocked, permanentBlack, challenge)));
+                            index, taskRng, 6000, p.cancelEvent, permanentLocked, permanentBlack, challenge,
+                            ctx.blackSymmetry)));
                 }
                 List<Object[]> optimized = new ArrayList<>();
                 for (Future<Object[]> f : optimizing) optimized.add(await(f));
@@ -1403,7 +1407,8 @@ public final class Generator {
                     for (Object[] o : optimized) {
                         final Rng taskRng = new Rng(rng.seed31());
                         cleaning.add(executor.submit(() -> Cleanup.cleanContinueCandidate((char[][]) o[0], (Diag) o[1],
-                                rows, cols, index, taskRng, permanentLocked, permanentBlack, challenge)));
+                                rows, cols, index, taskRng, permanentLocked, permanentBlack, challenge,
+                                ctx.blackSymmetry)));
                     }
                     List<Cleanup.ContinueCandidate> cc = new ArrayList<>();
                     for (Future<Cleanup.ContinueCandidate> f : cleaning) cc.add(await(f));
@@ -1446,7 +1451,8 @@ public final class Generator {
                     for (Object[] o : optimized) {
                         final Rng taskRng = new Rng(rng.seed31());
                         ordinary.add(executor.submit(() -> cleanCandidate((char[][]) o[0], (Diag) o[1], rows, cols,
-                                fCarryLocked, fCarrySeedGrid, index, taskRng, permanentLocked, permanentBlack, false)));
+                                fCarryLocked, fCarrySeedGrid, index, taskRng, permanentLocked, permanentBlack, false,
+                                ctx.blackSymmetry)));
                     }
                     List<Object> keptOrDeep = new ArrayList<>();
                     for (int k = 0; k < optimized.size(); k++) {
@@ -1464,7 +1470,8 @@ public final class Generator {
                         if (streak >= GRID_REPEAT_DEEP_CLEANUP_STREAK) {
                             final Rng taskRng = new Rng(rng.seed31());
                             keptOrDeep.add(executor.submit(() -> cleanCandidate((char[][]) o[0], (Diag) o[1], rows, cols,
-                                    fCarryLocked, fCarrySeedGrid, index, taskRng, permanentLocked, permanentBlack, true)));
+                                    fCarryLocked, fCarrySeedGrid, index, taskRng, permanentLocked, permanentBlack, true,
+                                    ctx.blackSymmetry)));
                         } else {
                             keptOrDeep.add(cand);
                         }
@@ -1557,7 +1564,7 @@ public final class Generator {
                     Fill.challengeWordCellsFromAssignment(bs, ba, challenge), winningProcess, true))));
             Object[] m = Fill.minimizeBlackSquares(best, bestResult, rows, cols, index, rng, 6000, p.cancelEvent,
                     properNouns, maxProperNouns, nonGloss, maxNonGloss, priority, permanentLocked, permanentBlack,
-                    challenge);
+                    challenge, ctx.blackSymmetry);
             grid = (char[][]) m[0];
             @SuppressWarnings("unchecked")
             List<int[]> s = (List<int[]>) m[1];
@@ -1662,11 +1669,11 @@ public final class Generator {
 
     static Object[] cleanCandidate(char[][] cg, Diag cd, int rows, int cols, Map<Integer, Character> carryLocked,
                                    char[][] carrySeed, DualIndex index, Rng rng, Map<Integer, Character> permanentLocked,
-                                   Set<Integer> permanentBlack, boolean deep) {
+                                   Set<Integer> permanentBlack, boolean deep, String symmetry) {
         List<int[]> slots = Grids.extractSlots(cg, rows, cols);
         Map<Integer, Character> locked = cd.lockedLetters != null ? Cleanup.diagLockedLetters(cd, cg) : carryLocked;
         Object[] seed = Cleanup.buildRetrySeed(cg, rows, cols, slots, cd.assignment, cd.impossibleSlots, locked, deep,
-                carrySeed, index, rng, permanentLocked, permanentBlack, deep);
+                carrySeed, index, rng, permanentLocked, permanentBlack, deep, symmetry);
         return new Object[]{seed[0], seed[1], slots, cd.processNumber};
     }
 

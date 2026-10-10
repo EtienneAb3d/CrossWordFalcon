@@ -969,6 +969,107 @@ def symmetry_cells(rows, cols, r, c, symmetry):
     return sorted({(r, c), *images})
 
 
+def _is_symmetric(symmetry):
+    """True when `symmetry` (`BLACK_SYMMETRIES`) pairs black cells."""
+    return bool(symmetry) and symmetry != "none"
+
+
+def _black_group(rows, cols, cell, symmetry):
+    """`cell`'s symmetry group (`symmetry_cells`), or `[cell]` alone with
+    no symmetry: the cells a black-cell change at `cell` applies to."""
+    if not _is_symmetric(symmetry):
+        return [cell]
+    return symmetry_cells(rows, cols, cell[0], cell[1], symmetry)
+
+
+def _symmetrize_black_changes(before, after, rows, cols, letters, symmetry,
+                              permanent_locked_letters=None, permanent_black_cells=None,
+                              moves=()):
+    """Extends every black-cell change from `before` to `after` (two
+    patterns of the same grid) to the changed cell's images under
+    `symmetry`, for an automatic-generation step that added, removed or
+    moved black cells one at a time. Returns `(grid, letters)`.
+
+    Each change is a unit — one cell, or a move (`moves`: `(freed_cell,
+    new_black_cell_or_None)` pairs, both changes kept or undone together).
+    A unit's images take the value its own cells took; an image blackened
+    may not hold a `permanent_locked_letters` letter, an image freed may
+    not be a `permanent_black_cells` cell, and the grid must stay
+    structurally valid (`min_interior_free=1`). A unit that cannot be
+    extended this way is undone (its cells back to their `before` value),
+    unless undoing it breaks structural validity, in which case it stays
+    as the step left it.
+
+    `letters` (cell -> letter, the step's own known letters): every word
+    of `after` — a slot fully covered by `letters` — whose cells no longer
+    form a slot of the final grid is modified, so removed: its letters are
+    erased, except those a kept word or a `permanent_locked_letters` cell
+    carries; a letter on a cell now black is erased too."""
+    grid = [row[:] for row in after]
+    if not _is_symmetric(symmetry):
+        return grid, dict(letters)
+    permanent_locked_letters = permanent_locked_letters or {}
+    permanent_black_cells = permanent_black_cells or set()
+
+    def black(g, cell):
+        return g[cell[0]][cell[1]] == BLACK
+
+    changed = [(r, c) for r in range(rows) for c in range(cols)
+               if black(before, (r, c)) != black(after, (r, c))]
+    changed_set = set(changed)
+    units = []
+    in_move = set()
+    for freed, new_black in moves:
+        unit = [cell for cell in (freed, new_black) if cell is not None]
+        if all(cell in changed_set and cell not in in_move for cell in unit):
+            units.append(unit)
+            in_move.update(unit)
+    units.extend([cell] for cell in changed if cell not in in_move)
+
+    for unit in units:
+        targets = {}
+        ok = True
+        for cell in unit:
+            want_black = black(after, cell)
+            for image in _black_group(rows, cols, cell, symmetry):
+                if image in unit or black(grid, image) == want_black:
+                    continue
+                if targets.get(image, want_black) != want_black:
+                    ok = False
+                elif want_black and image in permanent_locked_letters:
+                    ok = False
+                elif not want_black and image in permanent_black_cells:
+                    ok = False
+                targets[image] = want_black
+        if not targets:
+            continue
+        if ok:
+            for (r, c), want_black in targets.items():
+                grid[r][c] = BLACK if want_black else WHITE
+            if is_structurally_valid(grid, rows, cols, min_interior_free=1):
+                continue
+            for (r, c), want_black in targets.items():
+                grid[r][c] = WHITE if want_black else BLACK
+        for (r, c) in unit:
+            grid[r][c] = before[r][c] if before[r][c] == BLACK else WHITE
+        if not is_structurally_valid(grid, rows, cols, min_interior_free=1):
+            for (r, c) in unit:
+                grid[r][c] = BLACK if after[r][c] == BLACK else WHITE
+
+    words = [tuple(cells) for cells in extract_slots(after, rows, cols)
+             if all(cell in letters for cell in cells)]
+    final_slots = {tuple(cells) for cells in extract_slots(grid, rows, cols)}
+    kept_cells = set(permanent_locked_letters)
+    dropped_cells = set()
+    for cells in words:
+        (kept_cells if cells in final_slots else dropped_cells).update(cells)
+    new_letters = {
+        cell: ch for cell, ch in letters.items()
+        if not black(grid, cell) and (cell in kept_cells or cell not in dropped_cells)
+    }
+    return grid, new_letters
+
+
 # `_place_black_cells`' draw window, in percent, and its widening step: the
 # share of the white runs (`_run_score`-ranked) the draw is restricted to,
 # among their valid cells the share with the highest
@@ -1704,9 +1805,28 @@ def _remove_a_crossing_word(slot, grid, rows, cols, locked_letters, rng=None):
     return True
 
 
+def _prefill_group_allowed(grid, rows, cols, group, candidate_set, forbid_adjacency):
+    """`_prefill_unfillable_slots`' check of a symmetry group (`group`: its
+    cells still white): every cell is a pre-fill candidate and, under
+    `forbid_adjacency`, touches no black cell nor another cell of the
+    group."""
+    group_set = set(group)
+    for r, c in group:
+        if (r, c) not in candidate_set:
+            return False
+        if forbid_adjacency:
+            if _has_black_neighbor(grid, rows, cols, r, c):
+                return False
+            if any((r + dr, c + dc) in group_set
+                   for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1))):
+                return False
+    return True
+
+
 def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates,
                                available_lengths, index=None, locked_letters=None, rng=None,
-                               fill_objective_fraction=1.0, forbid_adjacency=False):
+                               fill_objective_fraction=1.0, forbid_adjacency=False,
+                               symmetry=None):
     """Pre-fill phase, at the user's explicit request: as long as the grid
     has a slot (`extract_slots`) whose length has fewer than `PREFILL_MIN_
     WORD_COUNT` candidate words in the dictionary (`available_lengths` —
@@ -1817,7 +1937,13 @@ def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates
     on any palier — see `make_pattern`'s own docstring. A slot that can't
     be fixed this way falls through to `_remove_a_crossing_word`, then to
     `unfixable`, exactly as already described above — never to placing an
-    adjacent black cell."""
+    adjacent black cell.
+
+    `symmetry` (`BLACK_SYMMETRIES`, `None`/"none" = none): a cell is placed
+    together with its images (`_black_group`), each image still white being
+    itself in `candidates` (never a locked letter) and, under
+    `forbid_adjacency`, touching no black cell nor another cell of the
+    group; the structural check covers the whole group."""
     count = 0
     unfixable = set()
     zone_footprints = []  # [cases_d_origine (set), cases_noires_ajoutées (int)]
@@ -1886,16 +2012,25 @@ def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates
                 non_adjacent + [cell for cell in options if cell not in set(non_adjacent)]
             )
             for (r, c) in ordered_options:
-                grid[r][c] = BLACK
+                group = [cell for cell in _black_group(rows, cols, (r, c), symmetry)
+                         if grid[cell[0]][cell[1]] != BLACK]
+                if len(group) > 1 and not _prefill_group_allowed(
+                        grid, rows, cols, group, candidate_set, forbid_adjacency):
+                    continue
+                for gr, gc in group:
+                    grid[gr][gc] = BLACK
                 if is_structurally_valid(grid, rows, cols, min_interior_free=1):
-                    row_black[r] += 1
-                    col_black[c] += 1
-                    candidates.remove((r, c))
-                    count += 1
+                    for gr, gc in group:
+                        row_black[gr] += 1
+                        col_black[gc] += 1
+                        candidates.remove((gr, gc))
+                        candidate_set.discard((gr, gc))
+                    count += len(group)
                     footprint[1] += 1
                     placed_one = True
                     break
-                grid[r][c] = WHITE
+                for gr, gc in group:
+                    grid[gr][gc] = WHITE
         if placed_one:
             continue
 
@@ -1927,8 +2062,9 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     """Places black cells one at a time, independently unless `symmetry`
     ("Symétrie", `BLACK_SYMMETRIES`) is set — the ratio draw then places
     every drawn cell together with its images (`symmetry_cells`), and the
-    short-slot limit reopens a bounding cell with its images; pre-fill
-    stays unpaired — biased to keep black cells apart from each other.
+    short-slot limit reopens a bounding cell with its images, and pre-fill
+    places each cell with its images too — biased to keep black cells
+    apart from each other.
 
     A purely random placement order (just shuffling every cell) tends to
     let black cells end up touching each other by chance, forming small
@@ -2152,7 +2288,7 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
         candidates = _prefill_unfillable_slots(
             grid, rows, cols, row_black, col_black, candidates, available_lengths,
             index, locked_letters, rng, fill_objective_fraction,
-            forbid_adjacency=True,
+            forbid_adjacency=True, symmetry=symmetry,
         )
 
     placed = sum(row.count(BLACK) for row in grid)
@@ -2208,7 +2344,7 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
         _prefill_unfillable_slots(
             grid, rows, cols, row_black, col_black, candidates, available_lengths,
             index, locked_letters, rng, fill_objective_fraction,
-            forbid_adjacency=True,
+            forbid_adjacency=True, symmetry=symmetry,
         )
 
     return grid
@@ -3645,6 +3781,9 @@ class Filler:
         self.pattern = None
         self.reshape_enabled = False
         self.permanent_black_cells = frozenset()
+        # Black-cell symmetry a reshape follows (`try_fill`'s
+        # `reshape_symmetry`, `_reshape_options`).
+        self.reshape_symmetry = None
         # Turns True the moment an attempt is abandoned along the way for
         # lack of reasonable hope (see _backtrack and UNFILLABLE_ABANDON_
         # SLOT_COUNT) — once set, every following call to _backtrack fails
@@ -5129,17 +5268,41 @@ class Filler:
             out.append((span, changes))
         return out
 
+    def _symmetric_reshape_changes(self, changes):
+        """`changes` (cell -> new value) extended to every changed cell's
+        images under `reshape_symmetry`, or `None` when two cells of it
+        would need opposite values or an image to free is a
+        `permanent_black_cells` cell."""
+        out = dict(changes)
+        for cell, value in changes.items():
+            for image in _black_group(self.rows, self.cols, cell, self.reshape_symmetry):
+                if out.get(image, value) != value:
+                    return None
+                current = self.pattern[image[0]][image[1]]
+                if (current == BLACK) == (value == BLACK):
+                    continue
+                if value != BLACK and image in self.permanent_black_cells:
+                    return None
+                out[image] = value
+        return out
+
     def _reshape_options(self, i, word, family, known):
         """The `_Reshape`s that let `word` go on slot `i` (see
         `_reshape_geometries`): the word agrees with every known letter of
         its span, no known letter is blackened, the grid stays
         structurally valid (`min_interior_free=1`), and every slot the
         change alters is still empty — an already-placed word is never cut,
-        lengthened or merged."""
+        lengthened or merged. Under `reshape_symmetry` every changed cell's
+        images take the same value (`_symmetric_reshape_changes`), held to
+        the same rules."""
         options = []
         for span, changes in self._reshape_geometries(i, word):
             if any(known.get(cell, ch) != ch for cell, ch in zip(span, word)):
                 continue
+            if _is_symmetric(self.reshape_symmetry):
+                changes = self._symmetric_reshape_changes(changes)
+                if changes is None:
+                    continue
             if any(value == BLACK and cell in known for cell, value in changes.items()):
                 continue
             pattern = [row[:] for row in self.pattern]
@@ -7784,7 +7947,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
              permanent_black_cells=None, scrabble_words=None,
              early_hardclean_percent=100, permanent_locked_letters=None,
              incremental_fill=False, same_word_limit=None,
-             words_per_node=WORDS_PER_NODE):
+             words_per_node=WORDS_PER_NODE, reshape_symmetry=None):
     """`incremental_fill`: see INCREMENTAL_FILL_ENABLED.
 
     `words_per_node`: see WORDS_PER_NODE (`Filler._descend_group`).
@@ -7808,7 +7971,9 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     `grid` is then updated in place to the pattern the returned or reported
     state lives on. Only `_pattern_attempt`/`_pattern_continue` turn it on;
     it stays off whenever `excluded_slots` is given, whose per-slot
-    bookkeeping a reshape does not carry over.
+    bookkeeping a reshape does not carry over. `reshape_symmetry`
+    (`BLACK_SYMMETRIES`, `None`/"none" = none): every black cell a reshape
+    adds or frees takes its images with it (`Filler._reshape_options`).
 
     `non_gloss_words`/`max_non_gloss` (both `None` by default — every
     pre-existing caller unaffected) work exactly like `proper_noun_words`/
@@ -8057,6 +8222,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     filler.incremental_fill = incremental_fill
     filler.permanent_locked_letters = dict(permanent_locked_letters or {})
     filler.permanent_black_cells = frozenset(permanent_black_cells or ())
+    filler.reshape_symmetry = reshape_symmetry
     if checks_progress is not None and checks_slot is not None:
         # See `_worker_checks_progress`'s own docstring — `checks_progress`
         # is a `multiprocessing.Array`, one cell per concurrent slot of the
@@ -8354,8 +8520,12 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
                             cancel_event=None, proper_noun_words=None, max_proper_nouns=None,
                             non_gloss_words=None, max_non_gloss=None, priority_words=None,
                             permanent_locked_letters=None, permanent_black_cells=None,
-                            challenge_words=None):
-    """`challenge_words` (`None`/empty by default — no effect for any
+                            challenge_words=None, symmetry=None):
+    """`symmetry` (`BLACK_SYMMETRIES`, `None`/"none" = none): a black cell
+    is only removed together with every black image of it (`_black_group`),
+    none of them in `permanent_black_cells`, the whole group tried at once.
+
+    `challenge_words` (`None`/empty by default — no effect for any
     pre-existing caller): a "Mots Défi" word already placed in `result`'s
     own `assignment` is protected the exact same way a `permanent_locked_
     letters` cell already is — its own cells are folded into the hard
@@ -8396,9 +8566,8 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
     stays valid and re-fillable — reopening a cell that "Finir la zone"
     specifically meant to never touch.
 
-    Iteratively removes black cells one at a time (independently, without
-    pairing them with a mirror cell — consistent with make_pattern, which
-    no longer places black cells in symmetric pairs either) as long as the
+    Iteratively removes black cells one at a time (one symmetry group at a
+    time under `symmetry`) as long as the
     grid stays fillable, keeping the last known solution (this avoids a
     final new try_fill that could fail on a difficult search even though a
     solution was just found).
@@ -8498,10 +8667,12 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
                 raise GenerationCancelled()
             if grid[r][c] != BLACK:
                 continue
-            if permanent_black_cells and (r, c) in permanent_black_cells:
+            group = [cell for cell in _black_group(rows, cols, (r, c), symmetry)
+                     if grid[cell[0]][cell[1]] == BLACK]
+            if permanent_black_cells and any(cell in permanent_black_cells for cell in group):
                 continue
-            saved = grid[r][c]
-            grid[r][c] = WHITE
+            for gr, gc in group:
+                grid[gr][gc] = WHITE
             if is_structurally_valid(grid, rows, cols, min_interior_free=1):
                 # `permanent_locked_letters` (see the docstring above) must
                 # also constrain the search itself, not just the after-the-
@@ -8558,7 +8729,8 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
                         slots, assignment = new_slots, new_assignment
                         improved = True
                         continue
-            grid[r][c] = saved
+            for gr, gc in group:
+                grid[gr][gc] = BLACK
     return grid, slots, assignment
 
 
@@ -11498,7 +11670,7 @@ PER_CYCLE_OPTIMIZATION_SAMPLE_SIZE = 50
 def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
                               deadline_checks=6_000, cancel_event=None,
                               permanent_locked_letters=None, permanent_black_cells=None,
-                              challenge_words=None):
+                              challenge_words=None, symmetry=None):
     """A new step inserted BEFORE even `_shorten_impossible_zones`/
     `_clean_blocked_slots` (so before any cleanup at all), at the user's
     explicit request: "verrouiller tous les emplacements entièrement vides
@@ -11590,7 +11762,11 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
     frozen cell, if it doesn't otherwise bound any empty slot, was
     therefore a removal candidate like any other ordinary black cell,
     reopening it and letting the fill assign it a letter. Now excluded
-    from `removable` the same way as `locked_black_cells`."""
+    from `removable` the same way as `locked_black_cells`.
+
+    `symmetry` (`BLACK_SYMMETRIES`, `None`/"none" = none): a black cell is
+    only removed together with every black image of it (`_black_group`),
+    each of them removable on its own, the whole group tried at once."""
     cand_slots = extract_slots(cand_grid, rows, cols)
     example_grid = cand_diag["example_grid"]
     empty_cell_tuples = {
@@ -11671,8 +11847,14 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
                 raise GenerationCancelled()
             if grid[r][c] != BLACK:
                 continue
-            saved = grid[r][c]
-            grid[r][c] = WHITE
+            group = [cell for cell in _black_group(rows, cols, (r, c), symmetry)
+                     if grid[cell[0]][cell[1]] == BLACK]
+            if any(cell in locked_black_cells
+                   or (permanent_black_cells and cell in permanent_black_cells)
+                   for cell in group):
+                continue
+            for gr, gc in group:
+                grid[gr][gc] = WHITE
             if is_structurally_valid(grid, rows, cols, min_interior_free=1):
                 result = _try_complete(grid)
                 if result is not None:
@@ -11681,7 +11863,8 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
                     if sampling:
                         break
                     continue
-            grid[r][c] = saved
+            for gr, gc in group:
+                grid[gr][gc] = BLACK
 
     # Last-chance enrichment, the final thing this step does before the
     # cleanup takes over: the palier has failed and this grid is about to
@@ -12750,7 +12933,8 @@ def _blocked_state_key(grid, assignment, rows, cols):
     return tuple("".join(row) for row in letters)
 
 
-def _plug_isolated_cells(grid, rows, cols, slots, assignment, index, permanent_locked_letters=None):
+def _plug_isolated_cells(grid, rows, cols, slots, assignment, index, permanent_locked_letters=None,
+                         symmetry=None):
     """Last resort tried on every failed attempt of a palier, at the
     user's explicit request: "Lorsque toutes les recherches échouent en laissant
     une grille avec [ne reste] plus que des cases blanches isolées, boucher
@@ -12792,7 +12976,12 @@ def _plug_isolated_cells(grid, rows, cols, slots, assignment, index, permanent_l
     pattern is fully known and forms a real word), returns `(new_grid,
     new_slots, new_assignment)` — a result directly usable as a complete
     generation success, on the same footing as a CSP fill that would have
-    concluded normally."""
+    concluded normally.
+
+    `symmetry` (`BLACK_SYMMETRIES`, `None`/"none" = none): a cell is only
+    plugged with its images (`_black_group`); every image must already be
+    black or be an isolated cell plugged too, otherwise nothing is
+    plugged (`None`)."""
     known = {}
     for i, cells in enumerate(slots):
         word = assignment[i]
@@ -12811,6 +13000,9 @@ def _plug_isolated_cells(grid, rows, cols, slots, assignment, index, permanent_l
         for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             if (r + dr, c + dc) in unfilled:
                 return None
+        if any(grid[ir][ic] != BLACK and (ir, ic) not in unfilled
+               for ir, ic in _black_group(rows, cols, (r, c), symmetry)):
+            return None
     new_grid = [row[:] for row in grid]
     for (r, c) in unfilled:
         new_grid[r][c] = BLACK
@@ -12849,7 +13041,7 @@ def _plug_isolated_cells(grid, rows, cols, slots, assignment, index, permanent_l
 def _build_retry_seed(grid, rows, cols, slots, assignment, impossible_slots, locked_letters=None,
                        exclude_impossible_locked=False, seed_grid=None, index=None, rng=None,
                        permanent_locked_letters=None, permanent_black_cells=None,
-                       deep=False):
+                       deep=False, symmetry=None):
     """Builds the next palier's starting point from the current palier's
     own best failed attempt, at the user's explicit request — a new
     cross-palier resume algorithm, distinct from the "patch" mechanism
@@ -13142,13 +13334,25 @@ def _build_retry_seed(grid, rows, cols, slots, assignment, impossible_slots, loc
     if permanent_black_cells:
         protected_black_cells |= permanent_black_cells
 
+    reopened = {
+        (r, c) for r in range(rows) for c in range(cols)
+        if grid[r][c] == BLACK and (r, c) not in protected_black_cells
+        and not _fully_surrounded_by_black(r, c)
+    }
+    # `symmetry`: a black cell is reopened only together with every black
+    # image of it, each of them reopenable on its own.
+    if _is_symmetric(symmetry):
+        changed = True
+        while changed:
+            changed = False
+            for cell in sorted(reopened):
+                if any(grid[ir][ic] == BLACK and (ir, ic) not in reopened
+                       for ir, ic in _black_group(rows, cols, cell, symmetry)):
+                    reopened.discard(cell)
+                    changed = True
     new_grid = [row[:] for row in grid]
-    for r in range(rows):
-        for c in range(cols):
-            if new_grid[r][c] == BLACK and (r, c) not in protected_black_cells:
-                if _fully_surrounded_by_black(r, c):
-                    continue
-                new_grid[r][c] = WHITE
+    for r, c in reopened:
+        new_grid[r][c] = WHITE
 
     return new_grid, confirmed
 
@@ -13357,7 +13561,7 @@ def _reassign_lineage_numbers(raw_lineage, previous_lineage, next_lineage_number
 # (same objects, same indices) as long as neither one changed anything.
 def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng,
                                permanent_locked_letters=None, permanent_black_cells=None,
-                               challenge_words=None):
+                               challenge_words=None, symmetry=None):
     """Cleans up a single failed attempt of a "reprise telle quelle"
     palier (see `_continue_seed_pool`) — removes whatever crosses an
     impossible slot (`_clean_blocked_slots`), after first trying to
@@ -13410,7 +13614,14 @@ def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng,
     covered by individually correct letters, is never promoted — the slot
     stays `None`, and will be rediscovered on its own as impossible at the
     very next search (`Filler.mark_immediately_impossible_slots`),
-    rather than being locked in as-is for the rest of the generation."""
+    rather than being locked in as-is for the rest of the generation.
+
+    `symmetry` (`BLACK_SYMMETRIES`, `None`/"none" = none): every black cell
+    this cleanup added, freed or moved (a lengthened word's boundary, the
+    move kept or undone whole) is extended to its images
+    (`_symmetrize_black_changes`), the words those images modify being
+    removed; a change whose images cannot follow is undone."""
+    original_grid = [row[:] for row in cand_grid]
     cand_slots = extract_slots(cand_grid, rows, cols)
     cand_grid, cand_slots, cand_assignment, cand_impossible, cand_black_cell_links = (
         _shorten_impossible_zones(
@@ -13455,12 +13666,20 @@ def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng,
         black_cell_links=cand_black_cell_links,
         deadlocked_slots=cand_deadlocked,
     )
-    if new_black_cells or reopened_cells:
-        cand_seed_grid = [row[:] for row in cand_grid]
-        for (br, bc) in new_black_cells:
-            cand_seed_grid[br][bc] = BLACK
-        for (br, bc) in reopened_cells:
-            cand_seed_grid[br][bc] = WHITE
+    cand_seed_grid = [row[:] for row in cand_grid]
+    for (br, bc) in new_black_cells:
+        cand_seed_grid[br][bc] = BLACK
+    for (br, bc) in reopened_cells:
+        cand_seed_grid[br][bc] = WHITE
+    if _is_symmetric(symmetry) and cand_seed_grid != original_grid:
+        moves = [(link[1], link[2]) for link in (cand_black_cell_links or {}).values()
+                 if link[0] == "lengthen"]
+        cand_seed_grid, confirmed = _symmetrize_black_changes(
+            original_grid, cand_seed_grid, rows, cols, confirmed, symmetry,
+            permanent_locked_letters=permanent_locked_letters,
+            permanent_black_cells=permanent_black_cells, moves=moves,
+        )
+    if new_black_cells or reopened_cells or cand_seed_grid != cand_grid:
         new_slots = extract_slots(cand_seed_grid, rows, cols)
         cand_preseed_assignment = [
             "".join(confirmed[cell] for cell in cells)
@@ -14163,6 +14382,7 @@ def _minimize_trial(grid, result, rows, cols, seed, permanent_locked_letters,
         permanent_locked_letters=permanent_locked_letters,
         permanent_black_cells=permanent_black_cells,
         challenge_words=_worker_challenge_words,
+        symmetry=_worker_black_symmetry,
     )
 
 
@@ -14460,6 +14680,7 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                            challenge_words=_worker_challenge_words,
                            required_cells=required_cells,
                            reshape_black_cells=True,
+                           reshape_symmetry=_worker_black_symmetry,
                            permanent_black_cells=permanent_black_cells,
                            scrabble_words=_worker_scrabble_words,
                            early_hardclean_percent=EARLY_HARDCLEAN_PERCENT,
@@ -14740,6 +14961,7 @@ def _continue_search(rows, cols, seed, rng, seed_grid, preseed_assignment, exclu
                        challenge_words=_worker_challenge_words,
                        required_cells=required_cells,
                        reshape_black_cells=True,
+                       reshape_symmetry=_worker_black_symmetry,
                        permanent_black_cells=permanent_black_cells,
                        scrabble_words=_worker_scrabble_words,
                        early_hardclean_percent=EARLY_HARDCLEAN_PERCENT,
@@ -14909,6 +15131,7 @@ def _optimize_before_cleanup_task(cand_grid, cand_diag, rows, cols, rng_seed,
         permanent_locked_letters=permanent_locked_letters,
         permanent_black_cells=permanent_black_cells,
         challenge_words=challenge_words,
+        symmetry=_worker_black_symmetry,
     )
 
 
@@ -14921,6 +15144,7 @@ def _clean_continue_candidate_task(cand_grid, cand_diag, rows, cols, rng_seed,
         permanent_locked_letters=permanent_locked_letters,
         permanent_black_cells=permanent_black_cells,
         challenge_words=challenge_words,
+        symmetry=_worker_black_symmetry,
     )
 
 
@@ -14941,6 +15165,7 @@ def _clean_retry_candidate_task(cand_grid, cand_diag, rows, cols, deep, rng_seed
         seed_grid=carry_seed_grid, index=_worker_index, rng=random.Random(rng_seed),
         permanent_locked_letters=permanent_locked_letters,
         permanent_black_cells=permanent_black_cells,
+        symmetry=_worker_black_symmetry,
     )
     return cand_seed, cand_confirmed, cand_slots, cand_diag.get("process_number")
 
@@ -16538,6 +16763,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     if r is None and not attempt_done_event.is_set() and _plug_isolated_cells(
                         g, rows, cols, extract_slots(g, rows, cols), d["assignment"], index,
                         permanent_locked_letters=permanent_locked_letters,
+                        symmetry=black_symmetry,
                     ) is None:
                         state_key = _blocked_state_key(g, d["assignment"], rows, cols)
                         if state_key not in chain_keys:
@@ -16736,6 +16962,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     plugged = _plug_isolated_cells(
                         g, rows, cols, extract_slots(g, rows, cols), d["assignment"], index,
                         permanent_locked_letters=permanent_locked_letters,
+                        symmetry=black_symmetry,
                     )
                     if plugged is not None:
                         g, r = plugged[0], (plugged[1], plugged[2])
@@ -17821,6 +18048,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             non_gloss_words=non_gloss_words, max_non_gloss=max_non_gloss,
             priority_words=priority_words, permanent_locked_letters=permanent_locked_letters,
             permanent_black_cells=permanent_black_cells, challenge_words=challenge_words,
+            symmetry=black_symmetry,
         )
 
     def _final_result(grid, slots, assignment, process_number):

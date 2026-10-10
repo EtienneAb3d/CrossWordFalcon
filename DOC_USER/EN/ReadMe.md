@@ -158,12 +158,16 @@ full again whenever a new generation or an Interactive session starts.
   square grids only — on any other grid it works as Bidirectional). It shapes the pattern of an automatic
   generation and of a new Interactive session, and, in Interactive mode, a
   black cell you add or remove by hand brings its empty (or black) images
-  along. The cells blackened afterwards to make an unfillable slot
-  workable, the repairs between cycles and the final removal of black
-  cells add or remove cells one at a time, so a finished grid is not
-  always perfectly symmetric (`frontend/static/script.js`,
-  `symmetryCells`; `backend/crossword_gen.py`, `symmetry_cells`,
-  `make_pattern`).
+  along. In an automatic generation, every later change follows the same
+  symmetry: a black cell added to make an unfillable slot workable or to
+  repair a grid between cycles brings its images (the words they cut are
+  removed), and a black cell is only removed or moved — between cycles,
+  in the optimizations, or to make room for a "Mots Défi"/theme word —
+  when its images can be removed or moved the same way. The finished grid
+  is therefore symmetric, unless it started from an Interactive grid that
+  was not (`frontend/static/script.js`, `symmetryCells`;
+  `backend/crossword_gen.py`, `symmetry_cells`, `make_pattern`,
+  `_symmetrize_black_changes`).
 - **Mots par pose / Words per placement** (`#words-per-node`) — the most
   words the search places in one go before checking how the rest of the
   grid copes, and takes back off together when that leads nowhere (1-50,
@@ -1541,10 +1545,11 @@ the bilingual field's own dictionary is — the two are never mixed within
 one grid.
 
 **Placing the black cells.** The generator starts from a completely
-white grid and adds black cells one at a time, entirely independently —
-there is no requirement that the pattern be symmetric, which lets it
-reach far sparser layouts (and so grids with far more visible letters)
-than a traditional symmetric crossword would. Every candidate cell has to
+white grid and adds black cells one at a time, entirely independently
+unless a symmetry is chosen (each cell then comes with its mirror images,
+and every later addition, removal or move of a black cell does too) —
+with no symmetry it reaches far sparser layouts (and so grids with far
+more visible letters) than a traditional symmetric crossword would. Every candidate cell has to
 respect a few hard rules: a white cell can never end up boxed in on all
 four sides (it would belong to no word at all and could never receive a
 letter); the white area of the grid must stay fully connected, never

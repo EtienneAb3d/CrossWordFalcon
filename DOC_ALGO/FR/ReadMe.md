@@ -517,10 +517,48 @@ fortes : chaque image encore blanche est elle-même candidate au tirage
 du groupe ne touche une case noire ni une autre case du groupe, et la
 grille avec tout le groupe noirci reste structurellement valide
 (`_place_black_cells`). La limite des emplacements courts retire une
-case délimitante avec ses images. Le pré-remplissage, la reprise entre
-paliers, la résolution des zones impossibles, le réaménagement des cases
-flottantes et la minimisation (chapitre 6) posent ou retirent les cases
-une à une : la grille finale n'est donc pas forcément symétrique. Le même
+case délimitante avec ses images.
+
+En génération automatique, **toute** modification ultérieure des cases
+noires respecte la même symétrie :
+
+- **Pré-remplissage** : chaque case est posée avec ses images, aux mêmes
+  conditions que le tirage — chaque image encore blanche est elle-même
+  candidate (jamais une lettre verrouillée), sans contact avec une case
+  noire ni avec une autre case du groupe, et la grille avec tout le
+  groupe reste valide (`_prefill_unfillable_slots`,
+  `_prefill_group_allowed`).
+- **Nettoyage « reprise telle quelle »** (raccourcissement, allongement,
+  case noire du nettoyage des emplacements bloqués) : chaque case noire
+  ajoutée, retirée ou déplacée entraîne ses images
+  (`_symmetrize_black_changes`, appelé par `_clean_continue_candidate`).
+  Une image noircie qui coupe un mot supprime ce mot — ses lettres sont
+  effacées, sauf celles qu'un mot conservé ou une lettre verrouillée en
+  permanence porte encore. Un déplacement (frontière d'un mot allongé)
+  n'est fait que si ses images peuvent faire le même déplacement ; sinon
+  il est annulé en entier. Une modification dont les images ne peuvent
+  pas suivre (lettre verrouillée en permanence à noircir, case noire
+  permanente à libérer, grille devenue invalide) est annulée, et un mot
+  qui reposait sur elle est supprimé de la même façon.
+- **Nettoyage complet** : une case noire n'est rouverte qu'avec toutes ses
+  images noires, chacune rouvrable pour son propre compte
+  (`_build_retry_seed`).
+- **Optimisations** (avant nettoyage, chapitre 5, et finale, chapitre 6) :
+  une case noire n'est retirée qu'avec toutes ses images noires, aucune
+  n'étant protégée, le groupe entier étant testé d'un coup
+  (`_optimize_before_cleanup`, `minimize_black_squares`).
+- **Bouchage des cases isolées** : une case n'est bouchée qu'avec ses
+  images, chacune déjà noire ou elle-même une case isolée bouchée ; sinon
+  rien n'est bouché (`_plug_isolated_cells`).
+- **Réaménagement en cours de recherche** pour un Mot Défi ou thématique :
+  chaque case noire ajoutée ou libérée entraîne ses images, soumises aux
+  mêmes règles (aucune lettre connue noircie, aucun mot posé modifié,
+  aucune case noire permanente libérée) ; sinon l'option est écartée
+  (`Filler._symmetric_reshape_changes`, `Filler._reshape_options`).
+
+La grille finale est donc symétrique, sauf si elle part d'une grille
+Interactive qui ne l'est pas (« Finir la grille ») ou dans le cas rare où
+annuler une modification rendrait la grille invalide. Le même
 réglage s'applique au motif de départ d'une session Interactive, et, dans
 ce mode, à la case noircie ou blanchie à la main (ses images vides
 noircissent, ses images noires blanchissent ; `frontend/static/script.js`,
@@ -2420,7 +2458,8 @@ moins de cases noires, donc plus de lettres visibles, donc une grille plus
 intéressante à résoudre (`minimize_black_squares`).
 
 Le principe : pour chaque case noire encore présente, prise
-individuellement, on la retire temporairement et on relance un remplissage
+individuellement — avec ses images quand une symétrie est réglée, le
+groupe entier étant retiré d'un coup (chapitre 3, « Symétrie ») —, on la retire temporairement et on relance un remplissage
 complet à cet endroit (`try_fill`, avec un budget propre à cette phase,
 `deadline_checks=6_000` — nettement plus petit que celui de la recherche
 principale, puisqu'il ne s'agit que de reconfirmer une grille déjà

@@ -384,6 +384,39 @@ public final class Grids {
         return new ArrayList<>(out);
     }
 
+    /** True when {@code symmetry} ({@link #BLACK_SYMMETRIES}) pairs black cells. */
+    public static boolean isSymmetric(String symmetry) {
+        return symmetry != null && !symmetry.isEmpty() && !"none".equals(symmetry);
+    }
+
+    /** {@code cell}'s symmetry group ({@link #symmetryCells}), or {@code cell} alone with no symmetry. */
+    public static List<Integer> blackGroup(int rows, int cols, int cell, String symmetry) {
+        if (!isSymmetric(symmetry)) return List.of(cell);
+        return symmetryCells(rows, cols, Cells.r(cell), Cells.c(cell), symmetry);
+    }
+
+    /**
+     * {@link #prefillUnfillableSlots}' check of a symmetry group ({@code group}: its cells still white): every cell
+     * is a pre-fill candidate and, under {@code forbidAdjacency}, touches no black cell nor another cell of the group.
+     */
+    static boolean prefillGroupAllowed(char[][] grid, int rows, int cols, List<Integer> group, Set<Integer> candidateSet,
+                                       boolean forbidAdjacency) {
+        Set<Integer> groupSet = new HashSet<>(group);
+        for (int cell : group) {
+            if (!candidateSet.contains(cell)) return false;
+            if (forbidAdjacency) {
+                int r = Cells.r(cell), c = Cells.c(cell);
+                if (hasBlackNeighbor(grid, rows, cols, r, c)) return false;
+                int[][] dirs = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+                for (int[] d : dirs) {
+                    int nr = r + d[0], nc = c + d[1];
+                    if (nr >= 0 && nc >= 0 && groupSet.contains(Cells.of(nr, nc))) return false;
+                }
+            }
+        }
+        return true;
+    }
+
     /**
      * {@link #makePattern}'s short-slot limit: once the ratio draw has reached its target, a pattern holding more
      * than {@link #SHORT_SLOT_MAX_COUNT} slots of at most {@link #SHORT_SLOT_MAX_LENGTH} letters (across and down, a
@@ -995,6 +1028,18 @@ public final class Grids {
                                                 List<Integer> candidates, LengthSets available, DualIndex index,
                                                 Map<Integer, Character> locked, Rng rng, double fillObjectiveFraction,
                                                 boolean forbidAdjacency) {
+        return prefillUnfillableSlots(grid, rows, cols, rowBlack, colBlack, candidates, available, index, locked, rng,
+                fillObjectiveFraction, forbidAdjacency, null);
+    }
+
+    /**
+     * With a {@code symmetry} ({@link #BLACK_SYMMETRIES}), a cell is placed together with its images
+     * ({@link #blackGroup}), each image still white being a candidate itself ({@link #prefillGroupAllowed}).
+     */
+    static List<Integer> prefillUnfillableSlots(char[][] grid, int rows, int cols, int[] rowBlack, int[] colBlack,
+                                                List<Integer> candidates, LengthSets available, DualIndex index,
+                                                Map<Integer, Character> locked, Rng rng, double fillObjectiveFraction,
+                                                boolean forbidAdjacency, String symmetry) {
         Set<Cells.Key> unfixable = new HashSet<>();
         List<Object[]> footprints = new ArrayList<>();
         while (!candidates.isEmpty()) {
@@ -1046,17 +1091,26 @@ public final class Grids {
                     for (int cell : options) if (!na.contains(cell)) ordered.add(cell);
                 }
                 for (int cell : ordered) {
-                    int r = Cells.r(cell), c = Cells.c(cell);
-                    grid[r][c] = BLACK;
+                    List<Integer> group = new ArrayList<>();
+                    for (int g : blackGroup(rows, cols, cell, symmetry)) {
+                        if (grid[Cells.r(g)][Cells.c(g)] != BLACK) group.add(g);
+                    }
+                    if (group.size() > 1 && !prefillGroupAllowed(grid, rows, cols, group, candidateSet, forbidAdjacency)) {
+                        continue;
+                    }
+                    for (int g : group) grid[Cells.r(g)][Cells.c(g)] = BLACK;
                     if (isStructurallyValid(grid, rows, cols, 1)) {
-                        rowBlack[r]++;
-                        colBlack[c]++;
-                        candidates.remove(Integer.valueOf(cell));
+                        for (int g : group) {
+                            rowBlack[Cells.r(g)]++;
+                            colBlack[Cells.c(g)]++;
+                            candidates.remove(Integer.valueOf(g));
+                            candidateSet.remove(g);
+                        }
                         footprint[1] = ((int) footprint[1]) + 1;
                         placedOne = true;
                         break;
                     }
-                    grid[r][c] = WHITE;
+                    for (int g : group) grid[Cells.r(g)][Cells.c(g)] = WHITE;
                 }
             }
             if (placedOne) continue;
@@ -1076,7 +1130,7 @@ public final class Grids {
     /**
      * {@link #makePattern} with the ratio draw's black-cell {@code symmetry} ("Symétrie", {@link #BLACK_SYMMETRIES},
      * null = none): every drawn cell comes with its images, and the short-slot limit reopens a bounding cell with its
-     * images; pre-fill stays unpaired.
+     * images, and pre-fill places each cell with its images too.
      */
     public static char[][] makePattern(int rows, int cols, double blackRatio, Rng rng, LengthSets available,
                                        char[][] seedGrid, Map<Integer, Character> lockedLetters, DualIndex index,
@@ -1110,7 +1164,7 @@ public final class Grids {
         double fillObjective = Math.max(blackRatio, blackEnrichmentFraction);
         if (available != null) {
             candidates = prefillUnfillableSlots(grid, rows, cols, rowBlack, colBlack, candidates, available, index,
-                    locked, rng, fillObjective, true);
+                    locked, rng, fillObjective, true, symmetry);
         }
         int placed = countBlack(grid);
         int target = (int) Math.max(placed, Math.max(Math.rint(rows * cols * blackRatio),
@@ -1161,7 +1215,7 @@ public final class Grids {
         candidates = kept;
         if (available != null && locked != null && !locked.isEmpty()) {
             prefillUnfillableSlots(grid, rows, cols, rowBlack, colBlack, candidates, available, index, locked, rng,
-                    fillObjective, true);
+                    fillObjective, true, symmetry);
         }
         return grid;
     }

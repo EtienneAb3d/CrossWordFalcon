@@ -1024,9 +1024,26 @@ the current defaults/behavior to know before touching this code.
   0-based (an image of (x, y) is (W-1-x, y)); a group is placed only if
   every image satisfies the draw's hard constraints, adjacency between two
   cells of the group included; the short-slot limit reopens a cell with its
-  images; pre-fill, cross-palier repairs, reshapes and minimization stay
-  unpaired, so a finished grid is not always symmetric; in Interactive
-  mode an image holding a letter is left alone.
+  images; in Interactive mode an image holding a letter is left alone.
+  **Every black-cell change of an automatic generation follows the
+  symmetry** — the user's rules: "si une case noire doit être ajoutée,
+  ajouter automatiquement la case symétrique (ou plusieurs) en supprimant
+  les mots éventuellement modifiés par cet ajout", "lors de
+  l'optimisation de la grille, ne modifier les cases noires que si cette
+  modification est possible en respectant la symétrie", and "ne déplacer
+  [une case noire] que si les mêmes déplacements symétriques sont encore
+  possibles" (pre-fill, cross-palier repairs, reopening, both
+  optimizations, isolated-cell plugging, in-search reshapes; see
+  `CLAUDE.md`). Choices made with the change, to revisit with the user:
+  pre-fill applies the ratio draw's own group rules (an image on a locked
+  letter is refused, not erased); the cross-palier cleanup extends its
+  final changes as a whole (`_symmetrize_black_changes`), undoing a change
+  whose images cannot follow (permanent letter or black cell, invalid
+  grid) and removing the words it then breaks; an in-search reshape never
+  removes a placed word, so an option whose images would alter one is
+  refused; plugging isolated cells is refused when an image is neither
+  black nor isolated; if undoing a change would break structural
+  validity, the change stays unpaired (rare).
 - The ratio-based ("Taux noir") black-cell draw of `make_pattern` never
   blackens a cell of the 2x2 square at each corner (`_in_corner_square`,
   `CORNER_SQUARE_SIZE`); pre-fill tries a corner cell only after every

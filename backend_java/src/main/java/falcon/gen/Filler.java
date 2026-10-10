@@ -243,6 +243,8 @@ public final class Filler {
     public char[][] pattern;
     public boolean reshapeEnabled;
     public Set<Integer> permanentBlackCells = Set.of();
+    /** Black-cell symmetry a reshape follows (mirrors reshape_symmetry, {@link #symmetricReshapeChanges}). */
+    public String reshapeSymmetry;
     /** The slot list and pattern bestAssignment is indexed on. */
     public List<int[]> bestSlots;
     public char[][] bestPattern;
@@ -1282,6 +1284,25 @@ public final class Filler {
         return out;
     }
 
+    /** {@code changes} extended to every changed cell's images under reshapeSymmetry, or null when two cells of it
+     * would need opposite values or an image to free is a permanent black cell (mirrors
+     * _symmetric_reshape_changes). */
+    Map<Integer, Character> symmetricReshapeChanges(Map<Integer, Character> changes) {
+        Map<Integer, Character> out = new LinkedHashMap<>(changes);
+        for (Map.Entry<Integer, Character> e : changes.entrySet()) {
+            char value = e.getValue();
+            for (int image : Grids.blackGroup(rows, cols, e.getKey(), reshapeSymmetry)) {
+                Character prev = out.get(image);
+                if (prev != null && prev != value) return null;
+                boolean currentBlack = pattern[Cells.r(image)][Cells.c(image)] == Grids.BLACK;
+                if (currentBlack == (value == Grids.BLACK)) continue;
+                if (value != Grids.BLACK && permanentBlackCells.contains(image)) return null;
+                out.put(image, value);
+            }
+        }
+        return out;
+    }
+
     /** Mirrors _reshape_options. */
     @SuppressWarnings("unchecked")
     List<Reshape> reshapeOptions(int i, String word, String family, Map<Integer, Character> known) {
@@ -1295,6 +1316,10 @@ public final class Filler {
                 if (ch != null && ch != word.charAt(p)) ok = false;
             }
             if (!ok) continue;
+            if (Grids.isSymmetric(reshapeSymmetry)) {
+                changes = symmetricReshapeChanges(changes);
+                if (changes == null) continue;
+            }
             for (Map.Entry<Integer, Character> e : changes.entrySet()) {
                 if (e.getValue() == Grids.BLACK && known.containsKey(e.getKey())) ok = false;
             }

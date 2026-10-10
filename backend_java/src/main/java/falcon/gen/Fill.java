@@ -400,6 +400,8 @@ public final class Fill {
         /** Cells the early hardclean never clears (mirrors try_fill's permanent_locked_letters). */
         public Map<Integer, Character> permanentLocked;
         public Set<Integer> permanentBlackCells;
+        /** Black-cell symmetry a reshape follows (mirrors try_fill's reshape_symmetry). */
+        public String reshapeSymmetry;
         /** Scrabble family of the candidate order (mirrors try_fill's scrabble_words). */
         public PW scrabbleWords;
     }
@@ -495,6 +497,7 @@ public final class Fill {
         filler.incrementalFill = a.incrementalFill;
         filler.permanentLockedLetters = a.permanentLocked == null ? Map.of() : a.permanentLocked;
         filler.permanentBlackCells = a.permanentBlackCells == null ? Set.of() : a.permanentBlackCells;
+        filler.reshapeSymmetry = a.reshapeSymmetry;
         if (a.checksProgress != null && a.checksSlot != null) {
             final int slot = a.checksSlot;
             filler.onChecksProgress = checks -> a.checksProgress.set(slot, checks);
@@ -658,6 +661,19 @@ public final class Fill {
                                                 Set<String> nonGlossWords, Integer maxNonGloss, PW priorityWords,
                                                 Map<Integer, Character> permanentLocked, Set<Integer> permanentBlack,
                                                 Set<String> challengeWords) {
+        return minimizeBlackSquares(grid, result, rows, cols, index, rng, deadlineChecks, cancelEvent, properNounWords,
+                maxProperNouns, nonGlossWords, maxNonGloss, priorityWords, permanentLocked, permanentBlack,
+                challengeWords, null);
+    }
+
+    /** symmetry: a black cell is only removed together with every black image of it, none of them permanent, the
+     * whole group tried at once (mirrors minimize_black_squares). */
+    public static Object[] minimizeBlackSquares(char[][] grid, Result result, int rows, int cols, DualIndex index,
+                                                Rng rng, long deadlineChecks, AtomicBoolean cancelEvent,
+                                                Set<String> properNounWords, Integer maxProperNouns,
+                                                Set<String> nonGlossWords, Integer maxNonGloss, PW priorityWords,
+                                                Map<Integer, Character> permanentLocked, Set<Integer> permanentBlack,
+                                                Set<String> challengeWords, String symmetry) {
         List<int[]> slots = result.slots();
         String[] assignment = result.assignment();
         boolean improved = true;
@@ -670,9 +686,15 @@ public final class Fill {
                 if (cancelEvent != null && cancelEvent.get()) throw new GenerationCancelled();
                 int r = Cells.r(cell), c = Cells.c(cell);
                 if (grid[r][c] != BLACK) continue;
-                if (permanentBlack != null && permanentBlack.contains(cell)) continue;
-                char saved = grid[r][c];
-                grid[r][c] = WHITE;
+                List<Integer> group = new ArrayList<>();
+                boolean blocked = false;
+                for (int g : Grids.blackGroup(rows, cols, cell, symmetry)) {
+                    if (grid[Cells.r(g)][Cells.c(g)] != BLACK) continue;
+                    if (permanentBlack != null && permanentBlack.contains(g)) blocked = true;
+                    group.add(g);
+                }
+                if (blocked) continue;
+                for (int g : group) grid[Cells.r(g)][Cells.c(g)] = WHITE;
                 if (Grids.isStructurallyValid(grid, rows, cols, 1)) {
                     Map<Integer, Character> merged = new LinkedHashMap<>(permanentLocked == null ? Map.of() : permanentLocked);
                     for (int i = 0; i < slots.size(); i++) {
@@ -723,7 +745,7 @@ public final class Fill {
                         }
                     }
                 }
-                grid[r][c] = saved;
+                for (int g : group) grid[Cells.r(g)][Cells.c(g)] = BLACK;
             }
         }
         return new Object[]{grid, slots, assignment};
