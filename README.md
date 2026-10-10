@@ -4,6 +4,9 @@ CrossWordFalcon generates crossword grids, complete with clues, straight
 from a web page — in French, English, German, Spanish, Italian, or
 Portuguese. Pick a
 language, a size, and a difficulty level, and the app builds a full grid.
+You can also build a grid yourself instead: entirely by hand, or assisted
+by AI-powered tools that suggest words, definitions and titles, or finish
+the grid for you.
 
 - **Runs 100% locally** — no cloud account, no AI subscription needed.
 - **Works on CPU or GPU** — uses a graphics card automatically if you have
