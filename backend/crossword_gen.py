@@ -3509,7 +3509,7 @@ MAX_BACKGHOSTS_PER_DESCENT = 10
 # like any candidate. `<= 1` places a single word per node. The default of
 # `generate_grid(words_per_node=)`/`try_fill(words_per_node=)`, which the
 # web UI's "Mots par pose" field overrides (`GenerateRequest.words_per_node`).
-WORDS_PER_NODE = 3
+WORDS_PER_NODE = 2
 
 # Fill rate (percent) of the attention zone at which a node is down
 # to one word per node (`Filler._group_size`): the group shrinks linearly

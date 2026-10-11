@@ -112,7 +112,7 @@ public final class Filler {
     // with the attention zone's fill rate (groupSize): WORDS_PER_NODE on an empty zone, down to 1 on a full one.
     // <= 1 places a single word per node. The default of Generator.Params.wordsPerNode/Fill.FillArgs.wordsPerNode,
     // which the web UI's "Mots par pose" field overrides (GenReq.wordsPerNode).
-    public static final int WORDS_PER_NODE = 3;
+    public static final int WORDS_PER_NODE = 2;
     // Fill rate (percent) of the attention zone at which a node is down to one word per node (mirrors
     // GROUP_SIZE_MIN_FILL_PERCENT, groupSize): the group shrinks linearly from wordsPerNode on an empty zone to 1
     // at this rate, and stays at 1 above it.

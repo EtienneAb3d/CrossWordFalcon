@@ -1164,9 +1164,9 @@ clipped by the grid, `None` = whole grid;
 "failed" live-tile whitelist and `last_examples`; Java
 `Diag.attentionZone`); `renderAttemptPreview()` draws the zone's outline as bold dashed `.attention-edge` overlays, one per straight run
 (`attentionZoneEdges`).
-**Words per node** (`WORDS_PER_NODE` = 3, `<= 1` = one word; Java
+**Words per node** (`WORDS_PER_NODE` = 2, `<= 1` = one word; Java
 `Filler.WORDS_PER_NODE`) is the default of `generate_grid(words_per_node=)`
-(the web UI's "Mots par pose" field, default 3, `GenerateRequest.words_per_node`
+(the web UI's "Mots par pose" field, default 2, `GenerateRequest.words_per_node`
 [1-`MAX_WORDS_PER_NODE`=50]), passed to the workers through the pool
 initializer (`_worker_words_per_node`) and on to `try_fill(words_per_node=)`
 -> `Filler.words_per_node` (Java `Generator.Params`/`Ctx.wordsPerNode`,

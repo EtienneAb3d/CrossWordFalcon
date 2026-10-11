@@ -358,7 +358,7 @@ plusieurs signaux) :
 - **Groupe d'un nœud** : les mots qu'un nœud de la recherche pose d'un
   coup avant de descendre — le mot de l'emplacement qu'il a choisi, puis
   d'autres, en un nombre qui décroît avec le taux de
-  remplissage de la zone d'attention : `WORDS_PER_NODE` (3, le
+  remplissage de la zone d'attention : `WORDS_PER_NODE` (2, le
   champ « Mots par pose ») pour une zone vide, jusqu'à 1 pour une zone
   remplie à `GROUP_SIZE_MIN_FILL_PERCENT` (75 %) ou plus
   (`Filler._group_size`) ; affiché « N m/p » sur la ligne

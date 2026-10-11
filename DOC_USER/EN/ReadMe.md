@@ -171,7 +171,7 @@ full again whenever a new generation or an Interactive session starts.
 - **Mots par pose / Words per placement** (`#words-per-node`) — the most
   words the search places in one go before checking how the rest of the
   grid copes, and takes back off together when that leads nowhere (1-50,
-  3 by default). The search uses this many while the area it is currently filling (the attention zone) is
+  2 by default). The search uses this many while the area it is currently filling (the attention zone) is
   empty, and fewer as that area fills up, down to one word at a time once
   it is three-quarters full. 1 is the most
   careful, word-by-word search throughout; a higher value moves faster at

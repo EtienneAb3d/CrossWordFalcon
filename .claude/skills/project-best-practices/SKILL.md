@@ -1370,7 +1370,7 @@ the current defaults/behavior to know before touching this code.
   skipped its other candidates, `Filler._last_jumped`) may make only one
   more descent — the user's rule: the cap is only reached when every
   failure came back through ordinary backtracking.
-- **Each `Filler._backtrack` node places up to `WORDS_PER_NODE` (3, the
+- **Each `Filler._backtrack` node places up to `WORDS_PER_NODE` (2, the
   default of the generation form's "Mots par pose" field, 1-50, also sent
   by "Finir la grille") words at
   once and takes them back off together** (`Filler._descend_group`, Java
@@ -1383,7 +1383,7 @@ the current defaults/behavior to know before touching this code.
   user's rule: "décroitre jusqu'à arriver à 1 pour 75% de la zone
   d'attention remplie"; `Filler._group_size`). Choices
   made with that rule, to revisit with the user: the field's value is the
-  count at 0 % (so a field at 3 goes from 3 down to 1); the fill rate is the
+  count at 0 % (so a field at 2 goes from 2 down to 1); the fill rate is the
   share of the zone's white cells holding a placed word or a locked letter,
   measured once the node's own word is placed; the count is
   `max(1, W - floor((W - 1) * rate / 0.75))`, applied from the start of

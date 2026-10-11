@@ -866,7 +866,7 @@ La recherche est une fonction récursive, un emplacement à la fois
      programme s'appelle récursivement ; un succès remonte tel quel, un
      échec fait retirer le groupe entier et essayer le candidat suivant.
 4 bis. **Un nœud pose plusieurs mots d'un coup**, au plus
-   `WORDS_PER_NODE` (3) (`Filler._descend_group`,
+   `WORDS_PER_NODE` (2) (`Filler._descend_group`,
    `Filler._extra_group_words`). Ce maximum est réglable pour chaque
    génération par le champ « Mots par pose » du formulaire (de 1 à 50 ;
    `backend/app.py`, `GenerateRequest.words_per_node` ;
