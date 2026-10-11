@@ -106,6 +106,23 @@ the grid for you.
   account or key — see [Generating clues](#generating-clues) below for the
   (optional) cloud alternative.
 
+### Recommended hardware
+
+The machine needs three things: processor cores to build the grids, a
+graphics card if you want good-quality clues written locally, and disk
+space if you turn on theme search ("Theme"/"Synonyms" buttons).
+
+| Setup | Processor | Memory | Disk | Graphics card | Good for |
+|---|---|---|---|---|---|
+| **Minimum** | 4 cores | 8 GB | 20 GB SSD | none | Trying the app, or using a cloud AI model for the clues. The default small local model works but writes weaker clues, and large grids or the heaviest modes are slow. No theme search. |
+| **Recommended** | 8 cores | 16 GB | 50 GB SSD | NVIDIA, 12 GB of video memory | Everything running locally for a few players at once: a 4B model for the clues and the chat, plus theme search. |
+| **Comfortable** | 16 cores or more | 32 GB | 50 GB SSD | two NVIDIA cards, 12 GB each | Several players at once while the library is being pre-filled, with one card kept for the "Interactive" mode. |
+
+The number of processor cores matters most for grid building: each core
+tries a different grid in parallel, so more cores find good grids sooner.
+Theme search alone takes about 17 GB of disk and 3 GB of memory. Rebuilding
+the dictionaries yourself (optional) needs about 25 GB more of disk.
+
 ## Installation (one-time setup)
 
 From a terminal, at the project root:
@@ -285,7 +302,12 @@ On the page:
    the preview grids and in Interactive mode. The Scrabble list is
    available in full at Medium and Hard, on top of the everyday vocabulary
    the chosen difficulty keeps; at Easy, only its words whose inflected
-   forms are known are used. A word you list this way never
+   forms are known are used. Once a language's usage scores are built
+   (how common each word is, rated 0 to 5), the difficulty picks words by
+   that score instead: Easy keeps the Scrabble words rated 3 and more (no
+   proper nouns), Medium the words rated 2 and more (the Scrabble list,
+   plus the most frequent everyday words missing from it), Hard every
+   word. A word you list this way never
    shows up in the Library's own grid listing, since it's meant to stay a
    hidden answer to a spot you chose yourself.
 3. Click **"Generate grid"** (the button's own label follows your chosen
@@ -483,7 +505,12 @@ looking words up in the chosen language:
 
 - **"Chercher" / "Search"** lists every word with the same root as what
   you typed (accents and case don't matter), each with its real
-  definitions.
+  definitions and, when known, how common it is ("usage : X/5": 5 for
+  everyday vocabulary down to 0 for a practically unknown word). These
+  usage ratings also make grids favour everyday words; they are written
+  once per language by the local language model
+  (`data_builder/build_usage_scores.py fr` — a long run, about a day for
+  French).
 - **"Synonymes" / "Synonyms"** lists every word close in *meaning* to
   what you typed, most similar first, on one comma-separated line.
 - **"Thématique" / "Theme"** does the same, but first asks the language
