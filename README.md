@@ -116,7 +116,7 @@ space if you turn on theme search ("Theme"/"Synonyms" buttons).
 |---|---|---|---|---|---|
 | **Minimum** | 4 cores | 8 GB | 20 GB SSD | none | Trying the app, or using a cloud AI model for the clues. The default small local model works but writes weaker clues, and large grids or the heaviest modes are slow. No theme search. |
 | **Recommended** | 8 cores | 16 GB | 50 GB SSD | NVIDIA, 12 GB of video memory | Everything running locally for a few players at once: a 4B model for the clues and the chat, plus theme search. |
-| **Comfortable** | 16 cores or more | 32 GB | 50 GB SSD | two NVIDIA cards, 12 GB each | Several players at once while the library is being pre-filled, with one card kept for the "Interactive" mode. |
+| **Comfortable** | 16 cores or more | 32 GB | 50 GB SSD | two NVIDIA cards, 12 GB each | Several players at once while the library is being pre-filled. The two cards can either run one larger model together (for example a 9B model split across both cards, for better clues and chat answers), or run two copies of a smaller model, one of them kept for the "Interactive" mode. |
 
 The number of processor cores matters most for grid building: each core
 tries a different grid in parallel, so more cores find good grids sooner.
