@@ -60,5 +60,47 @@
     "CHEVAUX (masculin pluriel irrégulier) : Ce que l'on trouve, en nombre, dans un haras",
     "TRAVAUX (masculin pluriel irrégulier) : Ce qui occupe plusieurs ouvriers sur un chantier",
     "HUMERA (il/elle, futur) : Ce qu'il fera de l'air marin en descendant du train"
-  ]
+  ],
+  "usage_score": {
+    "language_name": "French",
+    "examples": {
+      "5": [
+        "maison",
+        "mangeons",
+        "déjà",
+        "rapide",
+        "réparer"
+      ],
+      "4": [
+        "atrabilaire",
+        "nonobstant",
+        "abscons",
+        "vespéral",
+        "flâner"
+      ],
+      "3": [
+        "chantassions",
+        "fussiez",
+        "mangeâtes",
+        "finîmes"
+      ],
+      "2": [
+        "mitochondrie",
+        "isobare",
+        "holoside",
+        "accore"
+      ],
+      "1": [
+        "escarcelle",
+        "patenôtre",
+        "estoc"
+      ],
+      "0": [
+        "abacule"
+      ]
+    },
+    "rare_forms": "an imperfect or pluperfect subjunctive, or a simple past (passé simple) in the first or second person",
+    "common_forms": "present, imperfect indicative, future, conditional, simple past in the third person, participle, infinitive, plural, feminine",
+    "unaccented_example": "\"introspectees\" = \"introspectées\""
+  }
 }

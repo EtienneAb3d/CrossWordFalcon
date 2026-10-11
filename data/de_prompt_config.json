@@ -54,5 +54,45 @@
     "PFERDE (Plural, unregelmäßig: das Pferd → die Pferde) : Was man in großer Zahl auf einem Gestüt findet",
     "BÜCHER (Plural, unregelmäßig: das Buch → die Bücher) : Was mehrere Regale in einer gut sortierten Bibliothek füllt",
     "ROCH (Präteritum) : Nahm den Geruch von Regen wahr, bevor er fiel"
-  ]
+  ],
+  "usage_score": {
+    "language_name": "German",
+    "examples": {
+      "5": [
+        "Haus",
+        "essen",
+        "schon",
+        "schnell",
+        "reparieren"
+      ],
+      "4": [
+        "obgleich",
+        "elegisch",
+        "ersprießlich",
+        "Gemach"
+      ],
+      "3": [
+        "hülfe",
+        "stürbe",
+        "gingest"
+      ],
+      "2": [
+        "Mitochondrium",
+        "Isobare",
+        "Glykosid",
+        "Pleuelstange"
+      ],
+      "1": [
+        "Oheim",
+        "alldieweil",
+        "Muhme"
+      ],
+      "0": [
+        "Abakulus"
+      ]
+    },
+    "rare_forms": "a subjunctive II (Konjunktiv II) of a strong verb other than the very common ones (hülfe, stürbe), a simple past (Präteritum) in the second person, or an archaic dative in -e",
+    "common_forms": "present, simple past in the first or third person, perfect participle, infinitive, plural, case forms in current use",
+    "unaccented_example": "\"Mueller\" = \"Müller\", \"Strasse\" = \"Straße\""
+  }
 }

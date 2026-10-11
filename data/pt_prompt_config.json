@@ -58,5 +58,44 @@
     "CAVALOS (masculino plural) : O que se encontra, em grande número, numa coudelaria",
     "TRABALHOS (masculino plural) : O que ocupa vários operários numa obra",
     "CHEIRARÁ (ele/ela, futuro) : O que fará com o ar do campo ao sair do carro"
-  ]
+  ],
+  "usage_score": {
+    "language_name": "Portuguese",
+    "examples": {
+      "5": [
+        "casa",
+        "comemos",
+        "já",
+        "rápido",
+        "consertar"
+      ],
+      "4": [
+        "atrabiliário",
+        "abstruso",
+        "crepuscular",
+        "outrora"
+      ],
+      "3": [
+        "fizéramos",
+        "cantastes",
+        "sabeis"
+      ],
+      "2": [
+        "mitocôndria",
+        "isóbara",
+        "glicosídeo"
+      ],
+      "1": [
+        "escarcela",
+        "asinha",
+        "outrossim"
+      ],
+      "0": [
+        "abáculo"
+      ]
+    },
+    "rare_forms": "a simple pluperfect (mais-que-perfeito simples: cantara, fizéramos) or a second-person plural (vós) form",
+    "common_forms": "present, preterite, imperfect, future, conditional, subjunctive (future subjunctive included), personal infinitive, participle, gerund, plural, feminine",
+    "unaccented_example": "\"coracao\" = \"coração\""
+  }
 }

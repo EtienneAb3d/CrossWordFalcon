@@ -54,5 +54,45 @@
     "WAS (I/he/she/it, past) : One traveler's state, right after the long journey",
     "WERE (we/you/they, past) : Several travelers' state, right after the long journey",
     "SMELLED (simple past) : Caught a whiff of something burning in the kitchen"
-  ]
+  ],
+  "usage_score": {
+    "language_name": "English",
+    "examples": {
+      "5": [
+        "house",
+        "eating",
+        "already",
+        "quick",
+        "repair"
+      ],
+      "4": [
+        "lugubrious",
+        "notwithstanding",
+        "abstruse",
+        "crepuscular"
+      ],
+      "3": [
+        "goest",
+        "eateth",
+        "spake"
+      ],
+      "2": [
+        "mitochondrion",
+        "isobar",
+        "glycoside",
+        "bollard"
+      ],
+      "1": [
+        "forsooth",
+        "yclept",
+        "wherefore"
+      ],
+      "0": [
+        "abaculus"
+      ]
+    },
+    "rare_forms": "an archaic verb form (second-person singular in -est, third-person singular in -eth, an obsolete strong past tense)",
+    "common_forms": "present, past, participle, infinitive, plural, comparative, superlative",
+    "unaccented_example": "\"naive\" = \"naïve\""
+  }
 }

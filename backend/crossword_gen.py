@@ -2520,6 +2520,50 @@ def scrabble_wordlist_path(language):
     return os.path.join(DATA_DIR, f"wordlist_{language}_scrabble.tsv")
 
 
+# Usage score of a word (data/usage_score_<lang>_scrabble.tsv, written by
+# data_builder/build_usage_scores.py): 5 everyday, 4 formal/literary, 3 rare
+# form of an everyday word, 2 technical, 1 dated, 0 practically unknown.
+# `USAGE_SCORE_UNKNOWN` marks a word of the lexicon the file does not rate.
+USAGE_SCORE_UNKNOWN = -1
+
+
+def usage_score_path(language):
+    return os.path.join(DATA_DIR, f"usage_score_{language}_scrabble.tsv")
+
+
+def usage_score_out_path(language):
+    """The usage scores of the freq-wordlist words absent from the Scrabble
+    wordlist (`build_usage_scores.py --source out`)."""
+    return os.path.join(DATA_DIR, f"usage_score_{language}_scrabble_out.tsv")
+
+
+def _read_usage_file(path, result):
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) >= 3 and parts[2].isdigit():
+                result[parts[0].upper()] = int(parts[2])
+
+
+def load_usage_scores(language):
+    """{MOT: usage score} of `language`'s usage-score file, plus those of
+    its file for the freq words absent from the Scrabble wordlist (`usage_score_out_path`, when it exists);
+    `None` when the language has no usage-score file. Transient: only read
+    while a lexicon is being indexed (`build_index` keeps the values as an
+    `array('b')`)."""
+    if not language:
+        return None
+    path = usage_score_path(language)
+    if not os.path.exists(path):
+        return None
+    result = {}
+    _read_usage_file(path, result)
+    out_path = usage_score_out_path(language)
+    if os.path.exists(out_path):
+        _read_usage_file(out_path, result)
+    return result
+
+
 def _scrabble_entries(language, easy):
     """{MOT: (row reference, ACCENTUE)} of `language`'s Scrabble wordlist,
     in file order (empty when the language has none) — transient, built
@@ -2620,14 +2664,16 @@ def merge_scrabble_lexicon(language, by_length, refs, frequencies, easy=False):
     return _cache_scrabble_words(language, easy, entries)
 
 
-def scrabble_words_for_languages(language, bilingual_language=None, easy=False):
-    """The Scrabble word set of a grid: a frozenset on a monolingual grid,
-    a DualSet (across = `language`, down = `bilingual_language`) on a
-    bilingual one — the same shape as `priority_words`. `easy`: see
-    `load_scrabble_words`."""
-    across = load_scrabble_words(language, easy)
+def scrabble_words_for_languages(language, bilingual_language=None, difficulty=None):
+    """The Scrabble word set of a grid at `difficulty`: a frozenset on a
+    monolingual grid, a DualSet (across = `language`, down =
+    `bilingual_language`) on a bilingual one — the same shape as
+    `priority_words`. Each language's set is restricted like its lexicon's
+    (`scrabble_easy_filter`, `load_scrabble_words`)."""
+    across = load_scrabble_words(language, scrabble_easy_filter(language, difficulty))
     if bilingual_language and bilingual_language != language:
-        return DualSet(across, load_scrabble_words(bilingual_language, easy))
+        return DualSet(across, load_scrabble_words(
+            bilingual_language, scrabble_easy_filter(bilingual_language, difficulty)))
     return across
 
 
@@ -2707,6 +2753,14 @@ def load_dictionary_frequencies(path):
     return result
 
 
+def usage_scores_of(language, words):
+    """{word: usage score} of the `words` (grid forms) that `language`'s
+    usage-score file rates — `{}` when it has none. Gives the "Mots Défi"
+    their score even when they are absent from the loaded lexicon."""
+    scores = load_usage_scores(language) or {}
+    return {w: scores[w] for w in words if w in scores}
+
+
 class _WordColumn:
     """A per-word float32 column of one length's index (`build_index`'s
     `freq`/`dict_freq`): read like a dict keyed by word, stored as an
@@ -2733,7 +2787,7 @@ class _WordColumn:
 
 
 def build_index(by_length, frequencies=None, dictionary_frequencies=None, refs=None,
-                sources=None):
+                sources=None, usage_scores=None):
     """One entry per length: `words` (the list of its words, a word's id
     being its position there), `ids` ({word: id}), `pos` (per position, a
     {letter: set of words} map), `freq`/`dict_freq` (float32 columns,
@@ -2752,7 +2806,13 @@ def build_index(by_length, frequencies=None, dictionary_frequencies=None, refs=N
     `freq` — used only by `_noise_slot_cells` (see
     `NOISE_FREQUENCY_THRESHOLD`) to tell a statistically credible
     candidate apart from a near-zero dictionary entry. Omitted (`None`),
-    every word's `freq` is `0.0`."""
+    every word's `freq` is `0.0`.
+
+    `usage_scores` (`load_usage_scores`, `None` by default) feeds `usage`
+    — each word's usage score, `USAGE_SCORE_UNKNOWN` for a word the file
+    does not rate, as an `array('b')` column; `None` when the language has
+    no usage-score file. Read by `Filler.ordered_candidates` and
+    `_content_score`."""
     frequencies = frequencies or {}
     dictionary_frequencies = dictionary_frequencies or {}
     index = {}
@@ -2772,6 +2832,9 @@ def build_index(by_length, frequencies=None, dictionary_frequencies=None, refs=N
             ),
             "refs": array("I", (refs[w] for w in words)) if refs is not None else None,
             "sources": sources,
+            "usage": _WordColumn(
+                ids, array("b", (usage_scores.get(w, USAGE_SCORE_UNKNOWN) for w in words))
+            ) if usage_scores is not None else None,
         }
     return index
 
@@ -2803,28 +2866,101 @@ _LEXICON_CACHE_LOCK = threading.Lock()
 LEXICON_CACHE_MAX = 8
 
 
-def load_lexicon(wordlist_path, max_words, easy):
-    """The `LoadedLexicon` of `wordlist_path` cut to `max_words`
-    (`load_wordlist`), "easy" filters on when `easy`, with the language's
-    Scrabble wordlist merged in (`merge_scrabble_lexicon`) — built once
-    per (path, cut, easy) key and process, shared read-only by every
-    generation and Interactive session (the cache is emptied once it
-    holds `LEXICON_CACHE_MAX` entries)."""
-    key = (str(wordlist_path), max_words, bool(easy))
+# Minimum usage score of the words a lexicon keeps, per difficulty, for a
+# language with a usage-score file (`load_lexicon`): "easy" keeps the
+# Scrabble words rated 3 and more (likely proper nouns excluded), "medium"
+# the Scrabble words rated 2 and more plus the freq words absent from the
+# Scrabble wordlist rated 2 and more (`usage_score_out_path`) within the
+# `DIFFICULTY_PRESETS["medium"]` cut, "hard" (`None`) every word of the
+# freq and Scrabble wordlists.
+# This selection replaces every other lexicon rule of that difficulty
+# (`DIFFICULTY_PRESETS` cut, "easy" gloss requirement and inflection filter
+# of the Scrabble words, "easy" `MAX_PROPER_NOUNS`/`MAX_NON_GLOSS_WORDS`
+# quotas); the "medium" and "hard" quotas still apply.
+USAGE_DIFFICULTY_MIN_SCORE = {"easy": 3, "medium": 2, "hard": None}
+
+
+def usage_lexicon_active(language, difficulty):
+    """True when `language`'s lexicon at `difficulty` is selected by usage
+    score (`USAGE_DIFFICULTY_MIN_SCORE`): the language has a usage-score
+    file and `difficulty` is one of the three difficulties."""
+    return (difficulty in USAGE_DIFFICULTY_MIN_SCORE and bool(language)
+            and os.path.exists(usage_score_path(language)))
+
+
+def scrabble_easy_filter(language, difficulty):
+    """Whether `language`'s Scrabble words are restricted to those with a
+    known inflection (`_scrabble_entries`'s `easy`): at "easy" difficulty,
+    unless the lexicon is selected by usage score."""
+    return difficulty == "easy" and not usage_lexicon_active(language, difficulty)
+
+
+def load_lexicon(wordlist_path, max_words, difficulty):
+    """The `LoadedLexicon` of `wordlist_path` for `difficulty`, with the
+    language's Scrabble wordlist merged in (`merge_scrabble_lexicon`) —
+    built once per (path, cut, difficulty) key and process, shared
+    read-only by every generation and Interactive session (the cache is
+    emptied once it holds `LEXICON_CACHE_MAX` entries).
+
+    With no explicit `max_words` and a language that has a usage-score
+    file (`usage_lexicon_active`), the words are selected by usage score
+    alone: the whole freq and Scrabble wordlists, cut to the words rated
+    at least `USAGE_DIFFICULTY_MIN_SCORE[difficulty]` (an unrated word is
+    dropped; no cut at "hard"), likely proper nouns excluded at "easy",
+    and no quota word set (`proper_nouns`/`non_gloss` empty) at "easy".
+    At "medium", the freq words absent from the Scrabble wordlist join
+    too when rated at least that score in `usage_score_out_path`'s file
+    and kept by the `DIFFICULTY_PRESETS["medium"]` cut (`load_wordlist`);
+    the "medium" and "hard" quotas apply. Otherwise
+    the lexicon is cut to `max_words`, else to `DIFFICULTY_PRESETS
+    [difficulty]` (`load_wordlist`), "easy" filters on at "easy"."""
+    language = _lang_from_path(wordlist_path)
+    by_usage = max_words is None and usage_lexicon_active(language, difficulty)
+    if by_usage:
+        mw, easy = None, False
+    else:
+        mw = max_words or DIFFICULTY_PRESETS.get(difficulty)
+        easy = difficulty == "easy"
+    key = (str(wordlist_path), mw, easy, difficulty if by_usage else None)
     with _LEXICON_CACHE_LOCK:
         loaded = _LEXICON_CACHE.get(key)
         if loaded is not None:
             return loaded
         by_length, refs, frequencies, proper_nouns, non_gloss = load_wordlist(
-            wordlist_path, max_words, require_gloss=easy, exclude_proper_nouns=easy,
+            wordlist_path, mw, require_gloss=easy, exclude_proper_nouns=easy,
         )
-        language = _lang_from_path(wordlist_path)
         scrabble = merge_scrabble_lexicon(language, by_length, refs, frequencies, easy=easy)
         sources = (str(wordlist_path), scrabble_wordlist_path(language) if language else None)
+        usage_scores = load_usage_scores(language)
+        if by_usage:
+            min_score = USAGE_DIFFICULTY_MIN_SCORE[difficulty]
+            excluded = proper_nouns - scrabble if difficulty == "easy" else frozenset()
+            # "medium": a freq word absent from the Scrabble wordlist stays
+            # under the freq wordlist's own "medium" cut.
+            freq_cut = (
+                {w for words in load_wordlist(wordlist_path, DIFFICULTY_PRESETS["medium"])[0].values()
+                 for w in words}
+                if difficulty == "medium" else None
+            )
+            if min_score is not None or excluded:
+                by_length = {
+                    length: kept for length, words in by_length.items()
+                    if (kept := [
+                        w for w in words
+                        if w not in excluded
+                        and (min_score is None
+                             or (usage_scores.get(w, USAGE_SCORE_UNKNOWN) >= min_score
+                                 and (w in scrabble
+                                      or (freq_cut is not None and w in freq_cut))))
+                    ])
+                }
+            if difficulty == "easy":
+                proper_nouns = non_gloss = frozenset()
         index = build_index(
             by_length, frequencies, load_dictionary_frequencies(wordlist_path), refs, sources,
+            usage_scores,
         )
-        del refs, frequencies
+        del refs, frequencies, usage_scores
         loaded = LoadedLexicon(
             index, frozenset(proper_nouns - scrabble), frozenset(non_gloss - scrabble), scrabble,
         )
@@ -3267,6 +3403,14 @@ def _slots_touching(slots, target_indices):
 # room for two attempts (or two "Suivant" clicks) on the same state to
 # diverge.
 CANDIDATE_SCORE_WINDOW = 200
+
+# Before the statistical ranking, `Filler.ordered_candidates` keeps only
+# the `USAGE_KEEP_PERCENT` % of a slot's candidates with the highest usage
+# score (rounded up, at least one), among the candidates whose usage score
+# is known (`index[length]["usage"]`); a candidate with no known score is
+# always kept, and a language with no usage-score file is not filtered.
+# Ties at the cut are settled by the shuffle that precedes it.
+USAGE_KEEP_PERCENT = 60
 
 # Within that window, the words are re-sorted by their frequency in the
 # freq wordlist (`index[length]["dict_freq"]`, highest first, 0 for a word
@@ -4891,9 +5035,14 @@ class Filler:
            the pick is drawn at random among its `CANDIDATE_FREQ_WINDOW`
            most frequent words. See both constants' own docstrings.
 
+        Between the shuffle and the sort, only the `USAGE_KEEP_PERCENT` %
+        of the candidates with the highest usage score are kept, among the
+        candidates whose score is known (`_usage_filtered`).
+
         `cands` is never modified: the returned list is a fresh one."""
         cands = list(cands)
         self.rng.shuffle(cands)
+        cands = self._usage_filtered(i, cands)
         if not self.letter_scores:
             return cands
         tried = self._tried_words.get(tuple(self.slots[i]), {})
@@ -4917,6 +5066,26 @@ class Filler:
             idx = self.rng.randrange(min(CANDIDATE_FREQ_WINDOW, len(window)))
             reordered.append(window.pop(idx)[2])
         return reordered
+
+    def _usage_filtered(self, i, cands):
+        """`cands` (shuffled) minus the candidates outside the
+        `USAGE_KEEP_PERCENT` % with the highest usage score, among those
+        whose score is known (`index[length]["usage"]`), order kept;
+        `cands` itself when slot `i`'s language has no usage-score file or
+        no candidate has a known score."""
+        slot = self.slots[i]
+        usage = self.index.for_cells(slot).get(len(slot), {}).get("usage")
+        if usage is None:
+            return cands
+        known = [w for w in cands if usage.get(w, USAGE_SCORE_UNKNOWN) != USAGE_SCORE_UNKNOWN]
+        if not known:
+            return cands
+        keep = (len(known) * USAGE_KEEP_PERCENT + 99) // 100
+        if keep >= len(known):
+            return cands
+        known.sort(key=lambda w: -usage[w])
+        dropped = set(known[keep:])
+        return [w for w in cands if w not in dropped]
 
     def scrabble_first(self, i, cands):
         """`cands` (an already-ordered list) stably split into two blocks:
@@ -10905,7 +11074,26 @@ CHALLENGE_WORD_SCORE_BONUS = 4
 CONTENT_SCORE_LENGTH_CAP = 7
 
 
-def _content_score(pairs, priority_words=None, challenge_words=None):
+def _usage_correction(index, word, cells, challenge_usage=None):
+    """`word`'s usage score minus 3 (`_content_score`'s length bonus or
+    malus): 0 when `index` is `None` or the language of `cells` has no
+    usage-score file. The score is read from the lexicon's `usage` column,
+    else, for a "Mots Défi" word outside the lexicon, from
+    `challenge_usage` (`usage_scores_of`, a `DualSet` of per-language
+    dicts); a word the file does not rate counts as 0, i.e. -3."""
+    if index is None or cells is None:
+        return 0
+    usage = index.for_cells(cells).get(len(word), {}).get("usage")
+    if usage is None:
+        return 0
+    score = usage.get(word, USAGE_SCORE_UNKNOWN)
+    if score == USAGE_SCORE_UNKNOWN and challenge_usage is not None:
+        score = challenge_usage.for_cells(cells).get(word, USAGE_SCORE_UNKNOWN)
+    return (0 if score == USAGE_SCORE_UNKNOWN else score) - 3
+
+
+def _content_score(pairs, priority_words=None, challenge_words=None, index=None,
+                   challenge_usage=None):
     """Sum of squares of each placed word's own "scored length", over
     `pairs` (an iterable of `(word, cells)`, `word` possibly `None` for an
     unassigned slot — ignored). This is the ONE formula shared by every
@@ -10938,7 +11126,13 @@ def _content_score(pairs, priority_words=None, challenge_words=None):
     A word's own length is capped at `CONTENT_SCORE_LENGTH_CAP` BEFORE any
     bonus is added — a 12-letter word scores the same raw length as a
     7-letter one, so the sum keeps favoring more/longer-within-reason
-    words over one single very long word dominating the whole score."""
+    words over one single very long word dominating the whole score.
+
+    `index` (`None` by default): each word's usage score minus 3 is then
+    added to its scored length too (`_usage_correction`, 0 for a language
+    with no usage-score file; `challenge_usage` gives a "Mots Défi" word
+    outside the lexicon its score), the result floored at 0 before
+    squaring."""
     total = 0
     for w, cells in pairs:
         if w is None:
@@ -10950,12 +11144,16 @@ def _content_score(pairs, priority_words=None, challenge_words=None):
             bonus = THEME_WORD_SCORE_BONUS
         else:
             bonus = 0
-        scored_length = min(len(w), CONTENT_SCORE_LENGTH_CAP) + bonus
+        scored_length = max(
+            0, min(len(w), CONTENT_SCORE_LENGTH_CAP) + bonus
+            + _usage_correction(index, w, cells, challenge_usage),
+        )
         total += scored_length ** 2
     return total
 
 
-def _playable_score(grid, diag, rows, cols, priority_words=None, challenge_words=None):
+def _playable_score(grid, diag, rows, cols, priority_words=None, challenge_words=None,
+                    index=None, challenge_usage=None):
     """Measures the amount of content genuinely placed and confirmed in
     `diag["assignment"]` — the square root of `_content_score` over every
     already-assigned word paired with its own slot (`None` ignored) — at
@@ -10987,11 +11185,11 @@ def _playable_score(grid, diag, rows, cols, priority_words=None, challenge_words
         pairs = zip(diag["assignment"], [None] * len(diag["assignment"]))
     else:
         pairs = zip(diag["assignment"], slots)
-    return _content_score(pairs, priority_words, challenge_words) ** 0.5
+    return _content_score(pairs, priority_words, challenge_words, index, challenge_usage) ** 0.5
 
 
 def _cleaned_playable_score(grid, diag, rows, cols, index, rng,
-                             priority_words=None, challenge_words=None):
+                             priority_words=None, challenge_words=None, challenge_usage=None):
     """Like `_playable_score`, but on the state AFTER cleanup — the
     content that would genuinely survive once removed one at a time, as
     needed to resolve every impossible situation in `diag["impossible_
@@ -11029,13 +11227,15 @@ def _cleaned_playable_score(grid, diag, rows, cols, index, rng,
     rather than an expected case."""
     slots = extract_slots(grid, rows, cols)
     if len(slots) != len(diag["assignment"]):
-        return _playable_score(grid, diag, rows, cols, priority_words, challenge_words)
+        return _playable_score(
+            grid, diag, rows, cols, priority_words, challenge_words, index, challenge_usage,
+        )
     cleaned_assignment, _, _, _ = _clean_blocked_slots(
         slots, diag["assignment"], diag["impossible_slots"],
         locked_letters=_diag_locked_letters(diag, grid), index=index, rng=rng,
     )
     return _content_score(
-        zip(cleaned_assignment, slots), priority_words, challenge_words,
+        zip(cleaned_assignment, slots), priority_words, challenge_words, index, challenge_usage,
     ) ** 0.5
 
 
@@ -13369,13 +13569,14 @@ def _build_retry_seed(grid, rows, cols, slots, assignment, impossible_slots, loc
 # `generate_grid`) at the user's explicit request, once the same logic
 # was also needed for "reprise telle quelle" (see `_clean_continue_
 # candidate`/`_continue_seed_pool` further below).
-def _words_in_place_score(cand_slots, cand_confirmed, priority_words=None, challenge_words=None):
+def _words_in_place_score(cand_slots, cand_confirmed, priority_words=None, challenge_words=None,
+                          index=None, challenge_usage=None):
     pairs = (
         ("".join(cand_confirmed[cell] for cell in cells), cells)
         for cells in cand_slots
         if all(cell in cand_confirmed for cell in cells)
     )
-    return _content_score(pairs, priority_words, challenge_words)
+    return _content_score(pairs, priority_words, challenge_words, index, challenge_usage)
 
 
 # Breaks a `_words_in_place_score` tie — the candidate's own black-cell
@@ -13398,11 +13599,13 @@ def _candidate_black_count(cand_seed):
 # now applies here too, at the user's explicit request ("le scoring
 # réussi et échoué doivent utiliser la même logique qui favorise le
 # glossaire thématique").
-def _sorted_by_score(cleaned_candidates, priority_words=None, challenge_words=None):
+def _sorted_by_score(cleaned_candidates, priority_words=None, challenge_words=None, index=None,
+                     challenge_usage=None):
     return sorted(
         cleaned_candidates,
         key=lambda sc: (
-            _words_in_place_score(sc[2], sc[1], priority_words, challenge_words),
+            _words_in_place_score(sc[2], sc[1], priority_words, challenge_words, index,
+                                  challenge_usage),
             _candidate_black_count(sc[0]),
         ),
         reverse=True,
@@ -15504,13 +15707,14 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     permanent_locked_letters = dict(permanent_locked_letters) if permanent_locked_letters else {}
 
     rng = random.Random(seed)
-    mw = max_words or DIFFICULTY_PRESETS.get(difficulty)
     # The lexicon (index, quota word sets, Scrabble words) comes from the
-    # process-wide cache (`load_lexicon`). Only "easy" excludes proper
-    # nouns from the lexicon entirely — "medium"/"hard" tolerate them
-    # within a per-grid quota (MAX_PROPER_NOUNS/proper_noun_words below).
-    easy = difficulty == "easy"
-    lexicon_across = load_lexicon(wordlist_path, mw, easy)
+    # process-wide cache (`load_lexicon`): selected by usage score when the
+    # language has a usage-score file (`USAGE_DIFFICULTY_MIN_SCORE`, no
+    # quota word set), otherwise cut by `DIFFICULTY_PRESETS`, "easy"
+    # excluding proper nouns from the lexicon entirely — "medium"/"hard"
+    # tolerating them within a per-grid quota (MAX_PROPER_NOUNS/
+    # proper_noun_words below).
+    lexicon_across = load_lexicon(wordlist_path, max_words, difficulty)
     language = _lang_from_path(wordlist_path) or "fr"
     scrabble_across = lexicon_across.scrabble_words
 
@@ -15521,7 +15725,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # generation (`lexicon_down` then aliases `lexicon_across`).
     bilingual_active = bool(bilingual_wordlist_path) and bilingual_wordlist_path != wordlist_path
     if bilingual_active:
-        lexicon_down = load_lexicon(bilingual_wordlist_path, mw, easy)
+        lexicon_down = load_lexicon(bilingual_wordlist_path, max_words, difficulty)
         bilingual_language = _lang_from_path(bilingual_wordlist_path) or bilingual_wordlist_path
         scrabble_down = lexicon_down.scrabble_words
     else:
@@ -15603,6 +15807,16 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     challenge_words = frozenset(
         gf for w in (challenge_words or ()) if (gf := challenge_word_grid_form(w))
     )
+    # Their usage scores, even outside the lexicon (`_usage_correction`),
+    # per direction's language like the lexicon.
+    challenge_usage = None
+    if challenge_words:
+        usage_across = usage_scores_of(language, challenge_words)
+        usage_down = (
+            usage_scores_of(bilingual_language, challenge_words) if bilingual_active
+            else usage_across
+        )
+        challenge_usage = DualSet(usage_across, usage_down)
     # Logged once per request, not per attempt: the CSP's failure mode
     # (below) can't be told apart from a genuinely empty word list for
     # some length without this — a `require_gloss`/`max_words` combination
@@ -17184,7 +17398,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     # challenge-free generation sums every placed
                     # word's own plain length, unchanged.
                     opt_score = _content_score(
-                        zip(opt_assignment, opt_slots), priority_words, challenge_words,
+                        zip(opt_assignment, opt_slots), priority_words, challenge_words, index,
+                        challenge_usage,
                     )
                     scored.append((opt_black, -opt_score, g, r, d, (opt_grid, opt_slots, opt_assignment)))
                 _, _, best, best_result, best_diag, best_minimized = min(
@@ -17248,6 +17463,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 failed_unique,
                 key=lambda gd: _cleaned_playable_score(
                     gd[0], gd[1], rows, cols, index, rng, priority_words, challenge_words,
+                    challenge_usage,
                 ),
                 reverse=True,
             )
@@ -17360,7 +17576,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 attempt_key = d.get("attempt_id")
                 if attempt_key is None:
                     attempt_key = ("__no_attempt_id__", idx)
-                score = _playable_score(g, d, rows, cols, priority_words, challenge_words)
+                score = _playable_score(
+                    g, d, rows, cols, priority_words, challenge_words, index, challenge_usage,
+                )
                 if attempt_key not in best_by_attempt or score > best_by_attempt[attempt_key][0]:
                     best_by_attempt[attempt_key] = (score, (g, d))
             display_unique = [gd for _, gd in best_by_attempt.values()]
@@ -17410,7 +17628,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                  if (tuple(map(tuple, gd[0])), tuple(gd[1]["assignment"])) != winner_key
                  and (winner_attempt_id is None or gd[1].get("attempt_id") != winner_attempt_id)),
                 key=lambda gd: _playable_score(
-                    gd[0], gd[1], rows, cols, priority_words, challenge_words,
+                    gd[0], gd[1], rows, cols, priority_words, challenge_words, index,
+                    challenge_usage,
                 ),
                 reverse=True,
             )
@@ -17720,7 +17939,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             for cand_grid, cand_diag in optimized_pairs
                         ]
                     ],
-                    priority_words=priority_words, challenge_words=challenge_words,
+                    priority_words=priority_words, challenge_words=challenge_words, index=index,
+                    challenge_usage=challenge_usage,
                 )
                 carry_seed_pool_continue = _continue_seed_pool(cleaned_continue_candidates)
                 (carry_seed_grid, carry_preseed_assignment, carry_excluded_slots,
@@ -17881,6 +18101,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     cleaned_candidates = _sorted_by_score(
                         kept_candidates,
                         priority_words=priority_words, challenge_words=challenge_words,
+                        index=index, challenge_usage=challenge_usage,
                     )
                     # Blank-grid workers of the next palier (see
                     # `reset_count` in the "fresh pattern" branch), which

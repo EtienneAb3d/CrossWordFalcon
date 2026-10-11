@@ -1,9 +1,9 @@
 # Comment CrossWordFalcon construit ses dictionnaires
 
-Ce document décrit, en termes simples, comment les cinq scripts du dossier
+Ce document décrit, en termes simples, comment les scripts du dossier
 `data_builder/` — `build_sentence_corpus.py`, `build_wordlist_freq.py`,
-`build_gloss_dictionary.py`, `compress_reference_corpus.py` et
-`build_inflections.py` — fabriquent,
+`build_gloss_dictionary.py`, `compress_reference_corpus.py`,
+`build_inflections.py` et `build_usage_scores.py` (entre autres) — fabriquent,
 pour une langue donnée (français, anglais, allemand, espagnol, italien ou
 portugais),
 les fichiers que `backend/crossword_gen.py` et `backend/clues.py` utilisent
@@ -23,7 +23,12 @@ ensuite pour générer une grille et ses définitions :
 5. une table d'analyse grammaticale des formes fléchies (`data/inflection/
    <lang>.jsonl`), qui indique pour chaque mot exact sa nature (nom,
    verbe, adjectif…) et sa flexion complète (personne, nombre, genre,
-   temps, mode) — voir "Étape 5" plus bas.
+   temps, mode) — voir "Étape 5" plus bas ;
+6. une note d'usage de chaque mot du dictionnaire Scrabble (`data/
+   usage_score_<lang>_scrabble.tsv`) et de chaque mot de la liste de
+   fréquences absent de ce dictionnaire (`data/usage_score_<lang>_
+   scrabble_out.tsv`), attribuée par le LLM local — voir "Scores d'usage"
+   plus bas.
 
 Les trois premières étapes s'enchaînent dans cet ordre — chacune consomme la
 sortie de la précédente — mais sont indépendantes d'une langue à l'autre :
@@ -457,7 +462,8 @@ juste après l'étape 2, après avoir téléchargé les listes brutes de la
 langue si elles manquent, et en complétant juste avant les lemmes des
 graphies sans accents de la liste de fréquences (voir « Graphies sans
 accents » plus bas) — puis, en dernière étape, alimentent la base
-vectorielle Qdrant avec tout le lexique de la langue : les mots de
+vectorielle Qdrant avec tout le lexique de la langue (la note d'usage de
+chaque mot, voir « Scores d'usage », est calculée juste avant) : les mots de
 `data/wordlist_<lang>_freq.tsv`, puis ceux de
 `data/wordlist_<lang>_scrabble.tsv` qu'il ne contient pas
 (`python -m data_builder.qdrant_populate <lang> --recreate` — voir la
@@ -547,8 +553,98 @@ dont la forme accentuée figure dans la table des formes fléchies, comme
 forme ou comme lemme (`load_inflection_keys`, `_scrabble_entries`).
 Ses mots s'ajoutent à la part du dictionnaire de fréquences retenue pour
 ce niveau, avec la référence de leur ligne, hors quotas de noms
-propres et de mots sans définition. La génération essaie en priorité ses
+propres et de mots sans définition. Quand la langue a ses scores d'usage
+(`data/usage_score_<langue>_scrabble.tsv`), les deux dictionnaires sont
+versés en entier et la difficulté ne retient que les mots Scrabble notés 3
+et plus en facile (noms propres probables exclus) ; en moyen, les mots
+Scrabble notés 2 et plus, plus les mots de la liste de fréquences absents
+du Scrabble notés 2 et plus (`data/usage_score_<langue>_scrabble_out.tsv`)
+qui restent dans la coupe de fréquence du niveau moyen
+(`DIFFICULTY_PRESETS`, 80 %) ; tous en difficile (`load_lexicon`,
+`USAGE_DIFFICULTY_MIN_SCORE`). Les autres règles ci-dessus ne
+s'appliquent plus, sauf les quotas des niveaux moyen et difficile. La génération essaie en priorité ses
 mots (voir `DOC_ALGO/FR/ReadMe.md`, « Choisir quel mot essayer »).
+
+## Scores d'usage
+
+`data_builder/build_usage_scores.py` note, avec le LLM local, chaque mot de
+`data/wordlist_<lang>_scrabble.tsv` selon qu'il fait partie du vocabulaire
+courant ou qu'il est rare, et écrit `data/usage_score_<lang>_scrabble.tsv`
+(`MOT<TAB>ACCENTUE<TAB>SCORE`, la graphie principale en ACCENTUE), trié par
+score décroissant puis par ordre alphabétique de MOT. Avec `--source out`,
+il note de même chaque mot de `data/wordlist_<lang>_freq.tsv` absent du
+dictionnaire Scrabble (sa ligne de plus forte FREQUENCE : la colonne
+ACCENTUE comme forme, CANONIQUE comme lemmes ; `_load_out_entries`) et
+écrit `data/usage_score_<lang>_scrabble_out.tsv`, même format (environ
+18 000 mots en français, à peu près une heure). Le barème :
+
+- **5** : vocabulaire courant ;
+- **4** : vocabulaire soutenu ou littéraire ;
+- **3** : forme rare d'un mot courant (en français : subjonctif imparfait
+  ou plus-que-parfait, passé simple aux 1re et 2e personnes) ;
+- **2** : terme technique propre à un métier ou à une discipline
+  scientifique ;
+- **1** : mot vieilli, qui ne s'emploie plus guère ;
+- **0** : mot pratiquement inconnu.
+
+### Le prompt
+
+Chaque mot fait l'objet de sa propre requête (des mots réunis dans un même
+prompt s'influencent mutuellement), `--concurrency` (5) requêtes à la fois.
+Le message système, identique pour tous les mots, vient en premier, pour
+que le cache de préfixe (KV) du serveur LLM le réutilise ; il donne le
+barème, des exemples et la procédure : noter le lemme seul (5, 4, 2, 1 ou
+0), classer la forme comme rare ou non, et retenir 3 si le lemme vaut 5 et
+la forme est rare, la note du lemme sinon. Les règles sont en anglais dans
+le script ; les exemples de chaque note, la définition des formes rares et
+celle des formes ordinaires propres à la langue sont dans
+`data/<lang>_prompt_config.json`, objet `usage_score`. Le message
+utilisateur décrit le mot (`_entry_text`) :
+
+- sa forme fléchie, avec ses autres graphies possibles (colonne ACCENTUE) ;
+- sa variante grammaticale (nombre, genre, conjugaison), lue dans la table
+  des formes fléchies (`backend/inflection_lookup.py`, `describe_form`) ;
+- ses formes canoniques (colonne CANONIQUE, trois au plus) ;
+- le nombre d'occurrences de la forme et de chaque lemme dans le corpus
+  plafonné (`data/reference_corpus/<lang>_sentences.txt`, compté au
+  démarrage comme le fait `build_wordlist_freq.py`), avec la fréquence par
+  million de mots. La colonne FREQUENCE de la liste de fréquences n'est pas
+  utilisée : elle reflète surtout la fréquence du lemme et ne distingue pas
+  une forme rare d'une forme courante. Le prompt présente ces nombres comme
+  un indice : un compte élevé confirme un usage courant, un compte faible
+  ne prouve rien ;
+- ses définitions (`backend/gloss_lookup.py`, trois par lemme au plus).
+
+La réponse est la note seule : un chiffre, un seul jeton (`max_tokens` 1,
+réflexion désactivée, température 0). Une réponse sans chiffre de 0 à 5 est
+redemandée jusqu'à `MAX_ATTEMPTS` (3) fois.
+
+### Reprise et durée
+
+Chaque mot noté est ajouté au fichier `.partial` du fichier de sortie
+(`data/usage_score_<lang>_scrabble[_out].tsv.partial`, non versionné) et sauté à la relance ; le fichier final trié le remplace
+une fois tous les mots notés. Un mot resté sans note est signalé, et une
+relance le reprend. Le traitement est long : en français (environ 411 000
+mots), autour de 4,5 mots par seconde sur le serveur LLM local, soit près
+de 26 heures. `data_builder/build_<lang>.sh` le lance en avant-dernière
+étape, puis le relance avec `--source out`, sans bloquer le reste du pipeline en cas d'échec (le LLM local doit
+tourner, `./run_llm.sh`). `--words` note quelques mots et affiche le
+résultat sans rien écrire, `--show-prompt` affiche le prompt du premier
+mot.
+
+### Utilisation
+
+Le générateur de grille lit ces deux fichiers en chargeant le lexique
+(`backend/crossword_gen.py`, `load_usage_scores`, le second seulement en
+présence du premier) : il choisit les mots de chaque difficulté (voir
+« Utilisation » du dictionnaire Scrabble plus haut), et il ne garde, pour
+chaque emplacement, que les 60 % de candidats les mieux notés parmi ceux
+qui ont une note, et ajoute la note moins 3 à la longueur de chaque mot du
+score de contenu (voir `DOC_ALGO/FR/ReadMe.md`, « Choisir quel mot
+essayer » et « Le score de contenu »). Le panneau Dictionnaire affiche
+« usage : X/5 » sous chaque forme notée dans l'un ou l'autre fichier
+(`backend/usage_scores.py`). Une langue sans fichier fonctionne comme
+avant.
 
 ## Graphies sans accents
 
@@ -599,8 +695,9 @@ chaque mot et par la détection des noms propres probables, complétée par
 le dictionnaire Scrabble et par les lemmes des variantes accentuées de ses
 graphies sans accents — puis va chercher, pour chaque forme canonique de cette liste, une vraie définition
 dans Wiktionary, compresse la variante plafonnée du corpus pour publication,
-et extrait enfin de Wiktionary une table locale donnant la nature et la
-flexion exacte de chaque forme de la liste ; le générateur de grille
+extrait de Wiktionary une table locale donnant la nature et la flexion
+exacte de chaque forme de la liste, et fait enfin noter par le LLM local
+l'usage de chaque mot du dictionnaire Scrabble ; le générateur de grille
 (`backend/crossword_gen.py`), le rédacteur de définitions
 (`backend/clues.py`) et la recherche d'exemples d'usage
 (`backend/example_sentences.py`) n'utilisent ensuite plus que ces fichiers,

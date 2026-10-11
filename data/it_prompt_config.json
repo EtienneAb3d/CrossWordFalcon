@@ -59,5 +59,45 @@
     "CAVALLI (maschile plurale) : Quello che si trova, in gran numero, in un allevamento",
     "LAVORI (maschile plurale) : Quello che occupa diversi operai in un cantiere",
     "ANNUSERÀ (lui/lei, futuro) : Ciò che farà con l'aria di mare scendendo dal treno"
-  ]
+  ],
+  "usage_score": {
+    "language_name": "Italian",
+    "examples": {
+      "5": [
+        "casa",
+        "mangiamo",
+        "già",
+        "veloce",
+        "riparare"
+      ],
+      "4": [
+        "atrabiliare",
+        "nondimeno",
+        "astruso",
+        "vespertino"
+      ],
+      "3": [
+        "beveste",
+        "sapeste",
+        "nasceste"
+      ],
+      "2": [
+        "mitocondrio",
+        "isobara",
+        "glicoside"
+      ],
+      "1": [
+        "scarsella",
+        "guari",
+        "uopo",
+        "desco"
+      ],
+      "0": [
+        "abaculo"
+      ]
+    },
+    "rare_forms": "a remote past (passato remoto) in the second person, or another archaic verb form",
+    "common_forms": "present, imperfect, future, conditional, subjunctive, remote past in the first or third person, participle, gerund, infinitive, plural, feminine",
+    "unaccented_example": "\"perche\" = \"perché\""
+  }
 }

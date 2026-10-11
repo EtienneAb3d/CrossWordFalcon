@@ -197,10 +197,89 @@ public final class Words {
     public static Map<Integer, LenIndex> buildIndex(Map<Integer, List<String>> byLength, Map<String, Double> frequencies,
                                                     Map<String, Double> dictionaryFrequencies, Map<String, Integer> refs,
                                                     String[] sources) {
+        return buildIndex(byLength, frequencies, dictionaryFrequencies, refs, sources, null);
+    }
+
+    public static Map<Integer, LenIndex> buildIndex(Map<Integer, List<String>> byLength, Map<String, Double> frequencies,
+                                                    Map<String, Double> dictionaryFrequencies, Map<String, Integer> refs,
+                                                    String[] sources, Map<String, Integer> usageScores) {
         Map<Integer, LenIndex> index = new LinkedHashMap<>();
         byLength.forEach((len, words) -> index.put(len,
-                new LenIndex(len, words, frequencies, dictionaryFrequencies, refs, sources)));
+                new LenIndex(len, words, frequencies, dictionaryFrequencies, refs, sources, usageScores)));
         return index;
+    }
+
+    /** {word: usage score} of the {@code words} (grid forms) that {@code language}'s usage-score file rates, empty
+     * when it has none: gives the "Mots Défi" their score even outside the lexicon (mirrors usage_scores_of). */
+    public static Map<String, Integer> usageScoresOf(String language, Collection<String> words) throws IOException {
+        Map<String, Integer> scores = loadUsageScores(language);
+        Map<String, Integer> out = new HashMap<>();
+        if (scores == null) return out;
+        for (String w : words) {
+            Integer v = scores.get(w);
+            if (v != null) out.put(w, v);
+        }
+        return out;
+    }
+
+    /** Minimum usage score of the words a lexicon keeps, per difficulty, for a language with a usage-score file
+     * (Generator.load): "easy" the Scrabble words rated 3 and more (likely proper nouns excluded), "medium" the
+     * Scrabble words rated 2 and more plus the freq words absent from the Scrabble wordlist rated 2 and more within
+     * the DIFFICULTY_PRESETS "medium" cut, "hard" (absent: no cut) every word of the freq and Scrabble wordlists.
+     * Replaces every other lexicon rule of that difficulty, except the "medium" and "hard" quotas (mirrors
+     * USAGE_DIFFICULTY_MIN_SCORE). */
+    public static final Map<String, Integer> USAGE_DIFFICULTY_MIN_SCORE = Map.of("easy", 3, "medium", 2);
+
+    /** True when the language's lexicon at {@code difficulty} is selected by usage score (mirrors
+     * usage_lexicon_active). */
+    public static boolean usageLexiconActive(String language, String difficulty) {
+        return ("easy".equals(difficulty) || "medium".equals(difficulty) || "hard".equals(difficulty))
+                && language != null && !language.isEmpty() && Files.exists(usageScorePath(language));
+    }
+
+    /** Whether the language's Scrabble words are restricted to those with a known inflection: at "easy", unless the
+     * lexicon is selected by usage score (mirrors scrabble_easy_filter). */
+    public static boolean scrabbleEasyFilter(String language, String difficulty) {
+        return "easy".equals(difficulty) && !usageLexiconActive(language, difficulty);
+    }
+
+    /** Usage score of a word the usage-score file does not rate (mirrors USAGE_SCORE_UNKNOWN). */
+    public static final int USAGE_SCORE_UNKNOWN = -1;
+
+    public static Path usageScorePath(String language) {
+        return falcon.Env.ROOT.resolve("data").resolve("usage_score_" + language + "_scrabble.tsv");
+    }
+
+    /** {MOT: usage score} of {@code language}'s usage-score file plus its file for the freq words absent from the
+     * Scrabble wordlist (when it exists), null when the language has no usage-score file. Transient: only read while
+     * a lexicon is being indexed (mirrors load_usage_scores). */
+    public static Map<String, Integer> loadUsageScores(String language) throws IOException {
+        if (language == null || language.isEmpty()) return null;
+        Path path = usageScorePath(language);
+        if (!Files.exists(path)) return null;
+        Map<String, Integer> result = new HashMap<>();
+        readUsageFile(path, result);
+        Path outPath = usageScoreOutPath(language);
+        if (Files.exists(outPath)) readUsageFile(outPath, result);
+        return result;
+    }
+
+    /** The usage scores of the freq-wordlist words absent from the Scrabble wordlist (mirrors
+     * usage_score_out_path). */
+    public static Path usageScoreOutPath(String language) {
+        return falcon.Env.ROOT.resolve("data").resolve("usage_score_" + language + "_scrabble_out.tsv");
+    }
+
+    private static void readUsageFile(Path path, Map<String, Integer> result) throws IOException {
+        try (BufferedReader r = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
+            String line;
+            while ((line = r.readLine()) != null) {
+                String[] parts = line.split("\t", -1);
+                if (parts.length >= 3 && !parts[2].isEmpty() && parts[2].chars().allMatch(Character::isDigit)) {
+                    result.put(parts[0].toUpperCase(Locale.ROOT), Integer.parseInt(parts[2]));
+                }
+            }
+        }
     }
 
     /** {MOT: FREQUENCE} for every word of the freq wordlist at {@code path} (the highest value when a MOT has
@@ -481,11 +560,12 @@ public final class Words {
     }
 
     /** The Scrabble word set of a grid: one set, or one per direction on a bilingual grid (mirrors
-     * scrabble_words_for_languages). */
-    public static PW scrabbleWordsForLanguages(String language, String bilingualLanguage, boolean easy) {
-        Set<String> across = loadScrabbleWords(language, easy);
+     * scrabble_words_for_languages), each language's set restricted like its lexicon's (scrabbleEasyFilter). */
+    public static PW scrabbleWordsForLanguages(String language, String bilingualLanguage, String difficulty) {
+        Set<String> across = loadScrabbleWords(language, scrabbleEasyFilter(language, difficulty));
         if (bilingualLanguage != null && !bilingualLanguage.isEmpty() && !bilingualLanguage.equals(language)) {
-            return new PW(across, loadScrabbleWords(bilingualLanguage, easy), true);
+            return new PW(across, loadScrabbleWords(bilingualLanguage, scrabbleEasyFilter(bilingualLanguage, difficulty)),
+                    true);
         }
         return PW.single(across);
     }

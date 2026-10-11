@@ -252,7 +252,8 @@ plusieurs signaux) :
 
 - **Fenêtre de tirage des mots** : la règle unique par laquelle le moteur
   décide dans quel ordre essayer les mots candidats d'un emplacement.
-  Les candidats sont mélangés, puis classés par leur
+  Les candidats sont mélangés, réduits par le filtre d'usage (voir
+  « Score d'usage » ci-dessous), puis classés par leur
   correspondance au consensus statistique des lettres sur les cases encore
   libres (`_candidate_score`), puis tirés un à un dans la fenêtre des
   **`CANDIDATE_SCORE_WINDOW` (200) meilleurs candidats restants** — qui
@@ -270,6 +271,22 @@ plusieurs signaux) :
   (`backend/crossword_gen.py`, `Filler.ordered_candidates`,
   `Filler._backtrack`, `_general_dictionary_pick`,
   `_find_priority_word_placement`.)
+
+- **Score d'usage** : note de 0 à 5 donnée par le LLM local à chaque mot du
+  dictionnaire Scrabble d'une langue (`data/usage_score_<langue>_scrabble.tsv`,
+  `data_builder/build_usage_scores.py`) : 5 vocabulaire courant, 4 soutenu
+  ou littéraire, 3 forme rare d'un mot courant (subjonctif imparfait, passé
+  simple aux 1re et 2e personnes…), 2 terme technique, 1 mot vieilli,
+  0 mot pratiquement inconnu. Un mot hors de ce fichier n'a pas de score
+  connu. Il sert à trois endroits : le **filtre d'usage** du tirage des mots
+  (seuls les `USAGE_KEEP_PERCENT` (60) % des candidats au score connu les
+  mieux notés sont essayés, les candidats sans score étant toujours gardés),
+  le **score de contenu** (score d'usage − 3 ajouté à la longueur de chaque
+  mot, un mot sans score comptant 0 ; un mot Défi reçoit son score s'il en
+  a un, même hors du lexique), et la ligne « usage : X/5 » du panneau
+  Dictionnaire. Une langue sans fichier n'a ni filtre ni correction.
+  (`backend/crossword_gen.py`, `Filler._usage_filtered`,
+  `_usage_correction`, `load_usage_scores` ; `backend/usage_scores.py`.)
 
 - **Dictionnaire Scrabble** : `data/wordlist_<langue>_scrabble.tsv`, la
   liste Scrabble officielle (ou de référence) de chaque langue

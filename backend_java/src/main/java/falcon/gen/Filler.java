@@ -83,6 +83,9 @@ public final class Filler {
     public static final boolean ZONE_CLEAN_ENABLED = true;
     public static final int PALIER_ATTEMPT_DONE_CHECK_INTERVAL = 500;
     public static final int CANDIDATE_SCORE_WINDOW = 200;
+    /** Share of a slot's candidates with a known usage score kept before the statistical ranking, the highest
+     * usage scores first (mirrors USAGE_KEEP_PERCENT). */
+    public static final int USAGE_KEEP_PERCENT = 60;
     // Of that window, re-sorted by frequency in the freq wordlist, the most frequent words the draw is made among.
     // A node receiving a backjump (a failure passed up through a node that
     // skipped its other candidates) may make only one more descent.
@@ -916,6 +919,24 @@ public final class Filler {
         return head;
     }
 
+    /** {@code cands} (shuffled) minus the candidates outside the USAGE_KEEP_PERCENT % with the highest usage score,
+     * among those whose score is known, order kept; {@code cands} itself when slot i's language has no usage-score
+     * file or no candidate has a known score (mirrors Filler._usage_filtered). */
+    List<String> usageFiltered(int i, List<String> cands) {
+        LenIndex li = index.get(slots.get(i));
+        if (li == null || li.usage == null) return cands;
+        List<String> known = new ArrayList<>();
+        for (String w : cands) if (li.usageOf(w) != Words.USAGE_SCORE_UNKNOWN) known.add(w);
+        if (known.isEmpty()) return cands;
+        int keep = (known.size() * USAGE_KEEP_PERCENT + 99) / 100;
+        if (keep >= known.size()) return cands;
+        known.sort((a, b) -> Integer.compare(li.usageOf(b), li.usageOf(a)));
+        Set<String> dropped = new HashSet<>(known.subList(keep, known.size()));
+        List<String> out = new ArrayList<>(cands.size() - dropped.size());
+        for (String w : cands) if (!dropped.contains(w)) out.add(w);
+        return out;
+    }
+
     /** Shuffle, rank by statistical score divided by (1 + times the word was already placed on this
      * slot), then take each pick from a sliding window of the CANDIDATE_SCORE_WINDOW best remaining words: the
      * window is re-sorted by frequency in the freq wordlist (highest first, 0 for a word absent from it, ties
@@ -923,6 +944,7 @@ public final class Filler {
     public List<String> orderedCandidates(int i, Collection<String> candsIn) {
         List<String> cands = new ArrayList<>(candsIn);
         rng.shuffle(cands);
+        cands = usageFiltered(i, cands);
         if (letterScores.isEmpty()) return cands;
         int n = cands.size();
         double[] scores = new double[n];

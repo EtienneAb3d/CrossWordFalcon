@@ -127,24 +127,73 @@ public final class Generator {
     private static final Map<String, Loaded> LOADED = new ConcurrentHashMap<>();
     private static final int LOADED_CACHE_MAX = 8;
 
-    public static Loaded load(String path, Number mw, boolean easy) throws IOException {
-        String key = path + "|" + mw + "|" + easy;
+    /** The Loaded lexicon of {@code path} for {@code difficulty}, the Scrabble wordlist merged in, cached per
+     * (path, cut, difficulty) key (mirrors load_lexicon): with no explicit {@code maxWords} and a language with a
+     * usage-score file, the whole freq and Scrabble wordlists cut to the words rated at least
+     * USAGE_DIFFICULTY_MIN_SCORE (Scrabble words only at "easy", likely proper nouns excluded, with no quota word set; at "medium" also the
+     * freq words absent from the Scrabble wordlist rated in its out file and kept by the DIFFICULTY_PRESETS cut; no cut
+     * at "hard");
+     * otherwise cut to {@code maxWords}, else to DIFFICULTY_PRESETS, "easy" filters on at "easy". */
+    public static Loaded load(String path, Number maxWords, String difficulty) throws IOException {
+        String lang = Words.langFromPath(path);
+        boolean byUsage = maxWords == null && Words.usageLexiconActive(lang, difficulty);
+        Number mw = byUsage ? null : (maxWords != null ? maxWords : Words.DIFFICULTY_PRESETS.get(difficulty));
+        boolean easy = !byUsage && "easy".equals(difficulty);
+        String key = path + "|" + mw + "|" + easy + "|" + (byUsage ? difficulty : null);
         Loaded l = LOADED.get(key);
         if (l != null) return l;
         synchronized (LOADED) {
             l = LOADED.get(key);
             if (l != null) return l;
             Words.Lexicon lex = Words.loadWordlist(path, mw, easy, easy);
-            String lang = Words.langFromPath(path);
             // The Scrabble wordlist joins the lexicon (merge_scrabble_lexicon).
             Set<String> scrabble = Words.mergeScrabbleLexicon(lang, lex, Grids.NOISE_FREQUENCY_THRESHOLD, easy);
             String[] sources = {path, lang == null ? null : Words.scrabbleWordlistPath(lang).toString()};
-            Map<Integer, LenIndex> idx = Words.buildIndex(lex.byLength(), lex.frequencies(),
-                    Words.loadDictionaryFrequencies(path), lex.refs(), sources);
-            // A Scrabble word is valid at every difficulty: never counted against either quota.
+            Map<String, Integer> usageScores = Words.loadUsageScores(lang);
+            Map<Integer, List<String>> byLength = lex.byLength();
             Set<String> proper = new HashSet<>(lex.properNouns());
-            proper.removeAll(scrabble);
             Set<String> nonGloss = new HashSet<>(lex.nonGloss());
+            if (byUsage) {
+                Integer minScore = Words.USAGE_DIFFICULTY_MIN_SCORE.get(difficulty);
+                Set<String> excluded = new HashSet<>();
+                if ("easy".equals(difficulty)) {
+                    excluded.addAll(proper);
+                    excluded.removeAll(scrabble);
+                }
+                // "medium": a freq word absent from the Scrabble wordlist stays under the freq wordlist's own
+                // "medium" cut.
+                Set<String> freqCut = null;
+                if ("medium".equals(difficulty)) {
+                    freqCut = new HashSet<>();
+                    for (List<String> ws : Words.loadWordlist(path, Words.DIFFICULTY_PRESETS.get("medium"), false, false)
+                            .byLength().values()) freqCut.addAll(ws);
+                }
+                Set<String> cut = freqCut;
+                if (minScore != null || !excluded.isEmpty()) {
+                    Map<Integer, List<String>> kept = new LinkedHashMap<>();
+                    byLength.forEach((len, words) -> {
+                        List<String> k = new ArrayList<>();
+                        for (String w : words) {
+                            if (excluded.contains(w)) continue;
+                            if (minScore != null
+                                    && (usageScores.getOrDefault(w, Words.USAGE_SCORE_UNKNOWN) < minScore
+                                    || !(scrabble.contains(w) || (cut != null && cut.contains(w))))) continue;
+                            k.add(w);
+                        }
+                        if (!k.isEmpty()) kept.put(len, k);
+                    });
+                    byLength = kept;
+                }
+                // The "medium" and "hard" quotas still apply.
+                if ("easy".equals(difficulty)) {
+                    proper.clear();
+                    nonGloss.clear();
+                }
+            }
+            Map<Integer, LenIndex> idx = Words.buildIndex(byLength, lex.frequencies(),
+                    Words.loadDictionaryFrequencies(path), lex.refs(), sources, usageScores);
+            // A Scrabble word is valid at every difficulty: never counted against either quota.
+            proper.removeAll(scrabble);
             nonGloss.removeAll(scrabble);
             l = new Loaded(idx, Collections.unmodifiableSet(proper), Collections.unmodifiableSet(nonGloss), scrabble);
             if (LOADED.size() >= LOADED_CACHE_MAX) LOADED.clear();
@@ -639,14 +688,13 @@ public final class Generator {
         }
         java.util.function.Supplier<char[][]> freshSeedGrid = () -> startGrid == null ? null : Grids.copy(startGrid);
         Rng rng = Rng.of(p.seed);
-        Number mw = p.maxWords != null ? p.maxWords : Words.DIFFICULTY_PRESETS.get(p.difficulty);
-        boolean easy = "easy".equals(p.difficulty);
-        Loaded across = load(p.wordlistPath, mw, easy);
+        // Selected by usage score when the language has a usage-score file, else cut by DIFFICULTY_PRESETS (load).
+        Loaded across = load(p.wordlistPath, p.maxWords, p.difficulty);
         String language = Words.langFromPath(p.wordlistPath);
         if (language == null) language = "fr";
         boolean bilingual = p.bilingualWordlistPath != null && !p.bilingualWordlistPath.isEmpty()
                 && !p.bilingualWordlistPath.equals(p.wordlistPath);
-        Loaded down = bilingual ? load(p.bilingualWordlistPath, mw, easy) : across;
+        Loaded down = bilingual ? load(p.bilingualWordlistPath, p.maxWords, p.difficulty) : across;
         String bilingualLanguage = bilingual ? Objects.requireNonNullElse(Words.langFromPath(p.bilingualWordlistPath),
                 p.bilingualWordlistPath) : null;
         Integer maxProperNouns = Words.MAX_PROPER_NOUNS.getOrDefault(p.difficulty, Words.MAX_PROPER_NOUNS.get("hard"));
@@ -690,6 +738,13 @@ public final class Generator {
             nonGloss.removeAll(down.scrabbleWords());
         }
         Set<String> challenge = new LinkedHashSet<>(Words.challengeSet(p.challengeWords));
+        // Their usage scores, even outside the lexicon (Fill.usageCorrection), per direction's language.
+        Fill.ChallengeUsage challengeUsage = null;
+        if (!challenge.isEmpty()) {
+            Map<String, Integer> usageAcross = Words.usageScoresOf(language, challenge);
+            challengeUsage = new Fill.ChallengeUsage(usageAcross,
+                    bilingual ? Words.usageScoresOf(bilingualLanguage, challenge) : usageAcross);
+        }
         Map<String, Object> lengthCounts = new LinkedHashMap<>();
         new TreeMap<>(across.index()).forEach((len, li) -> lengthCounts.put(String.valueOf(len), li.size()));
         int wordCount = across.wordCount();
@@ -1258,7 +1313,7 @@ public final class Generator {
                         List<int[]> os = (List<int[]>) opt[1];
                         String[] oa = (String[]) opt[2];
                         int ob = Grids.countBlack(og);
-                        long osc = Fill.contentScore(oa, os, priority, challenge);
+                        long osc = Fill.contentScore(oa, os, priority, challenge, index, challengeUsage);
                         minimizedSuccesses.add(new Object[]{ob, osc, accumulatedSuccesses.get(k).diag().processNumber, opt});
                         if (bestScored == null || ob < (int) bestScored[0] || (ob == (int) bestScored[0] && -osc < (long) bestScored[1])) {
                             bestScored = new Object[]{ob, -osc, accumulatedSuccesses.get(k), opt};
@@ -1273,7 +1328,8 @@ public final class Generator {
                 }
                 final Map<Outcome, Double> cleanedScores = new HashMap<>();
                 for (Outcome o : failedUnique) {
-                    cleanedScores.put(o, Cleanup.cleanedPlayableScore(o.grid(), o.diag(), rows, cols, index, rng, priority, challenge));
+                    cleanedScores.put(o, Cleanup.cleanedPlayableScore(o.grid(), o.diag(), rows, cols, index, rng, priority, challenge,
+                            challengeUsage));
                 }
                 List<Outcome> failedPairs = new ArrayList<>(failedUnique);
                 failedPairs.sort((a, b) -> Double.compare(cleanedScores.get(b), cleanedScores.get(a)));
@@ -1302,7 +1358,7 @@ public final class Generator {
                     char[][] g = (char[][]) displayUnique.get(idx)[0];
                     Diag d = (Diag) displayUnique.get(idx)[1];
                     Object key = d.attemptId != null ? (Object) d.attemptId : (Object) ("__no_attempt_id__" + idx);
-                    double score = Cleanup.playableScore(g, d, rows, cols, priority, challenge);
+                    double score = Cleanup.playableScore(g, d, rows, cols, priority, challenge, index, challengeUsage);
                     Object[] cur = bestByAttempt.get(key);
                     if (cur == null || score > (double) cur[0]) bestByAttempt.put(key, new Object[]{score, g, d});
                 }
@@ -1412,7 +1468,7 @@ public final class Generator {
                     }
                     List<Cleanup.ContinueCandidate> cc = new ArrayList<>();
                     for (Future<Cleanup.ContinueCandidate> f : cleaning) cc.add(await(f));
-                    cc = sortContinue(cc, priority, challenge);
+                    cc = sortContinue(cc, priority, challenge, index, challengeUsage);
                     int keep = Cleanup.seedPoolKeep(cc.size(), PA, FULL_RESET_ATTEMPT_COUNT);
                     carrySeedPoolContinue = new ArrayList<>();
                     List<Integer> rawLineage = new ArrayList<>();
@@ -1484,7 +1540,7 @@ public final class Generator {
                     carryCleanupStreaks = cleanupStreaks;
                     justCleaned = true;
                     if (!kept.isEmpty()) {
-                        List<Object[]> sorted = sortCleaned(kept, priority, challenge);
+                        List<Object[]> sorted = sortCleaned(kept, priority, challenge, index, challengeUsage);
                         int nextReset = Math.min(PA, FULL_RESET_ATTEMPT_COUNT + discarded);
                         int keep = Cleanup.seedPoolKeep(sorted.size(), PA, nextReset);
                         carrySeedPool = new ArrayList<>();
@@ -1677,7 +1733,8 @@ public final class Generator {
         return new Object[]{seed[0], seed[1], slots, cd.processNumber};
     }
 
-    static List<Object[]> sortCleaned(List<Object[]> cands, PW pw, Set<String> challenge) {
+    static List<Object[]> sortCleaned(List<Object[]> cands, PW pw, Set<String> challenge, DualIndex index,
+                                      Fill.ChallengeUsage cu) {
         List<Object[]> out = new ArrayList<>(cands);
         Map<Object[], long[]> keys = new HashMap<>();
         for (Object[] sc : out) {
@@ -1685,7 +1742,7 @@ public final class Generator {
             List<int[]> s = (List<int[]>) sc[2];
             @SuppressWarnings("unchecked")
             Map<Integer, Character> conf = (Map<Integer, Character>) sc[1];
-            keys.put(sc, new long[]{Cleanup.wordsInPlaceScore(s, conf, pw, challenge), Grids.countBlack((char[][]) sc[0])});
+            keys.put(sc, new long[]{Cleanup.wordsInPlaceScore(s, conf, pw, challenge, index, cu), Grids.countBlack((char[][]) sc[0])});
         }
         out.sort((a, b) -> {
             long[] ka = keys.get(a), kb = keys.get(b);
@@ -1695,11 +1752,12 @@ public final class Generator {
         return out;
     }
 
-    static List<Cleanup.ContinueCandidate> sortContinue(List<Cleanup.ContinueCandidate> cands, PW pw, Set<String> challenge) {
+    static List<Cleanup.ContinueCandidate> sortContinue(List<Cleanup.ContinueCandidate> cands, PW pw, Set<String> challenge,
+                                                        DualIndex index, Fill.ChallengeUsage cu) {
         List<Cleanup.ContinueCandidate> out = new ArrayList<>(cands);
         Map<Cleanup.ContinueCandidate, long[]> keys = new HashMap<>();
         for (Cleanup.ContinueCandidate c : out) {
-            keys.put(c, new long[]{Cleanup.wordsInPlaceScore(c.slots(), c.confirmed(), pw, challenge),
+            keys.put(c, new long[]{Cleanup.wordsInPlaceScore(c.slots(), c.confirmed(), pw, challenge, index, cu),
                     Grids.countBlack(c.seedGrid())});
         }
         out.sort((a, b) -> {

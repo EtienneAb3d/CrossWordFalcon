@@ -207,6 +207,7 @@ public final class DictionaryLookup {
             m.put("form", row.form);
             m.put("canonical", row.canonical);
             m.put("definitions", row.definitions);
+            m.put("usage", UsageScores.usageScore(norm(row.form.replace("ß", "ss")).toUpperCase(Locale.ROOT), language));
             outRows.add(m);
         }
         result.put("rows", outRows);

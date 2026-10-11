@@ -17,6 +17,7 @@ import unicodedata
 from pathlib import Path
 
 from . import inflection_lookup
+from .usage_scores import usage_score
 from .gloss_lookup import _load as _load_gloss_index
 
 WORDLIST_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -142,10 +143,12 @@ def _definitions_for(canonicals, gloss_index, show_lemma):
 def search(query, language):
     """Returns {"query", "language", "rows": [...], "truncated": bool}.
 
-    A row is {"form", "canonical", "definitions": [{"pos","gloss","lemma"}]}
-    — `form` is the natural (accented) spelling, `canonical` is its
-    canonical form(s) joined by "; ", `definitions` may be empty for an
-    inflected form whose lemma simply has no Wiktionary coverage.
+    A row is {"form", "canonical", "usage", "definitions": [{"pos","gloss",
+    "lemma"}]} — `form` is the natural (accented) spelling, `canonical` is
+    its canonical form(s) joined by "; ", `usage` the form's usage score
+    (`backend/usage_scores.py`, `None` when unknown), `definitions` may be
+    empty for an inflected form whose lemma simply has no Wiktionary
+    coverage.
 
     Match is accent- and case-insensitive on the bare form, the accented
     form, and the canonical form; the result is the whole root family
@@ -252,5 +255,6 @@ def search(query, language):
         result["truncated"] = True
     for row in rows:
         row.pop("_canon_norm", None)
+        row["usage"] = usage_score(_norm(row["form"].replace("ß", "ss")).upper(), language)
     result["rows"] = rows
     return result

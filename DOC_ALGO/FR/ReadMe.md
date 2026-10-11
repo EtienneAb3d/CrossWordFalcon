@@ -133,6 +133,25 @@ Le lexique réunit deux dictionnaires par langue :
   qu'il ne soit jamais pris pour du bruit (`merge_scrabble_lexicon`, appelé
   par `load_lexicon`).
 
+Quand la langue a un fichier de scores d'usage
+(`data/usage_score_<langue>_scrabble.tsv`), la difficulté choisit les mots
+**par leur score d'usage seul**, et toutes les règles ci-dessus sont
+ignorées (coupe `DIFFICULTY_PRESETS`, définition exigée et filtre des
+formes fléchies au niveau facile, quotas `MAX_PROPER_NOUNS` et
+`MAX_NON_GLOSS_WORDS` au niveau facile — ceux des niveaux moyen et
+difficile, 2 et 5 noms propres et mots sans définition au plus, restent
+appliqués) : les deux dictionnaires sont versés en entier, puis le niveau
+facile ne garde que les mots Scrabble notés 3 et plus, noms propres
+probables exclus ; le niveau moyen garde les mots Scrabble notés 2 et plus
+et les mots du corpus absents du Scrabble notés 2 et plus
+(`data/usage_score_<langue>_scrabble_out.tsv`) qui restent dans sa coupe
+de fréquence (`DIFFICULTY_PRESETS`, 80 %) ; le niveau difficile garde tous
+les mots, Scrabble et corpus (`USAGE_DIFFICULTY_MIN_SCORE`,
+`usage_lexicon_active`, `load_lexicon`). Un mot sans score est donc retiré
+aux niveaux facile et moyen. Le jeu de mots Scrabble d'une telle langue
+n'est alors jamais restreint aux formes fléchies connues
+(`scrabble_easy_filter`, `scrabble_words_for_languages`).
+
 La construction de la grille n'utilise que la forme nue des mots (26
 lettres sans accent). Le lexique chargé ne garde donc en mémoire, par
 longueur, que les mots, leur index (position, lettre), leurs deux
@@ -331,6 +350,13 @@ lettres 40.
   longueur plafonnée (`THEME_WORD_SCORE_BONUS`).
 - Un mot de la liste **Mots Défi** reçoit **+4** à la place
   (`CHALLENGE_WORD_SCORE_BONUS`) ; les deux bonus ne se cumulent jamais.
+- Dans une langue dotée d'un fichier de scores d'usage, chaque mot reçoit
+  en plus son **score d'usage − 3** (de +2 pour un mot courant à −3 pour
+  un mot pratiquement inconnu ; un mot sans score compte 0, donc −3 —
+  `_usage_correction`). Un mot Défi est noté comme les autres : par son
+  score s'il en a un, même s'il est absent du lexique de la grille
+  (`usage_scores_of`). La longueur corrigée est ramenée à 0 si elle
+  devient négative, avant d'être élevée au carré.
 
 Elle départage les réussites (après le tri par cases noires), la meilleure
 tentative *échouée* d'un palier, et le meilleur candidat nettoyé
@@ -1219,7 +1245,16 @@ d'attention du remplissage incrémental (voir « Les emplacements
 
 ### Choisir quel mot essayer
 
-Les candidats de l'emplacement sont **mélangés**, puis classés par leur
+Les candidats de l'emplacement sont **mélangés**, puis **filtrés par
+leur score d'usage** (`Filler._usage_filtered`) : parmi les candidats dont
+le score d'usage est connu (`data/usage_score_<langue>_scrabble.tsv`, voir
+`DOC_DIC/FR/ReadMe.md` ; `index[longueur]["usage"]`), seuls les
+`USAGE_KEEP_PERCENT` (60) % aux scores les plus élevés sont gardés
+(arrondi au supérieur, au moins un), les ex æquo à la coupure étant
+départagés par le mélange ; un candidat sans score connu est toujours
+gardé, et une langue sans fichier de scores n'est pas filtrée. Un mot
+écarté par ce filtre n'est pas essayé par ce nœud, mais il reste dans le
+domaine de l'emplacement. Les candidats restants sont ensuite classés par leur
 accord avec le consensus statistique des cases non déterminées
 (`_candidate_score`, racine de la somme des carrés des scores par case),
 score **divisé par (1 + le nombre de fois où ce mot a déjà été posé sur

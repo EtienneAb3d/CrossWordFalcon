@@ -2166,6 +2166,13 @@ button:disabled {
   font-weight: 600;
 }
 
+/* "usage : X/5" line under the form and its canonical form. */
+.dictionary-usage {
+  font-weight: 400;
+  color: #777;
+  font-size: 0.85em;
+}
+
 .dictionary-def-line + .dictionary-def-line {
   margin-top: 0.15rem;
 }

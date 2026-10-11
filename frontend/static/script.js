@@ -5254,6 +5254,12 @@ function buildDictionaryResultNode(query, data) {
     const c1 = document.createElement("td");
     c1.className = "dictionary-form-cell";
     c1.textContent = `${row.form} (${row.canonical})`;
+    if (row.usage !== null && row.usage !== undefined) {
+      const usage = document.createElement("div");
+      usage.className = "dictionary-usage";
+      usage.textContent = t.dictionaryUsage.replace("{score}", row.usage);
+      c1.appendChild(usage);
+    }
     tr.appendChild(c1);
 
     const c2 = document.createElement("td");

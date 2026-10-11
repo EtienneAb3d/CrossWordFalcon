@@ -773,7 +773,7 @@ public final class App {
     static PW scrabbleWords(String language, String bilingualLanguage, String difficulty) {
         return Words.scrabbleWordsForLanguages(language,
                 bilingualLanguage != null && !bilingualLanguage.equals(language) ? bilingualLanguage : null,
-                "easy".equals(difficulty));
+                difficulty);
     }
 
     /** Adds "scrabble_cells" to every preview example (mirrors _annotate_scrabble_cells): the cells of each fully
@@ -1251,12 +1251,10 @@ public final class App {
     // ================================================================== interactive jobs
 
     static Object[] loadInteractiveIndex(String language, String difficulty, String bilingual) throws IOException {
-        Number mw = Words.DIFFICULTY_PRESETS.get(difficulty);
-        boolean easy = "easy".equals(difficulty);
-        Generator.Loaded a = Generator.load(WORDLISTS.get(language).toString(), mw, easy);
+        Generator.Loaded a = Generator.load(WORDLISTS.get(language).toString(), null, difficulty);
         boolean isBilingual = bilingual != null && !bilingual.isEmpty() && !bilingual.equals(language);
         if (!isBilingual) return new Object[]{new DualIndex(a.index(), a.index()), (Predicate<String>) a::contains};
-        Generator.Loaded d = Generator.load(WORDLISTS.get(bilingual).toString(), mw, easy);
+        Generator.Loaded d = Generator.load(WORDLISTS.get(bilingual).toString(), null, difficulty);
         Predicate<String> known = w -> a.contains(w) || d.contains(w);
         return new Object[]{new DualIndex(a.index(), d.index()), known};
     }

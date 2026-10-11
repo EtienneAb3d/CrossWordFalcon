@@ -26,16 +26,25 @@ public final class LenIndex {
     public final int[] refs;
     /** The (freq wordlist, Scrabble wordlist) paths {@link #refs} point into, or null (index[length]["sources"]). */
     public final String[] sources;
+    /** Each word's usage score (0-5), {@link Words#USAGE_SCORE_UNKNOWN} for a word the usage-score file does not
+     * rate; null when the language has none (index[length]["usage"]). */
+    public final byte[] usage;
     /** Lazily computed per-position letter counts over the whole list. */
     private volatile int[][] blankCounts;
 
     public LenIndex(int length, List<String> words, Map<String, Double> frequencies,
                     Map<String, Double> dictionaryFrequencies) {
-        this(length, words, frequencies, dictionaryFrequencies, null, null);
+        this(length, words, frequencies, dictionaryFrequencies, null, null, null);
     }
 
     public LenIndex(int length, List<String> words, Map<String, Double> frequencies,
                     Map<String, Double> dictionaryFrequencies, Map<String, Integer> wordRefs, String[] sources) {
+        this(length, words, frequencies, dictionaryFrequencies, wordRefs, sources, null);
+    }
+
+    public LenIndex(int length, List<String> words, Map<String, Double> frequencies,
+                    Map<String, Double> dictionaryFrequencies, Map<String, Integer> wordRefs, String[] sources,
+                    Map<String, Integer> usageScores) {
         this.length = length;
         this.words = words.toArray(new String[0]);
         this.wordList = Collections.unmodifiableList(Arrays.asList(this.words));
@@ -44,6 +53,7 @@ public final class LenIndex {
         this.dictFreq = new float[this.words.length];
         this.refs = wordRefs == null ? null : new int[this.words.length];
         this.sources = sources;
+        this.usage = usageScores == null ? null : new byte[this.words.length];
         for (int i = 0; i < this.words.length; i++) {
             String w = this.words[i];
             ids.put(w, i);
@@ -52,6 +62,7 @@ public final class LenIndex {
             Double d = dictionaryFrequencies == null ? null : dictionaryFrequencies.get(w);
             dictFreq[i] = d == null ? 0.0f : (float) (double) d;
             if (refs != null) refs[i] = wordRefs.get(w);
+            if (usage != null) usage[i] = (byte) (int) usageScores.getOrDefault(w, Words.USAGE_SCORE_UNKNOWN);
             for (int p = 0; p < length; p++) Alpha.id(w.charAt(p));
         }
         int alpha = Alpha.size();
@@ -87,6 +98,13 @@ public final class LenIndex {
     public double dictFreqOf(String w) {
         Integer id = ids.get(w);
         return id == null ? 0.0 : dictFreq[id];
+    }
+
+    /** {@code w}'s usage score, {@link Words#USAGE_SCORE_UNKNOWN} when unrated, absent or {@link #usage} is null. */
+    public int usageOf(String w) {
+        if (usage == null) return Words.USAGE_SCORE_UNKNOWN;
+        Integer id = ids.get(w);
+        return id == null ? Words.USAGE_SCORE_UNKNOWN : usage[id];
     }
 
     public double freqOf(String w) {

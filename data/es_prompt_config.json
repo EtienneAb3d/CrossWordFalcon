@@ -59,5 +59,45 @@
     "CABALLOS (masculino plural) : Lo que se encuentra, en gran número, en una yeguada",
     "TRABAJOS (masculino plural) : Lo que ocupa a varios obreros en una obra",
     "OLERÁ (él/ella, futuro) : Lo que hará con el aire del campo al bajar del coche"
-  ]
+  ],
+  "usage_score": {
+    "language_name": "Spanish",
+    "examples": {
+      "5": [
+        "casa",
+        "comemos",
+        "ya",
+        "rápido",
+        "reparar"
+      ],
+      "4": [
+        "atrabiliario",
+        "abstruso",
+        "crepuscular",
+        "otrora"
+      ],
+      "3": [
+        "cantare",
+        "fuéremos",
+        "hubiere"
+      ],
+      "2": [
+        "mitocondria",
+        "isobara",
+        "glucósido"
+      ],
+      "1": [
+        "escarcela",
+        "maguer",
+        "otrosí",
+        "yantar"
+      ],
+      "0": [
+        "abáculo"
+      ]
+    },
+    "rare_forms": "a future subjunctive (cantare, hubiere) or another archaic verb form",
+    "common_forms": "present, preterite, imperfect, future, conditional, present and imperfect subjunctive, participle, gerund, infinitive, plural, feminine",
+    "unaccented_example": "\"cancion\" = \"canción\""
+  }
 }

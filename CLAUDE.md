@@ -128,7 +128,8 @@ wordlist,
 lemmas of its unaccented spellings (`build_unaccented_lemmas.py`),
 Scrabble download (`download_scrabble_dictionaries.py <lang>`) + Scrabble
 dictionary, gloss dictionary, corpus archive,
-inflection table, Qdrant tenant (steps 1/8-8/8, the last one non-fatal);
+inflection table, usage scores (`build_usage_scores.py`, see "Usage
+scores" below), Qdrant tenant (steps 1/9-9/9, the last two non-fatal);
 `data_builder/build_all.sh` runs the six in turn (logs/build_<lang>.log).
 Only Python's standard library, `httpx`, `curl`, `xz` and the `hunspell`
 CLI are needed (`Install.sh` installs `hunspell`/`xz`).
@@ -175,6 +176,41 @@ dictionary._target_lemmas` adds its CANONIQUE column, `build_inflections.
 _wordlist_forms` every spelling of its ACCENTUE column. Every raw Wiktionary/Kaikki dump is
 kept in `data/wiktionary/` (gitignored) for reuse.
 
+**Usage scores** (`data/usage_score_<lang>_scrabble.tsv`, committed once
+built, `MOT<TAB>ACCENTUE<TAB>SCORE`, the main spelling as ACCENTUE, sorted
+by decreasing SCORE then MOT): `data_builder/build_usage_scores.py`
+(`build_<lang>.sh` step 8/9, non-fatal, needs the local LLM) rates every
+Scrabble-wordlist word 0-5 — 5 everyday, 4 formal/literary, 3 rare form of
+an everyday word, 2 technical, 1 dated, 0 practically unknown. One LLM
+request per word (`--concurrency` 5 in flight; words sharing a prompt
+influence each other's ratings): the fixed system prompt first, for the
+server's prefix cache (`SYSTEM_PROMPT`, English rules, per-language
+examples and rare/common-form definitions from `data/<lang>_prompt_config.
+json`'s `usage_score` object), then the word's entry (`_entry_text`):
+inflected form and other spellings, grammatical analysis
+(`inflection_lookup.describe_form`), lemmas (CANONIQUE, 3 at most),
+occurrences of the form and of each lemma in `data/reference_corpus/
+<lang>_sentences.txt` (counted once at start-up with
+`build_wordlist_freq._WORD_RE`; the FREQUENCE column is not used, being
+mostly the lemma's), definitions (`gloss_lookup`, 3 per lemma). The answer
+is the score alone (`max_tokens` 1, thinking off, temperature 0), retried
+up to `MAX_ATTEMPTS` (3) times. Resumable through `<file>.partial`
+(gitignored, `/data/*.tsv.partial`), replaced by the sorted file once every
+word is rated; `--words` prints a few ratings without writing,
+`--show-prompt` prints the first prompt. `--source out` rates instead
+every freq-wordlist word absent from the Scrabble wordlist (its
+highest-FREQUENCE row: ACCENTUE as the form, CANONIQUE as the lemmas,
+`_load_out_entries`) into `data/usage_score_<lang>_scrabble_out.tsv`, same
+format, same prompt; `build_<lang>.sh` step 8/9 runs both. The lookup tables are loaded once
+before the worker threads start (their lazy caches are unlocked). The
+grid engine reads both files when a lexicon is loaded (`load_usage_scores`
+merges the out file in, only when the Scrabble one exists; Java `Words.
+loadUsageScores`) (see "What a lexicon
+keeps in memory", the candidate order and "Content scoring"); the
+Dictionnaire panel through `backend/usage_scores.py` (Java `UsageScores`,
+both files). A language without
+the file is neither filtered nor corrected.
+
 **Unaccented spellings**: a freq-wordlist row whose ACCENTUE holds no
 accent (ASCII only) may have unknown accents, so `data_builder/
 build_unaccented_lemmas.py` (`build_<lang>.sh` step 3/8, right after
@@ -202,10 +238,32 @@ _normalize`; Java `Py.lookupKey`, `Clues.normalize`.
 Scrabble words whose ACCENTUE is a form or a lemma of the inflection table
 join the lexicon (`load_inflection_keys` -> `_scrabble_entries`,
 `load_scrabble_words(language, easy)`, `merge_scrabble_lexicon(...,
-easy)`, `scrabble_words_for_languages(..., easy)`; `backend/app.py`'s
+easy)`; `scrabble_words_for_languages(..., difficulty)` applies
+`scrabble_easy_filter` per language; `backend/app.py`'s
 `_scrabble_words(..., difficulty)`/`_load_interactive_index`; Java
-`Words.loadInflectionKeys`/`scrabbleEntries`). The inflection keys are
-read only while that selection is made, never cached.
+`Words.loadInflectionKeys`/`scrabbleEntries`/`scrabbleEasyFilter`). The
+inflection keys are read only while that selection is made, never cached.
+Not applied to a language whose lexicon is selected by usage score (below).
+
+**Lexicon selected by usage score**: when the language has
+`data/usage_score_<lang>_scrabble.tsv` and no explicit `max_words` is
+given (`usage_lexicon_active`, Java `Words.usageLexiconActive`),
+`load_lexicon(path, max_words, difficulty)` (Java `Generator.load(path,
+maxWords, difficulty)`) loads the whole freq and Scrabble wordlists, then
+keeps the words rated at least `USAGE_DIFFICULTY_MIN_SCORE[difficulty]`
+(easy 3, medium 2, hard `None` = every word; an unrated word is dropped
+at easy/medium):
+- easy: Scrabble words only, likely proper nouns (`load_wordlist`'s
+  capitalized-ACCENTUE set minus the Scrabble words) excluded, no quota
+  set (`proper_nouns`/`non_gloss` empty) — the `DIFFICULTY_PRESETS` cut,
+  the gloss requirement and the inflection filter above are ignored;
+- medium: the Scrabble words, plus the freq words absent from the Scrabble
+  wordlist rated in `data/usage_score_<lang>_scrabble_out.tsv` and kept by
+  the freq wordlist's own `DIFFICULTY_PRESETS["medium"]` cut (a second
+  `load_wordlist(path, 0.80)`); the `MAX_PROPER_NOUNS`/`MAX_NON_GLOSS_WORDS`
+  medium quotas (2) apply;
+- hard: every word, the hard quotas (5) apply.
+A language without the file keeps the rules above.
 
 `backend/gloss_lookup.py`/`backend/example_sentences.py`/`backend/
 inflection_lookup.py` each lazily build and cache their own index once
@@ -222,13 +280,17 @@ length (`build_index`, Java `LenIndex`): the words, their ids, the
 `dict_freq` — `array('f')` behind `_WordColumn`, Java `float[]`) and one
 row reference per word (`refs`: the byte offset of the word's row in its
 wordlist shifted left one bit, low bit 1 for the Scrabble wordlist —
-`_freq_row_ref`/`_scrabble_row_ref`; `array('I')`, Java `int[]`), plus
+`_freq_row_ref`/`_scrabble_row_ref`; `array('I')`, Java `int[]`), the
+usage-score column (`usage`, `array('b')` behind `_WordColumn`, Java
+`LenIndex.usage` `byte[]`; `USAGE_SCORE_UNKNOWN` -1 for an unrated word,
+`None`/null when the language has no usage-score file — `load_usage_
+scores`, Java `Words.loadUsageScores`, transient), plus
 the two wordlist paths (`sources`). The accented form and the lemmas are
 read back from that row only when a grid's words get their `accented`/
 `canonical` fields (`word_forms`, Java `Words.wordForms`). Besides the
 index, a `LoadedLexicon` holds the proper-noun and no-gloss quota sets
 and the Scrabble word set; it is built once per (wordlist path, cut,
-easy) key and process, shared read-only by every generation and every
+easy, usage-selected difficulty) key and process, shared read-only by every generation and every
 Interactive session, the cache being emptied once it holds
 `LEXICON_CACHE_MAX` (8) entries. Everything else read while loading
 (rows, the freq wordlist's own frequencies, the Scrabble rows) is
@@ -410,7 +472,8 @@ PRESETS = {easy: 0.66, medium: 0.80, hard: 1.0}` are *fractions* of the
 gloss-filtered lexicon kept (not fixed counts, so the effect is
 comparable across languages with very different vocabulary sizes); "easy"
 additionally requires a findable Wiktionary gloss and excludes likely
-proper nouns; "medium" allows up to `MAX_PROPER_NOUNS["medium"]=2` and
+proper nouns (unless the lexicon is selected by usage score, see "Lexicon
+selected by usage score"); "medium" allows up to `MAX_PROPER_NOUNS["medium"]=2` and
 "hard" up to 5 (never restricted otherwise). `MAX_NON_GLOSS_WORDS` mirrors
 this same per-difficulty cap for words absent from the gloss dictionary.
 Both are enforced by `try_fill` as a final safety net, after an otherwise
@@ -640,7 +703,13 @@ own rng drawn from the parent's in candidate order:
    within the chosen slot is `Filler.ordered_candidates` — this engine's
    single candidate-ordering rule, shared verbatim with Interactive
    mode's own "Suivant" (see "Priority-tier search in Interactive mode"
-   below): shuffled, then ranked by `_candidate_score`
+   below): shuffled, then filtered by usage score (`Filler._usage_
+   filtered`, Java `usageFiltered`: among the candidates whose usage
+   score is known, `index[length]["usage"]`, only the `USAGE_KEEP_PERCENT`
+   (60) % with the highest score are kept — `ceil`, at least one, ties at
+   the cut settled by the shuffle, order kept; a candidate with no known
+   score is always kept; no filtering for a language without a
+   usage-score file), then ranked by `_candidate_score`
    (square root of the sum of squared per-cell statistical letter scores
    from `sample_letter_biases`, which draws `LETTER_BIAS_SAMPLE_SIZE=10`
    words per slot) divided by (1 + the number of times the search already
@@ -1395,7 +1464,15 @@ word belonging to its own slot's theme glossary (`priority_words`) gets
 SCORE_BONUS=4` instead (the two never stack — a challenge word that's
 also a theme word is scored with the challenge bonus only, once) — so an
 attempt that manages to place one is favored over an otherwise-equal one
-that doesn't. The *same* formula backs every one of
+that doesn't. With `index` given (every `generate_grid` caller passes it),
+each word's usage score minus 3 is added too (`_usage_correction`, Java
+`Fill.usageCorrection`: 0 when the slot's language has no usage-score
+file; the score comes from the lexicon's `usage` column, else, for a "Mots
+Défi" word outside the lexicon, from `challenge_usage` — `usage_scores_of`
+per direction's language, built once by `generate_grid`, a `DualSet` of
+dicts, Java `Words.usageScoresOf`/`Fill.ChallengeUsage`; an unrated word
+counts as 0, i.e. -3),
+the scored length floored at 0 before squaring. The *same* formula backs every one of
 these selections, successful or failed alike: `opt_score` (tie-break
 among every genuinely successful attempt found so far across the whole
 search — see "Minimum successful attempts, with worker reassignment"
@@ -2639,6 +2716,10 @@ point ids make it resumable/idempotent.
 
 ### Small lookup helpers
 
+`usage_scores.py` (`usage_score(mot, language)`: a word's usage score for
+the Dictionnaire panel, the language's file read once and cached; `None`
+when unknown — `dictionary_lookup.search` adds it to every row as `usage`,
+from the row's form folded to its grid form; Java `UsageScores`),
 `text_lines.py` (byte-offset line access: `iter_lines_with_offsets`,
 `read_line_at`), `gloss_lookup.py` (Wiktionary gloss by canonical form, plus `has_gloss_
 dictionary`/`has_any_gloss` used by the difficulty filters), `inflection_
@@ -2679,7 +2760,7 @@ its own lock); the theme-glossary/Qdrant part of `app.py` → `Themes.java`;
 `puz_export.py` → `PuzExport.java`;
 `embedder.py`/`qdrant_store.py`/`system_info.py`/`gloss_lookup.py`/
 `inflection_lookup.py`/`example_sentences.py`/`dictionary_lookup.py`/
-`secret_store.py`/`text_lines.py` → one class each; `crossword_gen.py` → package
+`secret_store.py`/`text_lines.py`/`usage_scores.py` → one class each; `crossword_gen.py` → package
 `falcon.gen` (`Words`: lexicon loading, `DualIndex`/`PW`, slot candidates;
 `Grids`: structure, slots, black-cell patterns; `Filler`: the CSP solver;
 `Fill`: seeding, `tryFill`, minimization, overlays, content score;
@@ -2836,7 +2917,8 @@ state, unlike the backend).
   character (space, comma, semicolon, colon, period, `!`, `?`), via one
   shared `attachPunctuationAutoAdd()` helper; the library panel
   (paginated/filterable listing, load-into-player, reopen-as-editable);
-  the dictionary panel (root-family search, "Définir", "Thématique"/
+  the dictionary panel (root-family search, each form's "usage : X/5"
+  line under it when its usage score is known, "Définir", "Thématique"/
   "Synonymes", bilingual-aware); the chatbot UI (Markdown rendering,
   incremental streaming, live UI-context snapshot sent as grounding,
   open/collapsed state persisted in its own `cwf-chatbot-state` cookie —

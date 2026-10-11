@@ -1666,6 +1666,72 @@ the current defaults/behavior to know before touching this code.
   exemption nor content-score bonus. Its words are shown dark cyan in
   every preview (`scrabble_cells`, computed from each example's grid in
   `backend/app.py`) and for a "Suivant" word with `placed.from_scrabble`.
+- **Usage scores.** `data_builder/build_usage_scores.py` (`build_<lang>.sh`
+  step 8/9, non-fatal) has the local LLM rate every Scrabble-wordlist word
+  0-5 — the user's scale: 5 everyday, 4 literary/formal, 3 rare form of an
+  everyday word (subjunctive, pluperfect…), 2 technical, 1 no longer used,
+  0 practically unknown — into `data/usage_score_<lang>_scrabble.tsv`,
+  sorted by decreasing score then alphabetically. The user's rules: the
+  prompt gives the inflected form, its grammatical variant, its canonical
+  form, its definitions and its frequency; one word per prompt (words
+  sharing a prompt influence each other's ratings), 5 calls in parallel;
+  the fixed part of the prompt first, for the KV cache; the answer is the
+  single digit. Choices made with it, to revisit with the user: the
+  frequency is the form's and each lemma's occurrence count in the capped
+  reference corpus, not the FREQUENCE column (mostly the lemma's, so it
+  cannot tell a rare form from a common one), presented as a hint that
+  never lowers a rating on its own; the prompt rules are English with
+  per-language examples in `data/<lang>_prompt_config.json` (only French
+  validated so far). The run is long (~26 h for French at ~4.5 words/s on
+  the shared local LLM, which also slows the public site's LLM calls
+  while it runs) and resumable (`.partial`).
+- **Usage scores steer word choice and grid scoring** — the user's rules:
+  before the statistical ranking, keep only the 60 % (`USAGE_KEEP_PERCENT`)
+  of a slot's candidates with the highest usage score, when it is known
+  (`Filler._usage_filtered`; an unrated word is always kept); in the
+  content score, add "usage score − 3" to each word's length, floored at
+  0 before squaring (`_usage_correction`); an unrated word counts 0 (−3),
+  but only in a language that has a usage-score file — otherwise no
+  correction. Choices made with it, to revisit with the user: the 60 % is
+  rounded up (at least one word), ties at the cut settled by the shuffle;
+  the filter sits in `Filler.ordered_candidates`, so Interactive
+  "Suivant" applies it too. The user's rule: a "Mots Défi" word is scored
+  like any other word — its usage score when the file rates it, even when
+  it is absent from the grid's lexicon (`usage_scores_of`), else −3. The Dictionnaire panel shows "usage : X/5" under
+  each rated form.
+- **With usage scores, the difficulty selects the lexicon by usage score
+  alone** (`USAGE_DIFFICULTY_MIN_SCORE`, `load_lexicon`, Java
+  `Generator.load`) — the user's rule: "si un score d'usage existe pour la
+  langue, prendre tous les mots en fonction de leur score d'usage (et
+  ignorer les autres règles) : Facile : mots avec un score 3 et plus, noms
+  propres exclus. Moyen : mots avec un score 2 et plus. Difficile : tous
+  les mots Scrabble + FREQ." Choices made with the rule, to revisit with
+  the user: "the other rules" are the `DIFFICULTY_PRESETS` cut, the easy
+  gloss requirement, the easy inflection filter of the Scrabble words and
+  the Easy/Medium `MAX_PROPER_NOUNS`/`MAX_NON_GLOSS_WORDS` quotas — the
+  user's rule keeps the Hard quotas (5 proper nouns, 5 words with no
+  definition); the in-search 60 %
+  usage filter and the content-score correction stay; an unrated word
+  (every freq-only word) is dropped at Easy/Medium; "proper nouns" is the
+  existing signal (capitalized freq ACCENTUE, Scrabble words exempt), so
+  it removes nothing, Easy keeping only Scrabble words; an explicit CLI
+  `--max-words` keeps the old cut.
+- **Medium also takes the rated freq words absent from the Scrabble list**
+  — the user's rule: "identifier les mots FREQ qui ne sont pas dans
+  Scrabble, et calculer leur score d'usage à mettre dans
+  data/usage_score_fr_scrabble_out.tsv. Utiliser ces mots dans le mode
+  moyen, en rétablissant les règles qui peuvent les concerner (celles
+  appliquées quand il n'y a pas de score d'usage)."
+  (`build_usage_scores.py --source out`, `load_lexicon`). Choices made
+  with the rule, to revisit with the user: the out file is named
+  `usage_score_<lang>_scrabble_out.tsv` for every language and
+  `build_<lang>.sh` step 8 produces it; such a word joins at a score of 2
+  and more and only within the freq wordlist's medium cut
+  (`DIFFICULTY_PRESETS`, 80 %); the medium quotas (2 proper nouns, 2 words
+  with no definition) apply again; its score also feeds the in-search 60 %
+  filter, the content-score correction, the "Mots Défi" scoring and the
+  Dictionnaire panel, like a Scrabble word's (so at Hard these words are
+  no longer "unrated"); Easy and Hard are otherwise unchanged.
 - **An unaccented spelling is looked up accents aside.** The Scrabble
   lists carry no accents, so a wordlist row (freq or Scrabble) whose
   ACCENTUE holds no accent has unknown accents: the user's rule is that
@@ -1696,7 +1762,8 @@ the current defaults/behavior to know before touching this code.
   row when definitions are prepared (`word_forms`, Java
   `Words.wordForms`); the gloss dictionary likewise keeps only each
   entry's offset (`gloss_lookup._GlossIndex`, Java `GlossLookup.
-  GlossIndex`). A lexicon is loaded once per (wordlist, cut, easy) and
+  GlossIndex`). A lexicon is loaded once per (wordlist, cut, easy, usage-selected
+  difficulty) and
   process (`load_lexicon`, Java `Generator.load`) and shared by every
   generation and Interactive session. Any new per-word data needed only
   for definitions must be read from the row, not cached with the index.

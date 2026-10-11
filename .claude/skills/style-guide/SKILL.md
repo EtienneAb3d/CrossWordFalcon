@@ -4667,3 +4667,11 @@ end through the real running API (interactive start/step/save,
   letters (×0.5), clue numbers (×0.275) and header numbers (×0.375) scale
   with it so their proportions stay those of the 2rem grid. The
   attempt-preview mini-grids keep their own fixed 1.1rem cells.
+
+- **Dictionnaire usage line** (`.dictionary-usage`), at the user's
+  explicit request: under "forme (canonique)" in the first column of the
+  Dictionnaire results table, a second line "usage : X/5"
+  (`dictionaryUsage`, all 6 languages) when the form's usage score is
+  known — 0.85em, normal weight (the cell itself is bold), `#777` like the
+  table's own header text. No new token. **Visually confirmed** with
+  Playwright/Chromium: "aberrant (aberrant; aberrer)" over "usage : 5/5".

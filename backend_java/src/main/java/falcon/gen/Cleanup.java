@@ -1002,22 +1002,24 @@ public final class Cleanup {
 
     // ================================================================== scores / pools
 
-    public static double playableScore(char[][] grid, Diag diag, int rows, int cols, PW pw, Set<String> challenge) {
+    public static double playableScore(char[][] grid, Diag diag, int rows, int cols, PW pw, Set<String> challenge,
+                                       DualIndex index, Fill.ChallengeUsage cu) {
         List<int[]> slots = Grids.extractSlots(grid, rows, cols);
-        if (slots.size() != diag.assignment.length) return Math.sqrt(Fill.contentScore(diag.assignment, null, pw, challenge));
-        return Math.sqrt(Fill.contentScore(diag.assignment, slots, pw, challenge));
+        if (slots.size() != diag.assignment.length) return Math.sqrt(Fill.contentScore(diag.assignment, null, pw, challenge, index, cu));
+        return Math.sqrt(Fill.contentScore(diag.assignment, slots, pw, challenge, index, cu));
     }
 
     public static double cleanedPlayableScore(char[][] grid, Diag diag, int rows, int cols, DualIndex index, Rng rng,
-                                              PW pw, Set<String> challenge) {
+                                              PW pw, Set<String> challenge, Fill.ChallengeUsage cu) {
         List<int[]> slots = Grids.extractSlots(grid, rows, cols);
-        if (slots.size() != diag.assignment.length) return playableScore(grid, diag, rows, cols, pw, challenge);
+        if (slots.size() != diag.assignment.length) return playableScore(grid, diag, rows, cols, pw, challenge, index, cu);
         Object[] cleaned = cleanBlockedSlots(slots, diag.assignment, diag.impossibleSlots, diagLockedLetters(diag, grid),
                 false, index, rng, null, null, null, null, null, null, false);
-        return Math.sqrt(Fill.contentScore((String[]) cleaned[0], slots, pw, challenge));
+        return Math.sqrt(Fill.contentScore((String[]) cleaned[0], slots, pw, challenge, index, cu));
     }
 
-    public static long wordsInPlaceScore(List<int[]> slots, Map<Integer, Character> confirmed, PW pw, Set<String> challenge) {
+    public static long wordsInPlaceScore(List<int[]> slots, Map<Integer, Character> confirmed, PW pw, Set<String> challenge,
+                                         DualIndex index, Fill.ChallengeUsage cu) {
         List<String> words = new ArrayList<>();
         List<int[]> cellsList = new ArrayList<>();
         for (int[] cells : slots) {
@@ -1027,7 +1029,7 @@ public final class Cleanup {
                 cellsList.add(cells);
             }
         }
-        return Fill.contentScore(words.toArray(new String[0]), cellsList, pw, challenge);
+        return Fill.contentScore(words.toArray(new String[0]), cellsList, pw, challenge, index, cu);
     }
 
     // ================================================================== optimize before cleanup

@@ -39,3 +39,5 @@ TODO.md
 DONE.md
 # Secret words of the Claude_Code_Test* test pseudos (project-best-practices rule 24)
 /test_secret.tsv
+# In-progress output of data_builder/build_usage_scores.py (resumable)
+/data/*.tsv.partial

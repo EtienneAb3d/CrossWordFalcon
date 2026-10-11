@@ -345,7 +345,34 @@ public final class Fill {
 
     // ================================================================== content scores
 
+    /** {@code word}'s usage score minus 3 (contentScore's length bonus or malus): 0 when {@code index} or
+     * {@code cells} is null or the language of {@code cells} has no usage-score file; an unrated word counts as 0
+     * (mirrors _usage_correction). */
+    static int usageCorrection(DualIndex index, String word, int[] cells, ChallengeUsage challengeUsage) {
+        if (index == null || cells == null) return 0;
+        LenIndex li = index.forCells(cells).get(word.length());
+        if (li == null || li.usage == null) return 0;
+        int score = li.usageOf(word);
+        if (score == Words.USAGE_SCORE_UNKNOWN && challengeUsage != null) {
+            score = challengeUsage.forCells(cells).getOrDefault(word, Words.USAGE_SCORE_UNKNOWN);
+        }
+        return (score == Words.USAGE_SCORE_UNKNOWN ? 0 : score) - 3;
+    }
+
+    /** The "Mots Défi" usage scores per direction's language, read even outside the lexicon (Python's DualSet of
+     * usage_scores_of dicts). */
+    public record ChallengeUsage(Map<String, Integer> across, Map<String, Integer> down) {
+        public Map<String, Integer> forCells(int[] cells) {
+            return Words.isAcross(cells) ? across : down;
+        }
+    }
+
     public static long contentScore(String[] words, List<int[]> cellsList, PW pw, Set<String> challenge) {
+        return contentScore(words, cellsList, pw, challenge, null, null);
+    }
+
+    public static long contentScore(String[] words, List<int[]> cellsList, PW pw, Set<String> challenge,
+                                    DualIndex index, ChallengeUsage challengeUsage) {
         long total = 0;
         for (int k = 0; k < words.length; k++) {
             String w = words[k];
@@ -355,7 +382,8 @@ public final class Fill {
             if (challenge != null && !challenge.isEmpty() && challenge.contains(w)) bonus = CHALLENGE_WORD_SCORE_BONUS;
             else if (pw != null && !pw.isEmpty() && cells != null && pw.forCells(cells).contains(w)) bonus = THEME_WORD_SCORE_BONUS;
             else bonus = 0;
-            long scored = Math.min(w.length(), CONTENT_SCORE_LENGTH_CAP) + bonus;
+            long scored = Math.max(0,
+                    Math.min(w.length(), CONTENT_SCORE_LENGTH_CAP) + bonus + usageCorrection(index, w, cells, challengeUsage));
             total += scored * scored;
         }
         return total;

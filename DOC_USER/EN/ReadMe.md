@@ -453,7 +453,11 @@ those was showing.
     sharing the same root as what you typed (accents and case ignored),
     each with its real definitions, in a table. An inflected form is
     traced back to its base form(s) even when the main word list lacks
-    it (e.g. "foehna" shows "foehner" and its definition)
+    it (e.g. "foehna" shows "foehner" and its definition). Under each
+    form and its base form, a small grey line "usage : X/5" gives how
+    common the word is, when it is known: 5 everyday, 4 formal or
+    literary, 3 rare form of an everyday word (such as an imperfect
+    subjunctive), 2 technical term, 1 dated, 0 practically unknown
     (`frontend/static/script.js`, `renderDictionaryResult`; `GET
     /api/dictionary`).
   - **Synonymes / Synonyms** (`#dictionary-synonyms-btn`,
@@ -1685,7 +1689,12 @@ Separately, and regardless of whether any seed was actually planted, this
 same sampling is used to rank the real dictionary candidates for a slot
 before trying them (at a cell crossed by two slots, a letter only counts
 if both the across and the down sample saw it, at the lower of its two
-counts): a candidate whose letters line up well with the
+counts). When the language has its usage scores (how common each word
+is, from everyday to practically unknown), only the 60% best-rated of a
+slot's rated candidates are tried at all — an unrated word always stays —
+and a grid's final score adds each word's usage score minus 3 to its
+length, so a grid of everyday words beats a grid of rare ones. Among the
+candidates left, one whose letters line up well with the
 statistical consensus on the slot's own still-undetermined cells is tried
 before one that doesn't (a word's rank being divided by one plus the number
 of times the attempt has already tried it on that slot, so a fresh word
@@ -1705,7 +1714,12 @@ official Scrabble word list — only after all of them come the remaining
 dictionary words. The difficulty trims the everyday, corpus-based
 vocabulary (keeping its most frequent words); the Scrabble list is kept
 whole at Medium and Hard, and limited to its words with a known
-inflection at Easy. Separately
+inflection at Easy. When the language has its usage scores, the
+difficulty instead picks words by usage score: Easy keeps the Scrabble
+words rated 3 and more (likely proper nouns left out), Medium the
+Scrabble words rated 2 and more plus the everyday-vocabulary words
+missing from the Scrabble list that are rated 2 and more and among the
+80 % most frequent, Hard every word of both lists. Separately
 again, before any of this even runs, any slot whose already-known letters
 leave exactly one real dictionary word possible has that word locked in
 directly, as a plain fact rather than a mere statistical guess. This

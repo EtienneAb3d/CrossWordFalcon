@@ -3571,12 +3571,12 @@ async def _scrabble_words(language, bilingual_language=None, difficulty=None):
     """The grid's Scrabble word set (crossword_gen.py's `scrabble_words_
     for_languages`: a frozenset, or a DualSet on a bilingual grid), read
     from `data/wordlist_<lang>_scrabble.tsv` once per language and
-    process — at "easy" `difficulty`, only its words with a known
-    inflection, exactly as generate_grid merges it."""
+    process — restricted at `difficulty` exactly as generate_grid merges
+    it (`scrabble_easy_filter`)."""
     return await asyncio.to_thread(
         scrabble_words_for_languages, language,
         bilingual_language if bilingual_language != language else None,
-        difficulty == "easy",
+        difficulty,
     )
 
 
@@ -4708,18 +4708,17 @@ async def _load_interactive_index(language, difficulty, bilingual_language=None)
     the one lexicon's own words for a monolingual session), used to
     filter a theme/saved `priority_words` list down to real entries."""
     # The process-wide lexicon cache (crossword_gen.py's `load_lexicon`):
-    # the Scrabble wordlist already merged in — whole, or only its words
-    # with a known inflection at "easy" difficulty — exactly as
-    # generate_grid uses it, and shared by every session and generation.
-    easy = difficulty == "easy"
+    # the words selected for `difficulty` and the Scrabble wordlist
+    # already merged in, exactly as generate_grid uses it, and shared by
+    # every session and generation.
     across = await asyncio.to_thread(
-        load_lexicon, str(WORDLISTS[language]), DIFFICULTY_PRESETS.get(difficulty), easy,
+        load_lexicon, str(WORDLISTS[language]), None, difficulty,
     )
     is_bilingual = bool(bilingual_language) and bilingual_language != language
     if not is_bilingual:
         return DualIndex(across.index, across.index), across
     down = await asyncio.to_thread(
-        load_lexicon, str(WORDLISTS[bilingual_language]), DIFFICULTY_PRESETS.get(difficulty), easy,
+        load_lexicon, str(WORDLISTS[bilingual_language]), None, difficulty,
     )
     return DualIndex(across.index, down.index), _KnownWords(across, down)
 
