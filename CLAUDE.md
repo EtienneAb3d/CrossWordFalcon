@@ -2839,14 +2839,14 @@ state, unlike the backend).
   eight named formats (6x6 0 % to 50x50 15 %), frontend-only; the
   button shows the preset matching the three fields (`syncGridPresetSelection`),
   presets above `REMOTE_MAX_DIMENSION` are disabled off localhost.
-  The form ends with the "Générer la grille :" row (`#generate-row`):
+  The form ends with the "Générer les mots croisés :" row (`#generate-row`):
   "Interactif" starts an Interactive session, "Automatique" an automatic
   generation, then the tool buttons (`#tool-buttons`: Bibliothèque …
   Qdrant (admin)) flush right, wrapping right-aligned; `#mode` lists only the budget modes (flash … gridzilla),
   also read by "Finir la grille"/"Finir la zone".
   While a playable grid is on screen (`displayFinalGrid`), the creation
   form is folded (`#generate-form.play-collapsed`, `setGenerateFormCollapsed`
-  in `script.js`) behind a `#create-grid-btn` "Créer une grille" button
+  in `script.js`) behind a `#create-grid-btn` "Créer des mots croisés" button
   (first item of `#generate-row`) that unfolds it; the tool buttons stay
   visible. `runGeneration`/
   `runInteractive`/`enterInteractiveMode` unfold it.
@@ -2919,7 +2919,7 @@ state, unlike the backend).
   (`#generate-challenge-panel`, right next to "Thématique") — a plain
   add/remove list with no grid yet to color/click-insert against, sent as
   `GenerateRequest.challenge_words` by either button of the form's
-  "Générer la grille :" row (`#generate-row`): "Automatique"
+  "Générer les mots croisés :" row (`#generate-row`): "Automatique"
   (`#generate-auto-btn`, the form's submit button, Enter in a field) for
   an ordinary automatic generation with the "Mode" selector's budget, or
   "Interactif" (`#generate-interactive-btn`, submitting the form with

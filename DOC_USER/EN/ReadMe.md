@@ -90,7 +90,7 @@ generation (`frontend/static/script.js`, the form's own `submit` handler,
 `runGeneration`).
 
 While a finished grid is being played, the form is folded away behind a
-single **Créer une grille / Create a grid** button (`#create-grid-btn`,
+single **Créer des mots croisés / Create a crossword** button (`#create-grid-btn`,
 `frontend/static/script.js`, `setGenerateFormCollapsed`): every field
 below, Thématique, Mots Défi and the generate buttons are hidden, while
 the tool buttons (Bibliothèque, Dictionnaire, Paraphraseur, Créations…)
@@ -263,7 +263,7 @@ full again whenever a new generation or an Interactive session starts.
   same as the Thématique field above — though, unlike Thématique, never
   shown anywhere in the Library, since they're meant to stay hidden
   answers to spots you chose yourself.
-- **Générer la grille : / Generate the grid:** (`#generate-row`), a row
+- **Générer les mots croisés : / Generate the crossword:** (`#generate-row`), a row
   of its own below the other buttons, with two buttons
   (`frontend/static/script.js`, the form's `submit` handler):
   **Interactif / Interactive** (`#generate-interactive-btn`) starts a
@@ -285,7 +285,7 @@ full again whenever a new generation or an Interactive session starts.
 
 ## Action buttons
 
-These sit above the "Générer la grille :" row (`#generate-form`) and only appear
+These sit above the "Générer les mots croisés :" row (`#generate-form`) and only appear
 when relevant.
 
 - **Voir les mots (spoiler) / Show the words (spoiler)** (`#attempt-preview-reveal-btn`, `frontend/static/
@@ -689,9 +689,9 @@ niveaux" until changed. Filtering happens on the server before
 pagination, so the page count reflects only the matching grids
 (`backend/app.py`, `_library_page`).
 
-A "seen" filter (`#library-seen-filter`) offers **Toutes les grilles /
-All grids** (the default), **Non vues / Not seen yet**, **Déjà vues /
-Already seen**, and **Mes grilles / My grids** — the last one keeps only
+A "seen" filter (`#library-seen-filter`) offers **Tous les mots croisés /
+All crosswords** (the default), **Non vues / Not seen yet**, **Déjà vues /
+Already seen**, and **Mes mots croisés / My crosswords** — the last one keeps only
 grids whose author pseudo matches the one currently set (nothing if no
 pseudo is set).
 
@@ -712,7 +712,7 @@ and the button, after a confirmation, archives every grid of the chosen
 version and every older one (grids with no version always count as
 older). Whenever the archive holds grids, the end of the list says that
 old grids made with an obsolete version of Falcon have been archived,
-with a **Voir les grilles archivées / See archived grids** button
+with a **Voir les mots croisés archivés / See archived crosswords** button
 (`#library-archived-note`). It lists the archived grids instead — same
 filters, pagination and actions — under a red warning that they come
 from an obsolete version of Falcon and are of lower quality, next to a
@@ -876,7 +876,7 @@ Once generation completes, the search-progress panel disappears and
   percentage, fill percentage, and unplayable-cell percentage.
 - **Generation times** (`#generation-times`) — how long grid generation,
   optimization, and clue writing each took. A grid published from
-  Interactive mode ("(Création)") adds "Grid created manually", or "Grid
+  Interactive mode ("(Création)") adds "Crossword created manually", or "Crossword
   edited manually" when it was reworked from another grid — which keeps
   that grid's own durations; a grid built entirely by hand has no
   durations to show, only the label (`frontend/static/script.js`,
@@ -998,8 +998,8 @@ one in), start from the home page:
    Difficulty, Taux noir, etc. — see "Generation form" above).
 2. Optionally, list some words in the **Thématique / Theme** field to steer
    the grid toward a topic (see "Generation form" above).
-3. Click **Interactif / Interactive** on the **Générer la grille : /
-   Generate the grid:** row.
+3. Click **Interactif / Interactive** on the **Générer les mots croisés : /
+   Generate the crossword:** row.
 
 The same guidance below is also available in-app, once the interactive
 session has started: click the **?** button (`#interactive-help-btn`) just
@@ -1078,8 +1078,8 @@ reference of every one of these buttons.
 
 ## Interactive authoring mode
 
-Clicking **Interactif / Interactive** on the form's **Générer la grille :
-/ Generate the grid:** row starts a hands-on authoring session
+Clicking **Interactif / Interactive** on the form's **Générer les mots croisés :
+/ Generate the crossword:** row starts a hands-on authoring session
 (`frontend/static/script.js`, `runInteractive`, `POST /api/interactive/
 start`) instead of an automatic generation. The form's Language, size,
 Difficulty, Taux noir and Thématique fields still apply — they shape the

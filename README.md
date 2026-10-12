@@ -312,7 +312,7 @@ On the page:
    word. A word you list this way never
    shows up in the Library's own grid listing, since it's meant to stay a
    hidden answer to a spot you chose yourself.
-3. On the **"Generate the grid:"** line, click **"Automatic"** (the
+3. On the **"Generate the crossword:"** line, click **"Automatic"** (the
    labels follow your chosen language; pressing Enter in a field does the
    same). A full grid with all its definitions can take anywhere from
    a few seconds to a couple of minutes, depending on its size — the
@@ -336,7 +336,7 @@ On the page:
 4. An empty grid appears on the right, with row and column numbers along
    its edges and a small number in the cells where each word starts,
    ready to be filled in. While you play, the generation settings are
-   tucked away behind a single **"Create a grid"** button (the Library,
+   tucked away behind a single **"Create a crossword"** button (the Library,
    Dictionary and other tool buttons stay visible) — click it to bring
    the full form back and start another grid. On the grid's left, zoom
    buttons (zoom in, zoom out, fit to window) make large grids readable:
@@ -407,7 +407,7 @@ the grid you started from is left untouched.
 
 ### Building a grid yourself (Interactive mode)
 
-On the **"Generate the grid:"** line, click **"Interactive"**. Instead of building the whole grid for you, the app
+On the **"Generate the crossword:"** line, click **"Interactive"**. Instead of building the whole grid for you, the app
 gives you a black-cell layout with a single word placed and lets you do
 the rest by hand. The **Dictionary** panel opens automatically as soon as
 you enter this mode, so you can look up words while you fill in the grid:

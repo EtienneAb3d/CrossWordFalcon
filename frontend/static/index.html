@@ -267,7 +267,7 @@
         <button type="button" id="stop-btn" data-i18n="stopBtn" hidden>Stop</button>
         <button type="button" id="continue-btn" data-i18n="continueBtn" hidden>Continuer</button>
       </div>
-      <!-- "Générer la grille :" row, the form's last line: one button
+      <!-- "Générer les mots croisés :" row, the form's last line: one button
            per way of building the grid, then the tool buttons.
            "Interactif" opens a word-by-word authoring session (POST
            /api/interactive/start), "Automatique" runs the automatic search with the "Mode" selector's budget
@@ -281,8 +281,8 @@
              see setGenerateFormCollapsed() in script.js) and this button
              alone stands for them; clicking it unfolds the full form. The
              tool buttons (Bibliothèque, Dictionnaire, …) stay visible. -->
-        <button type="button" id="create-grid-btn" data-i18n="createGridBtn" hidden>Créer une grille</button>
-        <span id="generate-row-label" data-i18n="generateRowLabel">Générer la grille :</span>
+        <button type="button" id="create-grid-btn" data-i18n="createGridBtn" hidden>Créer des mots croisés</button>
+        <span id="generate-row-label" data-i18n="generateRowLabel">Générer les mots croisés :</span>
         <button type="button" id="generate-interactive-btn" data-i18n="generateInteractiveBtn">Interactif</button>
         <button type="submit" id="generate-auto-btn" data-i18n="generateAutoBtn">Automatique</button>
         <!-- Tool buttons, on the same line as the generate buttons, flush
@@ -379,14 +379,14 @@
           <option value="pt">Português</option>
         </select>
         <select id="library-seen-filter" data-i18n-aria="librarySeenFilterLabel">
-          <option value="all" data-i18n="librarySeenFilterAll">Toutes les grilles</option>
+          <option value="all" data-i18n="librarySeenFilterAll">Tous les mots croisés</option>
           <option value="unseen" data-i18n="librarySeenFilterUnseen">Non vues</option>
           <option value="seen" data-i18n="librarySeenFilterSeen">Déjà vues</option>
-          <!-- "Mes grilles": filters on the current user's own pseudo
+          <!-- "Mes mots croisés": filters on the current user's own pseudo
                (script.js sends `pseudo` in the POST body,
                backend/app.py's _library_page filters on each grid's
                own `pseudo` field) — at the user's explicit request. -->
-          <option value="mine" data-i18n="librarySeenFilterMine">Mes grilles</option>
+          <option value="mine" data-i18n="librarySeenFilterMine">Mes mots croisés</option>
         </select>
         <!-- Difficulty filter, at the user's explicit request.
              "Tous les niveaux" by default; the easy/medium/hard labels
@@ -1153,7 +1153,7 @@
                 <button type="button" id="interactive-help-close-btn" class="nav-btn"
                         data-i18n-aria="interactiveHelpCloseBtn" data-i18n-title="interactiveHelpCloseBtn">✕</button>
                 <div id="interactive-help-body">
-                  <h3 data-i18n="interactiveHelpTitle">Aide — Édition de grille</h3>
+                  <h3 data-i18n="interactiveHelpTitle">Aide — Édition de mots croisés</h3>
                   <ul id="interactive-help-list"></ul>
                 </div>
               </div>

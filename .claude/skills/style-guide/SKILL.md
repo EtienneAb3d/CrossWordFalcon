@@ -11,7 +11,7 @@ must stay current on its own — update it whenever a change touches the
 interface's look, not just when asked.
 
 Note: product content shown by the UI (crossword words, clues, button
-labels like "Générer la grille") stays in French — that's the app's
+labels like "Générer les mots croisés") stays in French — that's the app's
 domain. This SKILL itself, like the rest of the project, is written in
 English (see `project-best-practices`).
 

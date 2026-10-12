@@ -354,7 +354,7 @@ project's engineering language.
   through a dedicated endpoint; bump the file per permanent rule 9 and the
   badge picks it up automatically.
 - **"Interactif" authoring mode** (the "Interactif" button of the
-  generation form's "Générer la grille :" row, next to "Automatique";
+  generation form's "Générer les mots croisés :" row, next to "Automatique";
   `POST /api/interactive/start` with `mode="interactive"`; the `#mode`
   selector lists only the budget modes, which "Finir la grille"/"Finir la
   zone" also use) is a hand-driven alternative to automatic generation:
@@ -692,7 +692,7 @@ project's engineering language.
   and differs from the primary, otherwise both aliases point at the same
   primary instance. Routing: the **primary** instance serves every
   automatic full-grid generation request — `Automation/Populate.py`,
-  the web UI's "Générer la grille" form, Interactive mode's "Finir la
+  the web UI's "Générer les mots croisés" form, Interactive mode's "Finir la
   grille" (all funnel into `_run_generate_job`), and "Recalculer"
   (`_run_recompute_job`); the **interactive** instance serves everything
   else that calls the LLM — Interactive/Edition mode's own theme-glossary

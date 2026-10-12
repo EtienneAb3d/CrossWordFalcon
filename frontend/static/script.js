@@ -114,7 +114,7 @@ const welcomePseudoInput = document.getElementById("welcome-pseudo");
 const welcomeSecretInput = document.getElementById("welcome-secret");
 const welcomeAcceptBtn = document.getElementById("welcome-accept-btn");
 const userPseudoBtn = document.getElementById("user-pseudo");
-// "Générer la grille :" row: "Interactif" and "Automatique" (the form's
+// "Générer les mots croisés :" row: "Interactif" and "Automatique" (the form's
 // submit button). Both are disabled together while a job runs.
 const generateInteractiveBtn = document.getElementById("generate-interactive-btn");
 const generateAutoBtn = document.getElementById("generate-auto-btn");
@@ -3141,7 +3141,7 @@ const SUPPORTED_UI_LANGS = ["fr", "en", "de", "es", "it", "pt"];
 // Pseudo (nickname) chosen in the welcome overlay (see below); "" when
 // none is set. Persisted in the cwf-prefs cookie, mirrored into every
 // grid this browser generates (POST /api/generate `pseudo`) and into the
-// "Mes grilles" library filter.
+// "Mes mots croisés" library filter.
 let userPseudo = "";
 // Secret word proving this browser's userPseudo actually belongs to this
 // user (see POST /api/pseudo/claim, backend/secret_store.py) — at the
@@ -3574,7 +3574,7 @@ welcomeForm.addEventListener("submit", async (event) => {
   // else — must never delay the panel closing.
   pingPresence();
   // The pseudo may have changed — if the Library is open (especially on
-  // the "Mes grilles" filter), refresh it.
+  // the "Mes mots croisés" filter), refresh it.
   if (!libraryPanel.hidden) {
     libraryCurrentPage = 1;
     renderLibraryList();
@@ -4744,7 +4744,7 @@ function displayFinalGrid(gridData) {
   // letters from here on, at the user's explicit request, so the
   // preview-only toggle has nothing left to control.
   attemptPreviewRevealBtn.hidden = true;
-  // Play mode: fold the creation form behind "Créer une grille".
+  // Play mode: fold the creation form behind "Créer des mots croisés".
   setGenerateFormCollapsed(true);
 }
 
@@ -4879,7 +4879,7 @@ libraryShowCurrentBtn.addEventListener("click", () => setLibraryShowArchived(fal
 // the player closed it themselves — and by runInteractive() itself
 // whenever a genuinely fresh "/api/interactive/start" session begins
 // (see its own comment), so an unrelated new session started from the
-// generation form's own "Générer la grille" button while already
+// generation form's own "Générer les mots croisés" button while already
 // editing a from-library grid never inherits that earlier session's
 // still-armed reopen intent.
 let libraryReopenOnInteractive = false;
@@ -4965,7 +4965,7 @@ async function renderLibraryList() {
           // does not follow the interface language (see
           // #library-difficulty-filter).
           difficulty_filter: libraryDifficultyFilter.value,
-          // "all"/"unseen"/"seen"/"mine" — "Mes grilles" ("mine") filters
+          // "all"/"unseen"/"seen"/"mine" — "Mes mots croisés" ("mine") filters
           // on the backend side on each grid's own `pseudo` field,
           // compared against the current pseudo sent below.
           seen_filter: librarySeenFilter.value,

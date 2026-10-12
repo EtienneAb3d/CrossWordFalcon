@@ -99,7 +99,7 @@ et tout le moteur décrit ici.
    le choix des mots, et/ou dans le champ **Mots Défi
    (personnalisation)** pour forcer des mots précis (jamais montrés dans
    la Bibliothèque).
-4. Cliquer sur **Automatique**, sur la ligne **Générer la grille :**.
+4. Cliquer sur **Automatique**, sur la ligne **Générer les mots croisés :**.
 
 Tout s'enchaîne ensuite sans autre action, et la grille terminée est
 enregistrée automatiquement dans la **Bibliothèque**.
