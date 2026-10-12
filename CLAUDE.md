@@ -2263,7 +2263,7 @@ on the live tiles (computing, and the "failed" whitelist) and on the
 `pattern_attempt_failed`/`pattern_found` key step (`last_examples`),
 never on cycle-start, post-cleanup or `minimizing` previews.
 `renderAttemptPreview()` shows each as a `.preview-stat-letter` span in
-a still-empty (".") cell, only while "Voir" (`showPreviewLetters`) is on,
+a still-empty (".") cell, only while "Voir les mots (spoiler)" (`showPreviewLetters`) is on,
 like the real letters.
 
 "Finir la grille"/"Finir la zone" (`POST /api/interactive/finish`) keeps
@@ -2839,10 +2839,16 @@ state, unlike the backend).
   eight named formats (6x6 0 % to 50x50 15 %), frontend-only; the
   button shows the preset matching the three fields (`syncGridPresetSelection`),
   presets above `REMOTE_MAX_DIMENSION` are disabled off localhost.
+  The form ends with the "Générer la grille :" row (`#generate-row`):
+  "Interactif" starts an Interactive session, "Automatique" an automatic
+  generation, then the tool buttons (`#tool-buttons`: Bibliothèque …
+  Qdrant (admin)) flush right, wrapping right-aligned; `#mode` lists only the budget modes (flash … gridzilla),
+  also read by "Finir la grille"/"Finir la zone".
   While a playable grid is on screen (`displayFinalGrid`), the creation
   form is folded (`#generate-form.play-collapsed`, `setGenerateFormCollapsed`
   in `script.js`) behind a `#create-grid-btn` "Créer une grille" button
-  that unfolds it; the tool buttons stay visible. `runGeneration`/
+  (first item of `#generate-row`) that unfolds it; the tool buttons stay
+  visible. `runGeneration`/
   `runInteractive`/`enterInteractiveMode` unfold it.
 - **`script.js`** — all client logic in one file. Major areas: grid
   rendering/keyboard input/solution-checking; the grid zoom, play and
@@ -2912,9 +2918,13 @@ state, unlike the backend).
   (personnalisation)" mini-form on the main generation form itself
   (`#generate-challenge-panel`, right next to "Thématique") — a plain
   add/remove list with no grid yet to color/click-insert against, sent as
-  `GenerateRequest.challenge_words` on "Générer la grille" — for either
-  mode the selector offers: an ordinary automatic generation, or (`mode
-  === "interactive"`) `POST /api/interactive/start`, which reuses the
+  `GenerateRequest.challenge_words` by either button of the form's
+  "Générer la grille :" row (`#generate-row`): "Automatique"
+  (`#generate-auto-btn`, the form's submit button, Enter in a field) for
+  an ordinary automatic generation with the "Mode" selector's budget, or
+  "Interactif" (`#generate-interactive-btn`, submitting the form with
+  `pendingInteractiveSubmit` set) for `POST /api/interactive/start`
+  (`mode: "interactive"` in its body), which reuses the
   same `GenerateRequest` field and round-trips it into the Interactive
   panel's own list on entry (`job["result"].challenge_words`), same as a
   resumed/from-library session already does. `POST /api/interactive/save`

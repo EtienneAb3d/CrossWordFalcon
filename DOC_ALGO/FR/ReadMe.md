@@ -99,7 +99,7 @@ et tout le moteur décrit ici.
    le choix des mots, et/ou dans le champ **Mots Défi
    (personnalisation)** pour forcer des mots précis (jamais montrés dans
    la Bibliothèque).
-4. Cliquer sur **Générer la grille**.
+4. Cliquer sur **Automatique**, sur la ligne **Générer la grille :**.
 
 Tout s'enchaîne ensuite sans autre action, et la grille terminée est
 enregistrée automatiquement dans la **Bibliothèque**.
@@ -165,7 +165,8 @@ sessions Interactif (`load_lexicon`, appelé par `generate_grid` et par
 
 ### Mode Interactif (construction manuelle assistée)
 
-Même démarrage, avec le **Mode** « Interactif ». Le guide ci-dessous
+Même démarrage, en cliquant sur **Interactif** (ligne **Générer la
+grille :**) au lieu d'**Automatique**. Le guide ci-dessous
 s'ouvre aussi dans l'interface par le bouton **?** à gauche de **Mots**.
 
 - Placer ses lettres dans la grille ; Espace ajoute ou supprime une case
@@ -186,7 +187,8 @@ s'ouvre aussi dans l'interface par le bouton **?** à gauche de **Mots**.
 - **Définitions** génère les définitions manquantes ; **Proposer une
   définition** et **Proposer un titre** font plusieurs propositions.
 - **Finir la grille** (ou **Finir la zone**, si une zone est sélectionnée)
-  confie les cases vides à la génération automatique, sans écrire de
+  confie les cases vides à la génération automatique (avec le **Mode** du
+  formulaire), sans écrire de
   définition (le bouton **Définitions** les écrit ensuite) ; on peut
   corriger et relancer autant de fois que nécessaire.
 - Sauvegarder, puis **Publier** la grille complète : elle rejoint la
@@ -2601,7 +2603,7 @@ premier (`backend/crossword_gen.py`, `generate_grid`,
   Présente sur les aperçus en direct d'une tentative et sur son étape clef
   (échec ou réussite de la tentative, avant optimisation), jamais sur les
   aperçus de début de cycle ni après le nettoyage. Comme les vraies
-  lettres, elle ne s'affiche que lorsque le bouton **Voir** est activé
+  lettres, elle ne s'affiche que lorsque le bouton **Voir les mots (spoiler)** est activé
   (`frontend/static/script.js`, `renderAttemptPreview`).
 - **Cadre gras en pointillés** (zone d'attention) : le contour de la
   fenêtre où la recherche peut encore poser un

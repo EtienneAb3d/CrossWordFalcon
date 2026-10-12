@@ -353,8 +353,11 @@ project's engineering language.
 - The version badge in the web UI reads `VERSION.txt` (project root)
   through a dedicated endpoint; bump the file per permanent rule 9 and the
   badge picks it up automatically.
-- **"Interactif" authoring mode** (`mode="interactive"` on the web UI's
-  `#mode` selector) is a hand-driven alternative to automatic generation:
+- **"Interactif" authoring mode** (the "Interactif" button of the
+  generation form's "Générer la grille :" row, next to "Automatique";
+  `POST /api/interactive/start` with `mode="interactive"`; the `#mode`
+  selector lists only the budget modes, which "Finir la grille"/"Finir la
+  zone" also use) is a hand-driven alternative to automatic generation:
   the player builds one grid word by word ("Suivant" places one word,
   "Précédent" undoes one step, the grid is fully editable including black
   cells), hand-writes every clue (with an LLM "Proposer" reusing

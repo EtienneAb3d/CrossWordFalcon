@@ -360,11 +360,10 @@ form {
   margin-bottom: 1rem;
 }
 
-/* The action buttons (blue) on their own row, below the option combos, at
-   the user's explicit request: `flex-basis: 100%` forces this container
-   onto its own next line of #generate-form's flex-wrap; #library-btn
-   keeps its own `margin-left: auto` (see further below) and pushes
-   "Bibliothèque" + "Dictionnaire" to the right of this row. */
+/* "Thématique", "Mots Défi" and the generation action buttons (Voir les
+   mots, Stop, Continuer) on their own row, below the option combos:
+   `flex-basis: 100%` forces this container onto its own next line of
+   #generate-form's flex-wrap. The tool buttons sit on #generate-row. */
 #form-actions {
   flex-basis: 100%;
   display: flex;
@@ -401,21 +400,51 @@ form {
 
 /* Play mode (a playable grid on screen): the creation form is folded
    behind a single "Créer une grille" button (#create-grid-btn) — every
-   option field, "Thématique", "Mots Défi" and "Générer la grille" are
-   hidden, only the tool buttons (Bibliothèque, Dictionnaire, …) stay.
-   With no input row left to line up with, the buttons drop their
-   input-alignment top margin. Toggled by script.js's
+   option field, "Thématique", "Mots Défi", "Voir les mots" and the
+   generate buttons are hidden; "Créer une grille" takes their place at
+   the start of #generate-row, the tool buttons (Bibliothèque,
+   Dictionnaire, …) stay on its right. Toggled by script.js's
    setGenerateFormCollapsed(). */
 #generate-form.play-collapsed > label,
 #generate-form.play-collapsed #preset-row,
 #generate-form.play-collapsed #theme-field,
 #generate-form.play-collapsed #generate-challenge-panel,
-#generate-form.play-collapsed #generate-btn {
+#generate-form.play-collapsed #form-actions,
+#generate-form.play-collapsed #generate-row-label,
+#generate-form.play-collapsed #generate-interactive-btn,
+#generate-form.play-collapsed #generate-auto-btn {
   display: none;
 }
 
-#generate-form.play-collapsed #form-actions > button {
-  margin-top: 0;
+/* "Générer la grille :" row, the form's last line (its own line of the
+   form's flex-wrap): an introductory label, the "Interactif" and
+   "Automatique" buttons (shared accent-blue button look), then
+   #tool-buttons (Bibliothèque, Dictionnaire, …) on the same line, flush
+   right. #tool-buttons takes every pixel the generate buttons leave
+   (flex-basis 0) and wraps its own buttons right-aligned, so a tool button
+   that runs out of room moves to a further line still flush right, under
+   the others, never back to the left edge. */
+#generate-row {
+  flex-basis: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+#generate-row-label {
+  font-weight: 600;
+  white-space: nowrap;
+  /* Vertically centered on the buttons' first line (36px buttons). */
+  line-height: 2.25rem;
+}
+
+#tool-buttons {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
 }
 
 /* "Préconfigurations" row: its own first line of #generate-form
@@ -659,16 +688,6 @@ button:disabled {
   background: var(--external-link);
   color: var(--accent-fg);
   border-color: var(--external-link);
-}
-
-/* "Bibliothèque" is the one button in #generate-form that's never hidden
-   (see index.html) — permanent, at the user's explicit request. Pushed to
-   the row's own far right (mirrors h1's own `margin-right: auto` trick in
-   #page-header) regardless of how many of the other, conditionally-shown
-   buttons happen to be visible alongside it at any given moment, rather
-   than just sitting wherever it falls in source order. */
-#library-btn {
-  margin-left: auto;
 }
 
 #status {

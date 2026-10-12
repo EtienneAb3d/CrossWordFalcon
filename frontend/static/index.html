@@ -174,7 +174,6 @@
       <label for="mode">
         <span data-i18n="modeLabel">Mode</span>
         <select id="mode" name="mode">
-          <option value="interactive" data-i18n="modeInteractive">Interactif</option>
           <option value="flash" data-i18n="modeFlash">Flash</option>
           <option value="turbo" data-i18n="modeTurbo">Turbo</option>
           <option value="fast" data-i18n="modeFast">Rapide</option>
@@ -208,7 +207,7 @@
            width (flex-basis: 100%) so it wraps onto the next line in
            the form's own flex-wrap. -->
       <div id="form-actions">
-        <!-- Optional theme (word list) — next to "Générer la grille", at
+        <!-- Optional theme (word list) — in the action-button row, at
              the user's explicit request. Non-empty -> a Qdrant
              pre-search of the 5000 closest words, prioritized by the
              solver (see backend/app.py's THEME_PRESEARCH_LIMIT and
@@ -263,36 +262,53 @@
           </div>
           <ul id="generate-challenge-list" hidden></ul>
         </div>
-        <button type="submit" id="generate-btn" data-i18n="generateBtn">Générer la grille</button>
         <button type="button" id="attempt-preview-reveal-btn" class="toggle-btn"
-                data-i18n="attemptPreviewRevealBtn">Voir</button>
+                data-i18n="attemptPreviewRevealBtn">Voir les mots (spoiler)</button>
         <button type="button" id="stop-btn" data-i18n="stopBtn" hidden>Stop</button>
         <button type="button" id="continue-btn" data-i18n="continueBtn" hidden>Continuer</button>
+      </div>
+      <!-- "Générer la grille :" row, the form's last line: one button
+           per way of building the grid, then the tool buttons.
+           "Interactif" opens a word-by-word authoring session (POST
+           /api/interactive/start), "Automatique" runs the automatic search with the "Mode" selector's budget
+           (POST /api/generate). "Automatique" is the form's submit button,
+           so pressing Enter in a field starts an automatic generation;
+           "Interactif" submits the form through script.js
+           (generateInteractiveBtn's click handler). -->
+      <div id="generate-row">
         <!-- Play mode only: while a playable grid is on screen the creation
              fields above are folded away (#generate-form.play-collapsed,
              see setGenerateFormCollapsed() in script.js) and this button
              alone stands for them; clicking it unfolds the full form. The
              tool buttons (Bibliothèque, Dictionnaire, …) stay visible. -->
         <button type="button" id="create-grid-btn" data-i18n="createGridBtn" hidden>Créer une grille</button>
-        <button type="button" id="library-btn" data-i18n="libraryBtn">Bibliothèque</button>
-        <button type="button" id="dictionary-btn" data-i18n="dictionaryBtn">Dictionnaire</button>
-        <!-- "Paraphraseur": asks the LLM for 5 rewordings of the typed
-             text (see backend/clues.py, LLMClueGenerator.generate_paraphrases) —
-             at the user's explicit request, placed right next to
-             "Dictionnaire". Same bilingual/50-50 panel as the Dictionary
-             (see refreshBilingualOption()/buildBilingualResultBlock() in
-             script.js). -->
-        <button type="button" id="paraphrase-btn" data-i18n="paraphraseBtn">Paraphraseur</button>
-        <!-- "Créations": lists the "Interactif" sessions in progress,
-             autosaved to GRID_WORK/ (see further below and backend/
-             grid_store.py) — at the user's explicit request. -->
-        <button type="button" id="interactive-work-btn" data-i18n="interactiveWorkBtn">Créations</button>
-        <!-- Qdrant admin panel: only rendered visible when the page is
-             opened on localhost (script.js,
-             showQdrantAdminOnLocalhost); the proxy (frontend/server.py,
-             _require_localhost) also refuses the /api/qdrant/admin/*
-             routes for any non-loopback client/Host. -->
-        <button type="button" id="qdrant-admin-btn" data-i18n="qdrantAdminBtn" hidden>Qdrant (admin)</button>
+        <span id="generate-row-label" data-i18n="generateRowLabel">Générer la grille :</span>
+        <button type="button" id="generate-interactive-btn" data-i18n="generateInteractiveBtn">Interactif</button>
+        <button type="submit" id="generate-auto-btn" data-i18n="generateAutoBtn">Automatique</button>
+        <!-- Tool buttons, on the same line as the generate buttons, flush
+             right; when they run out of room they wrap onto further lines
+             that stay right-aligned (#tool-buttons in style.css). -->
+        <div id="tool-buttons">
+          <button type="button" id="library-btn" data-i18n="libraryBtn">Bibliothèque</button>
+          <button type="button" id="dictionary-btn" data-i18n="dictionaryBtn">Dictionnaire</button>
+          <!-- "Paraphraseur": asks the LLM for 5 rewordings of the typed
+               text (see backend/clues.py, LLMClueGenerator.generate_paraphrases) —
+               at the user's explicit request, placed right next to
+               "Dictionnaire". Same bilingual/50-50 panel as the Dictionary
+               (see refreshBilingualOption()/buildBilingualResultBlock() in
+               script.js). -->
+          <button type="button" id="paraphrase-btn" data-i18n="paraphraseBtn">Paraphraseur</button>
+          <!-- "Créations": lists the "Interactif" sessions in progress,
+               autosaved to GRID_WORK/ (see further below and backend/
+               grid_store.py) — at the user's explicit request. -->
+          <button type="button" id="interactive-work-btn" data-i18n="interactiveWorkBtn">Créations</button>
+          <!-- Qdrant admin panel: only rendered visible when the page is
+               opened on localhost (script.js,
+               showQdrantAdminOnLocalhost); the proxy (frontend/server.py,
+               _require_localhost) also refuses the /api/qdrant/admin/*
+               routes for any non-loopback client/Host. -->
+          <button type="button" id="qdrant-admin-btn" data-i18n="qdrantAdminBtn" hidden>Qdrant (admin)</button>
+        </div>
       </div>
     </form>
 

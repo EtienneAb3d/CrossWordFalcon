@@ -285,7 +285,7 @@ On the page:
    square grid); every black cell the generator later adds, removes or
    moves follows the same symmetry (words in the way are removed first),
    so the finished grid stays symmetric.
-2. Two optional fields sit right above the **"Generate grid"** button,
+2. Two optional fields sit above the generate buttons,
    both built the same way: type a word and click **+** (or just type a
    space, comma, or other punctuation right after it) to add it to the
    list shown below — click **−** next to a word to remove it. A
@@ -312,8 +312,9 @@ On the page:
    word. A word you list this way never
    shows up in the Library's own grid listing, since it's meant to stay a
    hidden answer to a spot you chose yourself.
-3. Click **"Generate grid"** (the button's own label follows your chosen
-   language). A full grid with all its definitions can take anywhere from
+3. On the **"Generate the grid:"** line, click **"Automatic"** (the
+   labels follow your chosen language; pressing Enter in a field does the
+   same). A full grid with all its definitions can take anywhere from
    a few seconds to a couple of minutes, depending on its size — the
    status line above the grid keeps updating (building the grid, then
    writing each definition, including a running count of how many grid
@@ -329,7 +330,7 @@ On the page:
    margin counts how many grids the search has successfully completed so
    far. When several are finished, the search stops before writing any
    definition and shows them all, best score first (the one the generator
-   recommends framed in green; click **"Voir"** to see their letters):
+   recommends framed in green; click **"Show the words (spoiler)"** to see their letters):
    click the one you prefer, and its definitions are written. Without a
    choice within 10 minutes, the recommended grid is kept.
 4. An empty grid appears on the right, with row and column numbers along
@@ -406,8 +407,7 @@ the grid you started from is left untouched.
 
 ### Building a grid yourself (Interactive mode)
 
-Pick **"Interactive"** in the **Mode** menu (above "Flash") and click
-"Generate grid". Instead of building the whole grid for you, the app
+On the **"Generate the grid:"** line, click **"Interactive"**. Instead of building the whole grid for you, the app
 gives you a black-cell layout with a single word placed and lets you do
 the rest by hand. The **Dictionary** panel opens automatically as soon as
 you enter this mode, so you can look up words while you fill in the grid:

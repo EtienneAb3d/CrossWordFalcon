@@ -114,7 +114,14 @@ const welcomePseudoInput = document.getElementById("welcome-pseudo");
 const welcomeSecretInput = document.getElementById("welcome-secret");
 const welcomeAcceptBtn = document.getElementById("welcome-accept-btn");
 const userPseudoBtn = document.getElementById("user-pseudo");
-const button = document.getElementById("generate-btn");
+// "Générer la grille :" row: "Interactif" and "Automatique" (the form's
+// submit button). Both are disabled together while a job runs.
+const generateInteractiveBtn = document.getElementById("generate-interactive-btn");
+const generateAutoBtn = document.getElementById("generate-auto-btn");
+function setGenerateButtonsDisabled(disabled) {
+  generateInteractiveBtn.disabled = disabled;
+  generateAutoBtn.disabled = disabled;
+}
 const status = document.getElementById("status");
 const result = document.getElementById("result");
 const stats = document.getElementById("stats");
@@ -1380,7 +1387,7 @@ function setStatus(message, isError) {
 //
 // Letters themselves are hidden unless `showPreviewLetters` is on (see
 // #attempt-preview-reveal-btn, now shown from page load right next to
-// #generate-btn rather than only appearing once a preview exists — at the
+// the generation buttons rather than only appearing once a preview exists — at the
 // user's own explicit follow-up request, so the choice can be made
 // *before* generating, not only reacted to once letters are already on
 // screen). Once the "reprise telle-quelle" mechanism can carry forward a
@@ -8434,7 +8441,8 @@ function enterInteractiveMode(state) {
   // has none, and every field below is simply left untouched.
   if (state.generation_params) {
     const gp = state.generation_params;
-    if (gp.mode) document.getElementById("mode").value = gp.mode;
+    const modeSelect = document.getElementById("mode");
+    if (gp.mode && modeSelect.querySelector(`option[value="${gp.mode}"]`)) modeSelect.value = gp.mode;
     if (gp.black_enrichment_percent !== undefined && gp.black_enrichment_percent !== null) {
       blackEnrichmentInput.value = gp.black_enrichment_percent;
       syncGridPresetSelection();
@@ -8949,7 +8957,7 @@ async function runInteractive(body, endpoint = "/api/interactive/start") {
   const t = I18N[uiLanguage];
   setGenerateFormCollapsed(false);
   generationInProgress = true;
-  button.disabled = true;
+  setGenerateButtonsDisabled(true);
   result.hidden = true;
   hideLeaderboard();
   solutionBtn.hidden = true;
@@ -8966,10 +8974,9 @@ async function runInteractive(body, endpoint = "/api/interactive/start") {
   hideInteractivePanel();
   hideInteractiveWorkPanel();
   syncRssPanelVisibility();
-  // A genuinely fresh authoring session (the top form's own "Générer la
-  // grille" with Mode set to "Interactif", still reachable — and its
-  // Mode dropdown often still reading "interactive" — while already
-  // editing a grid opened from the Library) must never inherit that
+  // A genuinely fresh authoring session (the top form's "Interactif"
+  // button, still reachable while already editing a grid opened from the
+  // Library) must never inherit that
   // earlier session's own pending Library-reopen intent: a real,
   // previously-reported regression, since `libraryReopenOnInteractive`/
   // `libraryReopenArmPending` (see their own declaration) are plain
@@ -9011,7 +9018,7 @@ async function runInteractive(body, endpoint = "/api/interactive/start") {
   } catch (err) {
     setStatus(err.message, !(err instanceof CancelledError));
   } finally {
-    button.disabled = false;
+    setGenerateButtonsDisabled(false);
     stopBtn.hidden = true;
     currentJobId = null;
     generationInProgress = false;
@@ -9897,15 +9904,9 @@ async function runInteractiveFinish(zoneCells) {
   paraphrasePanel.hidden = true;
   await runGeneration(async (t) => {
     const wireGrid = interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch)));
-    // #mode's own current value is "interactive" as long as this button is
-    // even visible (that's how the player got into this mode in the first
-    // place) — never a real budget mode POST /api/interactive/finish
-    // accepts (BUDGET_MODES has no "interactive" entry). Forward it only
-    // when the player has since changed it to a genuine budget mode;
-    // otherwise fall back to "medium", matching the backend's own default
-    // for this exact field.
-    const rawMode = document.getElementById("mode").value;
-    const finishMode = rawMode === "interactive" ? "medium" : rawMode;
+    // The "Mode" selector's current budget mode (the player may have
+    // changed it since the session started).
+    const finishMode = document.getElementById("mode").value;
     // Every other setting of the generation form is sent as it stands NOW
     // (the player may have changed it since the session started):
     // difficulty, "Thématique", "Précision thématique" and "Mots Défi"
@@ -10097,7 +10098,7 @@ async function runGeneration(startJob) {
   setGenerateFormCollapsed(false);
 
   generationInProgress = true;
-  button.disabled = true;
+  setGenerateButtonsDisabled(true);
   result.hidden = true;
   hideLeaderboard();
   syncRssPanelVisibility();
@@ -10173,7 +10174,7 @@ async function runGeneration(startJob) {
       continueBtn.hidden = false;
     }
   } finally {
-    button.disabled = false;
+    setGenerateButtonsDisabled(false);
     stopBtn.hidden = true;
     successMedal.hidden = true;
     currentJobId = null;
@@ -10186,8 +10187,21 @@ createGridBtn.addEventListener("click", () => {
   setGenerateFormCollapsed(false);
 });
 
+// "Interactif" submits the form (so the browser still validates every
+// field) with this flag set; "Automatique" and the Enter key submit it with
+// the flag cleared.
+let pendingInteractiveSubmit = false;
+generateInteractiveBtn.addEventListener("click", () => {
+  pendingInteractiveSubmit = true;
+  form.requestSubmit();
+  // requestSubmit() fires no "submit" event when validation fails.
+  pendingInteractiveSubmit = false;
+});
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const interactive = pendingInteractiveSubmit;
+  pendingInteractiveSubmit = false;
 
   // Close the Dictionnaire panel if it's open, at the user's explicit
   // request — typically still open from Édition mode (which auto-opens
@@ -10230,7 +10244,7 @@ form.addEventListener("submit", async (event) => {
   // empty -> the backend applies its own default value.
   const themePrecision = readThemePrecision();
 
-  if (mode === "interactive") {
+  if (interactive) {
     interactiveLanguage = language;
     // Same "omit rather than send a no-op identical value" convention as
     // the automatic-generation request just above — GenerateRequest
@@ -10248,7 +10262,7 @@ form.addEventListener("submit", async (event) => {
       theme_precision: themePrecision,
       pseudo: userPseudo || undefined,
       // "Mots Défi (personnalisation)" typed on this same main form
-      // (#generate-challenge-panel) before switching to "Interactif" —
+      // (#generate-challenge-panel) before clicking "Interactif" —
       // same convention as the automatic-generation POST /api/generate
       // body just below (omitted rather than an empty array when
       // untouched), reused as-is by POST /api/interactive/start's own

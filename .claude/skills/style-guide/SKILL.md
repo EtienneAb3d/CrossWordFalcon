@@ -4695,3 +4695,42 @@ end through the real running API (interactive start/step/save,
   only for a grid loaded from the archive. **Visually confirmed** with
   Playwright/Chromium: above the title for an archived grid, absent for a
   live one.
+
+- **"Générer la grille :" row** (`#generate-row`), at the user's explicit
+  request: the single "Générer la grille" submit button is replaced by a
+  row of its own below `#form-actions` (`flex-basis: 100%`, flex,
+  `gap: 0.5rem`, `align-items: center`) — a bold (600) introductory label
+  "Générer la grille :", then the two shared accent-blue buttons
+  "Interactif" (`#generate-interactive-btn`) and "Automatique"
+  (`#generate-auto-btn`, the form's submit button). "Interactif" is no
+  longer an option of the `#mode` selector, which only holds the budget
+  modes. The row is hidden with the other fields in `.play-collapsed`.
+  No new token.
+
+- The preview letter-reveal toggle (`#attempt-preview-reveal-btn`) reads
+  "Voir les mots (spoiler)" (en "Show the words (spoiler)", de "Wörter
+  zeigen (Spoiler)", es "Ver las palabras (spoiler)", it "Mostra le parole
+  (spoiler)", pt "Ver as palavras (spoiler)"), at the user's explicit
+  request, so its spoiling effect is stated on the button itself. Same
+  id/i18n key and look; the older entries above calling it "Voir" refer to
+  this button.
+
+- **Tool buttons on the "Générer la grille :" line** (`#tool-buttons`
+  inside `#generate-row`), at the user's explicit request: Bibliothèque,
+  Dictionnaire, Paraphraseur, Créations and Qdrant (admin) sit on the
+  form's last line, level with "Interactif"/"Automatique", flush right.
+  `#tool-buttons` is `flex: 1 1 0` (it takes whatever the generate group
+  leaves) with its own `flex-wrap: wrap; justify-content: flex-end`, so
+  buttons that run out of room drop to a further line still right-aligned,
+  never back to the left edge; `#generate-row` is `align-items:
+  flex-start` and the label gets `line-height: 2.25rem` to sit centered on
+  the first button line. This supersedes the earlier `#library-btn {
+  margin-left: auto }` placement in `#form-actions` (rule removed).
+  `#form-actions` keeps Thématique, Mots Défi, "Voir les mots (spoiler)",
+  Stop and Continuer. In `.play-collapsed`, `#form-actions` and the label +
+  two generate buttons are hidden, and `#create-grid-btn` (now the first
+  item of `#generate-row`) stands at the left of the same line as the tool
+  buttons. **Visually confirmed** with Playwright/Chromium: at 1400px all
+  on one line (tools ending at the form's right edge, 1244px); at 1000px
+  Créations and Qdrant (admin) wrap to a second line ending at the right
+  edge (884px); collapsed shows "Créer une grille" left, tools right.

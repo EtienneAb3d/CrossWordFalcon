@@ -92,9 +92,9 @@ generation (`frontend/static/script.js`, the form's own `submit` handler,
 While a finished grid is being played, the form is folded away behind a
 single **Créer une grille / Create a grid** button (`#create-grid-btn`,
 `frontend/static/script.js`, `setGenerateFormCollapsed`): every field
-below, Thématique, Mots Défi and the generate button are hidden, while
+below, Thématique, Mots Défi and the generate buttons are hidden, while
 the tool buttons (Bibliothèque, Dictionnaire, Paraphraseur, Créations…)
-stay visible. Clicking it unfolds the full form. The form is shown in
+stay visible on the same line, at the right. Clicking it unfolds the full form. The form is shown in
 full again whenever a new generation or an Interactive session starts.
 
 - **Préconfigurations / Presets** (`#preset-select`, first line of the
@@ -186,11 +186,9 @@ full again whenever a new generation or an Interactive session starts.
   need a slower mode to succeed at all. **Ultra**, **Megatron** and **GridZilla** are only
   selectable when the page is opened on the local machine; from another
   machine on the network their options are greyed out and unavailable
-  (`frontend/static/script.js`, `restrictHeavyModesToLocalhost`).
-  **Interactif / Interactive** is a different kind of mode, listed above
-  Flash: instead of the computer filling the whole grid on its own, it
-  hands you a black-cell pattern with one word already placed and lets
-  you build the rest yourself (see "Interactive authoring mode" below).
+  (`frontend/static/script.js`, `restrictHeavyModesToLocalhost`). The
+  same mode is used by **Finir la grille / Finish the grid** and **Finir
+  la zone / Finish the zone** in Interactive mode.
 - **Précision thématique / Theme precision** (`#theme-precision`) — the
   minimum closeness a word must have to the theme to enter the theme
   glossary, a number from 0 to 1 (0.78 by default; use a **point**, not a
@@ -265,8 +263,18 @@ full again whenever a new generation or an Interactive session starts.
   same as the Thématique field above — though, unlike Thématique, never
   shown anywhere in the Library, since they're meant to stay hidden
   answers to spots you chose yourself.
-- **Générer la grille / Generate** (`#generate-btn`) — starts generation
-  with the settings above. While a generation is running, this and every
+- **Générer la grille : / Generate the grid:** (`#generate-row`), a row
+  of its own below the other buttons, with two buttons
+  (`frontend/static/script.js`, the form's `submit` handler):
+  **Interactif / Interactive** (`#generate-interactive-btn`) starts a
+  hand-built grid with the settings above (see "Interactive authoring
+  mode" below); **Automatique / Automatic** (`#generate-auto-btn`, also
+  triggered by pressing Enter in a field) starts an automatic generation
+  with the settings above. The tool buttons (Bibliothèque, Dictionnaire,
+  Paraphraseur, Créations, and Qdrant (admin) on the local machine) sit at
+  the right end of this same line (`#tool-buttons`); when the window is
+  too narrow for all of them, the extra ones go onto a further line, still
+  aligned to the right. While a generation is running, this and every
   field above stay usable for the *next* generation, but see "While a
   grid is generating" below for what appears meanwhile. If the
   Dictionnaire panel is open — typically still showing from an
@@ -277,10 +285,10 @@ full again whenever a new generation or an Interactive session starts.
 
 ## Action buttons
 
-These sit next to the generate button (`#generate-form`) and only appear
+These sit above the "Générer la grille :" row (`#generate-form`) and only appear
 when relevant.
 
-- **Voir / View** (`#attempt-preview-reveal-btn`, `frontend/static/
+- **Voir les mots (spoiler) / Show the words (spoiler)** (`#attempt-preview-reveal-btn`, `frontend/static/
   script.js`, `togglePreviewLetters`) — while a grid is generating, shows
   or hides the actual letters inside the search-progress preview grids
   (see "While a grid is generating" below) and the "grid word
@@ -297,7 +305,7 @@ when relevant.
   "Vérification / Check" button described a few bullets below: that is a
   COMPLETELY DIFFERENT feature (it colors the PLAYER's own typed letters
   correct/incorrect once a grid is finished and being played) that merely
-  happens to share the word "verification" in its own name. "Voir" itself
+  happens to share the word "verification" in its own name. "Voir les mots (spoiler)" itself
   never tells anyone whether an answer is right or wrong — it only
   reveals or hides letters that are not yet the player's own.
 - **Stop** (`#stop-btn`, `frontend/static/script.js`, `stopBtn` click
@@ -327,7 +335,7 @@ when relevant.
   framed in green, and the status line asks you to pick one. Hovering a
   tile tints it; clicking it selects that grid (a blue frame marks it) and
   the definitions are then written for that grid only. Letters stay hidden
-  unless **Voir** is on, like every other preview. Without a click within
+  unless **Voir les mots (spoiler)** is on, like every other preview. Without a click within
   10 minutes, the recommended grid is kept; **Stop** still cancels while
   the choice is pending. A single finished grid is used directly, with no
   choice to make.
@@ -346,7 +354,7 @@ when relevant.
   `toggleChecking`) — while playing (a finished grid, never during
   generation), colors every filled cell green (correct) or red
   (incorrect) against the real solution. Turning it on turns "Solution"
-  off. IMPORTANT — do not confuse this with the "Voir / View" button
+  off. IMPORTANT — do not confuse this with the "Voir les mots (spoiler) / Show the words (spoiler)" button
   described a few bullets above (which only reveals/hides letters in the
   search-progress previews shown WHILE a grid is still generating, and
   has nothing to do with whether an answer is correct): the two features
@@ -842,13 +850,13 @@ Once clue writing starts, a live list of definitions (`#live-clues-wrap`,
 `frontend/static/script.js`, `renderLiveClues`) grows underneath these
 preview grids as each one is produced — this list is always visible, so
 the definitions themselves are never treated as a spoiler; only the
-matching grid word/answer for each one is shown once the **Voir** button
+matching grid word/answer for each one is shown once the **Voir les mots (spoiler)** button
 is turned on.
 
 Letters inside these preview grids, and a word-verification table
 underneath them (`#word-verification-wrap`, listing every word placed so
 far, whether it's a real dictionary entry, and its dictionary/glossary
-source line), are hidden until the **Voir** button is turned on — this
+source line), are hidden until the **Voir les mots (spoiler)** button is turned on — this
 panel is diagnostic, not part of the puzzle, but its letters can still
 spoil the answer if shown by default.
 
@@ -988,10 +996,10 @@ one in), start from the home page:
 
 1. Set up the grid using the options on the home page (Language, size,
    Difficulty, Taux noir, etc. — see "Generation form" above).
-2. Choose **Interactif / Interactive** in the **Mode** selector.
-3. Optionally, list some words in the **Thématique / Theme** field to steer
+2. Optionally, list some words in the **Thématique / Theme** field to steer
    the grid toward a topic (see "Generation form" above).
-4. Click **Générer la grille / Generate the grid**.
+3. Click **Interactif / Interactive** on the **Générer la grille : /
+   Generate the grid:** row.
 
 The same guidance below is also available in-app, once the interactive
 session has started: click the **?** button (`#interactive-help-btn`) just
@@ -1070,8 +1078,8 @@ reference of every one of these buttons.
 
 ## Interactive authoring mode
 
-Choosing **Interactif / Interactive** in the **Mode** selector and
-submitting the form starts a hands-on authoring session
+Clicking **Interactif / Interactive** on the form's **Générer la grille :
+/ Generate the grid:** row starts a hands-on authoring session
 (`frontend/static/script.js`, `runInteractive`, `POST /api/interactive/
 start`) instead of an automatic generation. The form's Language, size,
 Difficulty, Taux noir and Thématique fields still apply — they shape the
@@ -1412,8 +1420,7 @@ real letter. Both update after every edit.
   it stays available in your "Créations" list. The grid size and the
   language(s) stay those of the session; every other setting is read from
   the generation form at the top of the page as it stands at the moment
-  you click — Difficulté, Taux noir, Symétrie, Mots par pose, Mode (an "Interactif" Mode
-  counts as "Moyen"), Thématique, Précision thématique and the "Mots Défi"
+  you click — Difficulté, Taux noir, Symétrie, Mots par pose, Mode, Thématique, Précision thématique and the "Mots Défi"
   list — so you can change any of them before finishing. The session's
   theme glossary is reused only while the form still asks for the same
   theme at the same precision; otherwise it is rebuilt from the form's

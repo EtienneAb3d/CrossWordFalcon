@@ -471,7 +471,7 @@ plusieurs signaux) :
   d'après son relevé croisé, affichée en gris clair — dans le mode
   Interactif par le bouton bistable **Stats** (activé par défaut), et dans
   les aperçus de la génération automatique (aperçus en direct et étape
-  clef d'une tentative, sous le bouton **Voir**). Purement indicative :
+  clef d'une tentative, sous le bouton **Voir les mots (spoiler)**). Purement indicative :
   elle n'est jamais écrite dans la grille. (`backend/crossword_gen.py`,
   `_most_probable_letter`, `Filler.stat_letters`,
   `_interactive_letter_stats` ; `frontend/static/style.css`,
