@@ -70,6 +70,8 @@ the grid for you.
 **Library and export**
 
 - Every grid stored in a shared Library, filterable by language and level.
+- Grids from obsolete Falcon versions can be archived (from the server
+  machine itself); archived grids stay viewable and playable.
 - Player count per grid; "seen" tracking.
 - PDF download (one or two A4 pages).
 - Across Lite `.puz` download.

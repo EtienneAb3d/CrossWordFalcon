@@ -55,7 +55,7 @@ Engineering language is English (code, comments, this file, the SKILLs,
 | `Automation/` | `Populate.py`, a CLI daemon that drives the real `/api/generate` endpoint to bulk-fill the grid library. |
 | `data/` | Per-language dictionaries (`wordlist_<lang>_freq.tsv`, `wordlist_<lang>_scrabble.tsv`, `gloss_dictionary/`, `inflection/`, the raw `scrabble/` lists, the gitignored `wiktionary/` dump cache), the reference sentence corpus, and Qdrant's on-disk storage. |
 | `DOC_ALGO/FR/`, `DOC_DIC/FR/`, `DOC_USER/EN/` | Hand-maintained, present-tense-only reference docs (see intro). |
-| `GRID_STORE/`, `GRID_WORK/`, `GRID_GAME/` | Persisted grids: published library grids, in-progress "Interactif" authoring drafts, per-player play state. All gitignored. |
+| `GRID_STORE/`, `GRID_WORK/`, `GRID_GAME/` | Persisted grids: published library grids (archived ones under `GRID_STORE/BACKUP/`), in-progress "Interactif" authoring drafts, per-player play state. All gitignored. |
 | `STOP_DUMP/` | One diagnostic snapshot per automatic-generation job interrupted via the "Stop" button: last known cell/slot state of every attempt still running at that moment. Gitignored. |
 | `GRID_SVG/`, `GRID_PNG/` | Generated SVG/PNG exports of every published grid, one file per page (`_GRID`, `_CLUES`, `_SOLUTION`), laid out like its PDF. Gitignored. `GRID_SAMPLES/` (committed) is a small, hand-curated set of examples — never written automatically. |
 | `LOG_LLM/`, `LOG_CHAT/`, `LOG_THEME/`, `LOG_USERS/` | Diagnostic/audit logs (LLM call traces, chat transcripts, theme pre-search traces, daily presence headcount). Gitignored. |
@@ -388,8 +388,15 @@ json`. Holds all server-side state in plain module dicts/lists:
   each returned grid carries `player_count`, its number of `GRID_GAME`
   records — `grid_store.grid_game_player_count` — shown in the
   "Joueurs" column),
-  `GET /api/library/{grid_id}` (optionally merges a player's saved play
-  state), `GET /api/library/{grid_id}/pdf` (answer-free printable sheet),
+  `LibraryListRequest.archived` lists the archived grids instead, and
+  every response carries `has_archived` (whether `GRID_STORE/BACKUP/`
+  holds grids); `GET /api/library/{grid_id}` (optionally merges a
+  player's saved play state; an archived grid is found too, flagged
+  `archived: true`), `GET /api/library_archive/versions` and `POST
+  /api/library_archive` (`{max_version}`, localhost-only — gated by
+  `frontend/server.py`'s `_require_localhost()`: the Falcon versions of
+  the live grids, and moving every live grid of that version or older to
+  `GRID_STORE/BACKUP/`, see `grid_store.archive_grids`), `GET /api/library/{grid_id}/pdf` (answer-free printable sheet),
   `GET /api/library/{grid_id}/puz` (Across Lite .puz file, see
   `puz_export.py`),
   `POST /api/game/save` (autosave play state to `GRID_GAME`), `GET
@@ -2549,6 +2556,17 @@ Four independent filesystem stores, one JSON file shape shared with the
   (`_known_word_forms`, Java `App.knownWordForms`; a word the lexicon
   does not know keeps itself as both), so a later definition rewrite
   ("Recalculer") has its inflected and base forms.
+  Archiving (`archive_grids(max_version)`,
+  Java `GridStore.archiveGrids`) moves every grid whose `falcon_version`
+  is `max_version` or older (`_version_key`: numeric dot parts; a grid
+  with no version is older than any, and a `None` limit archives only
+  those) to `GRID_BACKUP_DIR` (`GRID_STORE/BACKUP/<same subdirectory>/`,
+  one level deeper, so the live `*/*.json` scan never sees it);
+  `list_grids(..., archived=True)`/`_iter_stored_grids(archived=True)`
+  list it, `library_versions()` gives the live grids' versions newest
+  first plus whether one has none, `has_archived_grids()` whether the
+  backup holds anything, and `get_grid` falls back on it (adding
+  `archived: true`), so a shared link to an archived grid still opens.
 - **`GRID_WORK/`** — one continuously-overwritten file per in-progress
   "Interactif" authoring session, named `<timestamp>_<pseudo-slug>_<job_
   id>.json`. `save_grid_work`/`get_grid_work`/`list_grid_work`/`delete_
@@ -2916,7 +2934,15 @@ state, unlike the backend).
   clicking "+" — the instant the user types a trailing punctuation
   character (space, comma, semicolon, colon, period, `!`, `?`), via one
   shared `attachPunctuationAutoAdd()` helper; the library panel
-  (paginated/filterable listing, load-into-player, reopen-as-editable);
+  (paginated/filterable listing, load-into-player, reopen-as-editable;
+  a localhost-only "Archiver" bar under its header — `#library-archive-
+  bar`, `renderLibraryArchiveBar`: a version selector filled from
+  `GET /api/library_archive/versions`, newest selected, then `POST
+  /api/library_archive` after a confirmation —, an end-of-list mention
+  `#library-archived-note` shown while `has_archived`, whose button lists
+  the archived grids (`libraryShowArchived`, reset on every opening)
+  under the `#library-archived-warning` banner and its "back to current
+  grids" button);
   the dictionary panel (root-family search, each form's "usage : X/5"
   line under it when its usage score is known, "Définir", "Thématique"/
   "Synonymes", bilingual-aware); the chatbot UI (Markdown rendering,

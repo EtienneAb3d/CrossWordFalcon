@@ -193,6 +193,14 @@ const libraryDifficultyFilter = document.getElementById("library-difficulty-filt
 const librarySeenFilter = document.getElementById("library-seen-filter");
 const libraryTbody = document.getElementById("library-tbody");
 const libraryEmpty = document.getElementById("library-empty");
+const libraryArchiveBar = document.getElementById("library-archive-bar");
+const libraryArchiveBtn = document.getElementById("library-archive-btn");
+const libraryArchiveVersion = document.getElementById("library-archive-version");
+const libraryArchiveResult = document.getElementById("library-archive-result");
+const libraryArchivedWarning = document.getElementById("library-archived-warning");
+const libraryArchivedNote = document.getElementById("library-archived-note");
+const libraryShowArchivedBtn = document.getElementById("library-show-archived-btn");
+const libraryShowCurrentBtn = document.getElementById("library-show-current-btn");
 const libraryPagination = document.getElementById("library-pagination");
 const libraryPrevBtn = document.getElementById("library-prev-btn");
 const libraryNextBtn = document.getElementById("library-next-btn");
@@ -4754,8 +4762,93 @@ function openLibraryPanel() {
   libraryPanel.hidden = false;
   syncRssPanelVisibility();
   libraryCurrentPage = 1;
+  libraryShowArchived = false;
+  libraryArchiveResult.textContent = "";
+  renderLibraryArchiveBar();
   renderLibraryList();
 }
+
+// True while the Library lists the archived grids (GRID_STORE/BACKUP/,
+// POST /api/library's `archived`) instead of the live ones; reset each time
+// the panel opens.
+let libraryShowArchived = false;
+
+// Localhost-only "Archiver" bar: fills the version selector with the Falcon
+// versions of the live grids (newest first, the newest selected, so the
+// default archives every grid), plus "sans version" when some grid has
+// none. Hidden off localhost (frontend/server.py rejects the routes there
+// anyway) and while the archived grids are listed.
+async function renderLibraryArchiveBar() {
+  if (!isLocalhostOrigin() || libraryShowArchived) {
+    libraryArchiveBar.hidden = true;
+    return;
+  }
+  const t = I18N[uiLanguage];
+  let data = null;
+  try {
+    const response = await fetchWithTimeout("/api/library_archive/versions", {}, FETCH_TIMEOUT_MS);
+    if (response.ok) data = await response.json();
+  } catch (err) {
+    // Best-effort, like the list itself: no bar when unavailable.
+  }
+  if (!data) {
+    libraryArchiveBar.hidden = true;
+    return;
+  }
+  libraryArchiveVersion.replaceChildren();
+  for (const version of data.versions || []) {
+    const option = document.createElement("option");
+    option.value = version;
+    option.textContent = version;
+    libraryArchiveVersion.appendChild(option);
+  }
+  if (data.unversioned) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = t.libraryArchiveUnversioned;
+    libraryArchiveVersion.appendChild(option);
+  }
+  libraryArchiveBtn.disabled = libraryArchiveVersion.options.length === 0;
+  libraryArchiveBar.hidden = libraryShowArchived;
+}
+
+libraryArchiveBtn.addEventListener("click", async () => {
+  const t = I18N[uiLanguage];
+  if (libraryArchiveVersion.options.length === 0) return;
+  const option = libraryArchiveVersion.options[libraryArchiveVersion.selectedIndex];
+  if (!window.confirm(t.libraryArchiveConfirm(option.textContent))) return;
+  libraryArchiveBtn.disabled = true;
+  try {
+    const response = await fetchWithTimeout(
+      "/api/library_archive",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ max_version: option.value || null }),
+      },
+      FETCH_TIMEOUT_MS,
+    );
+    if (!response.ok) throw new Error(String(response.status));
+    const data = await response.json();
+    libraryArchiveResult.textContent = t.libraryArchiveDone(data.archived || 0);
+  } catch (err) {
+    libraryArchiveResult.textContent = t.libraryArchiveError;
+  }
+  libraryCurrentPage = 1;
+  await renderLibraryArchiveBar();
+  renderLibraryList();
+});
+
+function setLibraryShowArchived(archived) {
+  libraryShowArchived = archived;
+  libraryCurrentPage = 1;
+  libraryArchiveResult.textContent = "";
+  renderLibraryArchiveBar();
+  renderLibraryList();
+}
+
+libraryShowArchivedBtn.addEventListener("click", () => setLibraryShowArchived(true));
+libraryShowCurrentBtn.addEventListener("click", () => setLibraryShowArchived(false));
 
 // The Library must reopen automatically every time Edition (Interactif)
 // mode is shown again AFTER the session has actually started — at the
@@ -4837,9 +4930,12 @@ async function renderLibraryList() {
   libraryTbody.replaceChildren();
   libraryEmpty.hidden = true;
   libraryPagination.hidden = true;
+  libraryArchivedWarning.hidden = !libraryShowArchived;
+  libraryArchivedNote.hidden = true;
   let entries = [];
   let total = 0;
   let pageSize = 1;
+  let hasArchived = false;
   try {
     const response = await fetchWithTimeout(
       "/api/library",
@@ -4864,6 +4960,9 @@ async function renderLibraryList() {
           seen_filter: librarySeenFilter.value,
           seen_ids: loadSeenGridIds(),
           pseudo: userPseudo,
+          // The archived grids (GRID_STORE/BACKUP/) instead of the live
+          // ones — "Voir les grilles archivées".
+          archived: libraryShowArchived,
         }),
       },
       FETCH_TIMEOUT_MS,
@@ -4873,6 +4972,7 @@ async function renderLibraryList() {
       entries = data.grids || [];
       total = data.total || 0;
       pageSize = data.page_size || 1;
+      hasArchived = data.has_archived === true;
     }
   } catch (err) {
     // Best-effort: a browsing feature failing silently (empty list) is
@@ -4887,6 +4987,8 @@ async function renderLibraryList() {
     libraryPrevBtn.disabled = libraryCurrentPage <= 1;
     libraryNextBtn.disabled = libraryCurrentPage >= libraryTotalPages;
   }
+  // End-of-list mention leading to the archived grids.
+  libraryArchivedNote.hidden = libraryShowArchived || !hasArchived;
   if (entries.length === 0) {
     libraryEmpty.hidden = false;
     return;

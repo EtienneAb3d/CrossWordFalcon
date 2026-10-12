@@ -29,6 +29,8 @@ public final class GridStore {
     private GridStore() {}
 
     public static final Path GRID_STORE_DIR = Env.path("GRID_STORE");
+    /** Mirrors GRID_BACKUP_DIR: archived grids, same layout one level deeper. */
+    public static final Path GRID_BACKUP_DIR = GRID_STORE_DIR.resolve("BACKUP");
     public static final Path GRID_WORK_DIR = Env.path("GRID_WORK");
     public static final Path GRID_GAME_DIR = Env.path("GRID_GAME");
     public static final Path STOP_DUMP_DIR = Env.path("STOP_DUMP");
@@ -162,9 +164,35 @@ public final class GridStore {
         return gridId;
     }
 
+    /** Mirrors _version_key: "2.9.6" -> [2, 9, 6] (a non-numeric part counting 0); no version -> [-1]. */
+    static List<Integer> versionKey(Object version) {
+        List<Integer> key = new ArrayList<>();
+        if (version == null || String.valueOf(version).isEmpty()) {
+            key.add(-1);
+            return key;
+        }
+        for (String part : String.valueOf(version).split("\\.", -1)) {
+            key.add(!part.isEmpty() && part.chars().allMatch(Character::isDigit) ? Integer.parseInt(part) : 0);
+        }
+        return key;
+    }
+
+    /** Python tuple ordering of two version keys. */
+    static int compareVersionKeys(List<Integer> a, List<Integer> b) {
+        for (int k = 0; k < Math.min(a.size(), b.size()); k++) {
+            int c = Integer.compare(a.get(k), b.get(k));
+            if (c != 0) return c;
+        }
+        return Integer.compare(a.size(), b.size());
+    }
+
     public static List<Map<String, Object>> iterStoredGrids() {
+        return iterStoredGrids(false);
+    }
+
+    public static List<Map<String, Object>> iterStoredGrids(boolean archived) {
         List<Map<String, Object>> out = new ArrayList<>();
-        for (Path sub : subdirs(GRID_STORE_DIR)) {
+        for (Path sub : subdirs(archived ? GRID_BACKUP_DIR : GRID_STORE_DIR)) {
             for (Path path : glob(sub, "*.json")) {
                 Map<String, Object> r = readRecord(path);
                 if (r == null) continue;
@@ -181,7 +209,11 @@ public final class GridStore {
     }
 
     public static List<Map<String, Object>> listGrids(String preferredLanguage) {
-        List<Map<String, Object>> grids = iterStoredGrids();
+        return listGrids(preferredLanguage, false);
+    }
+
+    public static List<Map<String, Object>> listGrids(String preferredLanguage, boolean archived) {
+        List<Map<String, Object>> grids = iterStoredGrids(archived);
         grids.sort(Comparator.comparing((Map<String, Object> e) -> Json.str(e, "created_at", "")).reversed());
         grids.sort(Comparator.comparingInt(e -> {
             Object lang = e.get("language");
@@ -198,7 +230,64 @@ public final class GridStore {
             Path p = sub.resolve(gridId + ".json");
             if (Files.isRegularFile(p)) return readRecord(p);
         }
+        // A shared link to an archived grid still opens it.
+        for (Path sub : subdirs(GRID_BACKUP_DIR)) {
+            Path p = sub.resolve(gridId + ".json");
+            if (Files.isRegularFile(p)) {
+                Map<String, Object> record = readRecord(p);
+                if (record != null) record.put("archived", true);
+                return record;
+            }
+        }
         return null;
+    }
+
+    /** Mirrors has_archived_grids. */
+    public static boolean hasArchivedGrids() {
+        for (Path sub : subdirs(GRID_BACKUP_DIR)) {
+            if (!glob(sub, "*.json").isEmpty()) return true;
+        }
+        return false;
+    }
+
+    /** Mirrors library_versions: the live grids' Falcon versions, newest first, and whether one has none. */
+    public static Map<String, Object> libraryVersions() {
+        TreeSet<String> versions = new TreeSet<>();
+        boolean unversioned = false;
+        for (Map<String, Object> e : iterStoredGrids(false)) {
+            Object v = e.get("falcon_version");
+            if (v != null && !String.valueOf(v).isEmpty()) versions.add(String.valueOf(v));
+            else unversioned = true;
+        }
+        List<String> sorted = new ArrayList<>(versions);
+        sorted.sort((a, b) -> {
+            int c = compareVersionKeys(versionKey(b), versionKey(a));
+            return c != 0 ? c : b.compareTo(a);
+        });
+        return Json.obj("versions", sorted, "unversioned", unversioned);
+    }
+
+    /** Mirrors archive_grids: moves every live grid of {@code maxVersion} or older (no version counting older)
+     * to GRID_BACKUP_DIR; null/empty moves only the grids with no version. */
+    public static int archiveGrids(String maxVersion) {
+        List<Integer> limit = versionKey(maxVersion);
+        int moved = 0;
+        for (Path sub : subdirs(GRID_STORE_DIR)) {
+            if (sub.equals(GRID_BACKUP_DIR)) continue;
+            for (Path path : glob(sub, "*.json")) {
+                Map<String, Object> r = readRecord(path);
+                if (r == null) continue;
+                if (compareVersionKeys(versionKey(r.get("falcon_version")), limit) > 0) continue;
+                try {
+                    Path targetDir = GRID_BACKUP_DIR.resolve(sub.getFileName().toString());
+                    Files.createDirectories(targetDir);
+                    Files.move(path, targetDir.resolve(path.getFileName().toString()),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    moved++;
+                } catch (IOException ignored) { }
+            }
+        }
+        return moved;
     }
 
     // ------------------------------------------------------------------ GRID_WORK

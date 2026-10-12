@@ -65,6 +65,7 @@ from .crossword_gen import (
 )
 from .grid_store import (
     _slugify_title, get_grid, list_grids, save_grid_json,
+    has_archived_grids, library_versions, archive_grids,
     save_grid_work, list_grid_work, get_grid_work, delete_grid_work,
     save_grid_game, get_grid_game, grid_game_leaderboard, grid_game_player_count,
     save_stop_dump,
@@ -1981,10 +1982,22 @@ class LibraryListRequest(BaseModel):
     # The current user's pseudo — only used when `seen_filter == "mine"`.
     # `None`/empty: the "Mes grilles" filter returns nothing.
     pseudo: Optional[str] = None
+    # True: lists the archived grids (GRID_STORE/BACKUP/, see
+    # grid_store.archive_grids) instead of the live library.
+    archived: bool = False
+
+
+class LibraryArchiveRequest(BaseModel):
+    """Body of POST /api/library_archive (localhost-only, gated by
+    frontend/server.py): archives every live grid published with
+    `max_version` or an older one; None/empty archives only the grids
+    with no version."""
+    max_version: Optional[str] = None
 
 
 def _library_page(preferred_language, page, seen_filter, seen_ids,
-                  language_filter="all", difficulty_filter="all", pseudo=None):
+                  language_filter="all", difficulty_filter="all", pseudo=None,
+                  archived=False):
     """Shared core of GET and POST /api/library — the list (metadata only,
     never the whole grid: see backend/grid_store.py's list_grids) of
     GRID_STORE/'s grids, sorted with the configured language first, then
@@ -2036,7 +2049,7 @@ def _library_page(preferred_language, page, seen_filter, seen_ids,
     # "Mes grilles" filter is then moot).
     my_pseudo = (pseudo or "").strip()
     rows = []
-    for g in list_grids(preferred_language):
+    for g in list_grids(preferred_language, archived):
         if only_difficulty is not None and g.get("difficulty") != only_difficulty:
             continue
         if only_bilingual:
@@ -2086,7 +2099,27 @@ def _library_page(preferred_language, page, seen_filter, seen_ids,
         "total": len(rows),
         "page": page,
         "page_size": LIBRARY_PAGE_SIZE,
+        # Whether GRID_STORE/BACKUP/ holds grids: the end-of-list
+        # "Voir les grilles archivées" mention.
+        "has_archived": has_archived_grids(),
     }
+
+
+@app.get("/api/library_archive/versions")
+def library_archive_versions():
+    """Localhost-only (frontend/server.py): the Falcon versions of the
+    live grids, newest first, for the Library's "Archiver" selector."""
+    return library_versions()
+
+
+@app.post("/api/library_archive")
+def library_archive(req: LibraryArchiveRequest):
+    """Localhost-only (frontend/server.py): the Library's "Archiver"
+    button — moves every live grid of `max_version` or older to
+    GRID_STORE/BACKUP/ (grid_store.archive_grids)."""
+    moved = archive_grids((req.max_version or "").strip() or None)
+    logger.info("library archive up to version %r: %d grid(s) moved", req.max_version, moved)
+    return {"archived": moved}
 
 
 @app.get("/api/library")
@@ -2109,7 +2142,7 @@ def library_list_filtered(req: LibraryListRequest):
     transmettre au Front")."""
     return _library_page(
         req.preferred_language, req.page, req.seen_filter, req.seen_ids,
-        req.language_filter, req.difficulty_filter, req.pseudo,
+        req.language_filter, req.difficulty_filter, req.pseudo, req.archived,
     )
 
 

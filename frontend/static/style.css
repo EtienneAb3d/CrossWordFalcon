@@ -1966,6 +1966,51 @@ button:disabled {
   font-style: italic;
 }
 
+/* Library archiving bar (localhost only): "Archiver" button, version
+   selector, outcome text — one compact row under the header. */
+#library-archive-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.5rem;
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+}
+#library-archive-bar select {
+  font-size: 0.8rem;
+  padding: 0.15rem 0.3rem;
+}
+#library-archive-btn {
+  font-size: 0.8rem;
+  padding: 0.2rem 0.6rem;
+}
+#library-archive-result {
+  color: #777;
+}
+
+/* Warning above the archived grids, and the end-of-list mention leading to
+   them: red bold text (.warning-text) / muted italic text, each followed by
+   a small .nav-btn. */
+#library-archived-warning,
+#library-archived-note {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.6rem;
+  margin: 0.5rem 0;
+}
+#library-archived-note {
+  font-size: 0.85rem;
+  color: #777;
+  font-style: italic;
+}
+#library-archive-bar[hidden],
+#library-archived-warning[hidden],
+#library-archived-note[hidden] {
+  display: none;
+}
+
 /* "Créations" panel (#interactive-work-btn's click handler, script.js),
    at the user's explicit request — same transparent/bordered card as
    #library just above, a member of the same central toggling-panel

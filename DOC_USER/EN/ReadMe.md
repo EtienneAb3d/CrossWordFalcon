@@ -692,6 +692,25 @@ the current page with the current filters, without jumping back to page
 1 — useful to pick up a grid someone else just generated, or a "seen"
 status changed elsewhere, without losing your place in the list.
 
+**Archived grids.** Grids made with an obsolete version of Falcon can be
+moved out of the list into an archive (`GRID_STORE/BACKUP/`,
+`backend/grid_store.py`, `archive_grids`). When the page is opened on
+the server machine itself (localhost), an **Archiver** button and a
+version selector sit under the panel's header (`#library-archive-bar`,
+`frontend/static/script.js`, `renderLibraryArchiveBar`): the selector
+lists the Falcon versions of the grids still in the list, newest first
+(plus "sans version" for grids recorded before versions were stored),
+and the button, after a confirmation, archives every grid of the chosen
+version and every older one (grids with no version always count as
+older). Whenever the archive holds grids, the end of the list says that
+old grids made with an obsolete version of Falcon have been archived,
+with a **Voir les grilles archivées / See archived grids** button
+(`#library-archived-note`). It lists the archived grids instead — same
+filters, pagination and actions — under a red warning that they come
+from an obsolete version of Falcon and are of lower quality, next to a
+button going back to the current grids (`#library-archived-warning`).
+A shared link to an archived grid still opens it for play.
+
 ## While a grid is generating
 
 A dedicated panel (`#attempt-preview`, `frontend/static/script.js`,

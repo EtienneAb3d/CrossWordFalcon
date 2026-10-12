@@ -643,6 +643,36 @@ async def proxy_qdrant_admin_delete_tenant(request: Request):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+# --- Library archiving (localhost only) ---------------------------------
+# Same gate as the Qdrant admin panel: the Library's "Archiver" button and
+# its version selector are a localhost-only maintenance tool.
+@app.get("/api/library_archive/versions")
+async def proxy_library_archive_versions(request: Request):
+    _require_localhost(request)
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/library_archive/versions")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.post("/api/library_archive")
+async def proxy_library_archive(request: Request):
+    _require_localhost(request)
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/library_archive",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 @app.post("/api/interactive/start")
 async def proxy_interactive_start(request: Request):
     """"Interactif" mode: kicks off a one-grid authoring job. Same shape as

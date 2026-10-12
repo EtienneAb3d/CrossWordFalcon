@@ -1631,6 +1631,12 @@ public final class App {
 
     static Map<String, Object> libraryPage(String preferredLanguage, int page, String seenFilter, Collection<String> seenIds,
                                            String languageFilter, String difficultyFilter, String pseudo) {
+        return libraryPage(preferredLanguage, page, seenFilter, seenIds, languageFilter, difficultyFilter, pseudo, false);
+    }
+
+    static Map<String, Object> libraryPage(String preferredLanguage, int page, String seenFilter, Collection<String> seenIds,
+                                           String languageFilter, String difficultyFilter, String pseudo,
+                                           boolean archived) {
         if (!List.of("all", "unseen", "seen", "mine").contains(seenFilter)) seenFilter = "all";
         boolean onlyBilingual = "bilingual".equals(languageFilter);
         String onlyLanguage = WORDLISTS.containsKey(languageFilter) ? languageFilter : null;
@@ -1638,7 +1644,7 @@ public final class App {
         Set<String> seen = new HashSet<>(seenIds == null ? List.of() : seenIds);
         String myPseudo = pseudo == null ? "" : Py.strip(pseudo);
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (Map<String, Object> g : GridStore.listGrids(preferredLanguage)) {
+        for (Map<String, Object> g : GridStore.listGrids(preferredLanguage, archived)) {
             if (onlyDifficulty != null && !onlyDifficulty.equals(g.get("difficulty"))) continue;
             if (onlyBilingual) {
                 if (!Json.truthy(g.get("bilingual"))) continue;
@@ -1665,7 +1671,8 @@ public final class App {
             row.put("player_count", GridStore.gridGamePlayerCount(id == null ? null : String.valueOf(id)));
             slice.add(row);
         }
-        return Json.obj("grids", slice, "total", rows.size(), "page", page, "page_size", LIBRARY_PAGE_SIZE);
+        return Json.obj("grids", slice, "total", rows.size(), "page", page, "page_size", LIBRARY_PAGE_SIZE,
+                "has_archived", GridStore.hasArchivedGrids());
     }
 
     static String randomDictionaryWord(String language) {
@@ -1794,7 +1801,18 @@ public final class App {
             List<String> seenIds = b.strList("seen_ids");
             if (seenIds.size() > 100000) throw Web.validation("body", "seen_ids", "too_long", "List should have at most 100000 items", null);
             return libraryPage(b.str("preferred_language", "fr"), b.integer("page", 1, null, null), b.str("seen_filter", "all"),
-                    seenIds, b.str("language_filter", "all"), b.str("difficulty_filter", "all"), b.str("pseudo", null));
+                    seenIds, b.str("language_filter", "all"), b.str("difficulty_filter", "all"), b.str("pseudo", null),
+                    b.bool("archived", false));
+        });
+        // Localhost-only (gated by frontend/server.py): the Library's "Archiver" button and version selector.
+        w.get("/api/library_archive/versions", r -> GridStore.libraryVersions());
+        w.post("/api/library_archive", r -> {
+            Body b = new Body(r.json());
+            String maxVersion = b.str("max_version", null);
+            String limit = maxVersion == null || Py.strip(maxVersion).isEmpty() ? null : Py.strip(maxVersion);
+            int moved = GridStore.archiveGrids(limit);
+            Log.info("library archive up to version %s: %d grid(s) moved", Log.repr(maxVersion), moved);
+            return Json.obj("archived", moved);
         });
         w.get("/api/library/{grid_id}", r -> {
             String gridId = r.pathParams.get("grid_id");

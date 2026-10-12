@@ -386,6 +386,21 @@
         <button type="button" id="library-close-btn" class="nav-btn"
                 data-i18n-aria="libraryCloseBtn">✕</button>
       </div>
+      <!-- Archiving (localhost only, script.js's renderLibraryArchiveBar):
+           moves every grid published with the chosen Falcon version or an
+           older one to GRID_STORE/BACKUP/. -->
+      <div id="library-archive-bar" hidden>
+        <button type="button" id="library-archive-btn" data-i18n="libraryArchiveBtn">Archiver</button>
+        <label for="library-archive-version" data-i18n="libraryArchiveVersionLabel"></label>
+        <select id="library-archive-version"></select>
+        <span id="library-archive-result"></span>
+      </div>
+      <!-- Shown while the archived grids are listed. -->
+      <div id="library-archived-warning" hidden>
+        <p class="warning-text" data-i18n="libraryArchivedWarning"></p>
+        <button type="button" id="library-show-current-btn" class="nav-btn"
+                data-i18n="libraryShowCurrentBtn"></button>
+      </div>
       <div class="table-scroll">
         <table id="library-table">
           <thead>
@@ -432,6 +447,13 @@
         <span id="library-position"></span>
         <button type="button" id="library-next-btn" class="nav-btn"
                 data-i18n-aria="libraryNextBtn" disabled>▶</button>
+      </div>
+      <!-- End-of-list mention, shown while GRID_STORE/BACKUP/ holds grids
+           and the live library is listed. -->
+      <div id="library-archived-note" hidden>
+        <span data-i18n="libraryArchivedNote"></span>
+        <button type="button" id="library-show-archived-btn" class="nav-btn"
+                data-i18n="libraryShowArchivedBtn"></button>
       </div>
     </section>
 

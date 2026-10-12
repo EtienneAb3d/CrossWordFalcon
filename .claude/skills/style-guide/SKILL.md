@@ -4675,3 +4675,17 @@ end through the real running API (interactive start/step/save,
   known — 0.85em, normal weight (the cell itself is bold), `#777` like the
   table's own header text. No new token. **Visually confirmed** with
   Playwright/Chromium: "aberrant (aberrant; aberrer)" over "usage : 5/5".
+
+- **Library archiving controls** (`#library-archive-bar`,
+  `#library-archived-note`, `#library-archived-warning`), at the user's
+  explicit request. The localhost-only bar sits under `#library-header`:
+  an accent-blue "Archiver" button shrunk to the header's scale
+  (`font-size: 0.8rem; padding: 0.2rem 0.6rem`), its label, a version
+  `<select>` styled like the header selectors, and a muted `#777` outcome
+  text. The end-of-list mention is centered muted italic text (like
+  `#library-empty`) followed by a `.nav-btn`; the archived-list banner is a
+  centered `.warning-text` (bold `--error` red) followed by a `.nav-btn`
+  back to the current grids. No new token; the three bare-id `display:
+  flex` rules carry the usual `[hidden]` override. **Visually confirmed**
+  with Playwright/Chromium at 1400×1000: bar on one row under the header,
+  red banner above the archived list, mention and buttons as described.

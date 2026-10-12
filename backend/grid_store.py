@@ -36,6 +36,10 @@ from datetime import datetime
 from pathlib import Path
 
 GRID_STORE_DIR = Path(__file__).resolve().parent.parent / "GRID_STORE"
+# Archived grids (the Library's localhost-only "Archiver" button, see
+# archive_grids): same <language|bilingual>/<id>.json layout, one level
+# deeper, so GRID_STORE_DIR.glob("*/*.json") never reaches them.
+GRID_BACKUP_DIR = GRID_STORE_DIR / "BACKUP"
 VERSION_PATH = Path(__file__).resolve().parent.parent / "VERSION.txt"
 
 # Longest a title slug is ever allowed to grow to, regardless of how long
@@ -250,7 +254,16 @@ def _falcon_version():
         return None
 
 
-def _iter_stored_grids():
+def _version_key(version):
+    """Sort key of a `falcon_version` string ("2.9.6" -> (2, 9, 6), a
+    non-numeric part counting 0); a grid with no version sorts before
+    every versioned one."""
+    if not version:
+        return (-1,)
+    return tuple(int(part) if part.isdigit() else 0 for part in str(version).split("."))
+
+
+def _iter_stored_grids(archived=False):
     """Yields every stored grid's own compact metadata dict ({id,
     created_at, falcon_version, language, bilingual, pseudo, interactive, origin, theme,
     difficulty, title, width, height}) — never the full pattern/solution/
@@ -259,10 +272,12 @@ def _iter_stored_grids():
     dozen KB.
     A file that fails to parse (corrupted, or written by some future,
     incompatible version of save_grid_json) is skipped rather than
-    failing the whole listing."""
-    if not GRID_STORE_DIR.is_dir():
+    failing the whole listing. `archived` lists GRID_BACKUP_DIR instead
+    of the live library."""
+    base = GRID_BACKUP_DIR if archived else GRID_STORE_DIR
+    if not base.is_dir():
         return
-    for path in GRID_STORE_DIR.glob("*/*.json"):
+    for path in base.glob("*/*.json"):
         try:
             with open(path, encoding="utf-8") as f:
                 record = json.load(f)
@@ -309,7 +324,7 @@ def _iter_stored_grids():
         }
 
 
-def list_grids(preferred_language=None):
+def list_grids(preferred_language=None, archived=False):
     """Every stored grid's compact metadata, sorted at the user's explicit
     request: grids in `preferred_language` first, then English (unless
     that's already `preferred_language`, in which case there's no separate
@@ -336,7 +351,7 @@ def list_grids(preferred_language=None):
             return 1
         return 2
 
-    grids = list(_iter_stored_grids())
+    grids = list(_iter_stored_grids(archived))
     grids.sort(key=lambda e: e.get("created_at") or "", reverse=True)
     grids.sort(key=group)
     return grids
@@ -356,13 +371,71 @@ def get_grid(grid_id):
     if not _GRID_ID_RE.match(grid_id):
         return None
     matches = list(GRID_STORE_DIR.glob(f"*/{grid_id}.json"))
+    archived = not matches
+    if archived:
+        # A shared link to an archived grid still opens it.
+        matches = list(GRID_BACKUP_DIR.glob(f"*/{grid_id}.json"))
     if not matches:
         return None
     try:
         with open(matches[0], encoding="utf-8") as f:
-            return json.load(f)
+            record = json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
+    if archived:
+        record["archived"] = True
+    return record
+
+
+def has_archived_grids():
+    """Whether GRID_BACKUP_DIR holds at least one grid (the Library's
+    "Voir les grilles archivées" mention)."""
+    return GRID_BACKUP_DIR.is_dir() and any(GRID_BACKUP_DIR.glob("*/*.json"))
+
+
+def library_versions():
+    """The distinct `falcon_version` values of the live (non-archived)
+    grids, newest first, plus whether some grid carries none — the
+    Library's archive version selector."""
+    versions = set()
+    unversioned = False
+    for entry in _iter_stored_grids():
+        version = entry.get("falcon_version")
+        if version:
+            versions.add(version)
+        else:
+            unversioned = True
+    return {
+        "versions": sorted(versions, key=lambda v: (_version_key(v), v), reverse=True),
+        "unversioned": unversioned,
+    }
+
+
+def archive_grids(max_version=None):
+    """Moves every live grid published with `max_version` or an older
+    version (a grid with no version always counts as older) to
+    GRID_BACKUP_DIR/<same subdirectory>/; `max_version` None/empty moves
+    only the grids with no version. Returns how many were moved."""
+    limit = _version_key(max_version)
+    moved = 0
+    if not GRID_STORE_DIR.is_dir():
+        return 0
+    for path in GRID_STORE_DIR.glob("*/*.json"):
+        try:
+            with open(path, encoding="utf-8") as f:
+                record = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if _version_key(record.get("falcon_version")) > limit:
+            continue
+        target_dir = GRID_BACKUP_DIR / path.parent.name
+        target_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            path.replace(target_dir / path.name)
+        except OSError:
+            continue
+        moved += 1
+    return moved
 
 
 # ---------------------------------------------------------------------------
