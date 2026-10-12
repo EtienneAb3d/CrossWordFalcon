@@ -1,6 +1,6 @@
 # CrossWordFalcon
 
-CrossWordFalcon generates crossword grids, complete with clues, straight
+CrossWordFalcon generates crosswords, complete with clues, straight
 from a web page — in French, English, German, Spanish, Italian, or
 Portuguese. Pick a
 language, a size, and a difficulty level, and the app builds a full grid.

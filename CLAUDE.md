@@ -18,7 +18,7 @@ implementation depth.
 
 ## What this is
 
-**CrossWordFalcon** is a crossword grid generator for six languages
+**CrossWordFalcon** is a crossword generator for six languages
 (French, English, German, Spanish, Italian, Portuguese), usable from the
 CLI (`backend/crossword_gen.py`) or from a browser-playable web app backed
 by two FastAPI servers: `backend/app.py` (the API, port 3001) and

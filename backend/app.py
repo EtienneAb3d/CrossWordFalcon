@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Backend server: exposes the crossword grid generator (crossword_gen.py,
+Backend server: exposes the crossword generator (crossword_gen.py,
 all the generation business logic lives in backend/) via a JSON API. Serves
 no static files — only the routes listed below. Any other request gets
 FastAPI's default 404 response (the interactive documentation /docs, /redoc

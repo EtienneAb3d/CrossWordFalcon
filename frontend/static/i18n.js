@@ -14,7 +14,7 @@
 // blocks here in the same change — see the project-best-practices SKILL.
 const I18N = {
   fr: {
-    pageTitle: "CrossWordFalcon — générateur de grilles de mots croisés",
+    pageTitle: "CrossWordFalcon — générateur de mots croisés",
     languageLabel: "Langue",
     bilingualLanguageLabel: "Bilingue",
     widthLabel: "Largeur",
@@ -439,7 +439,7 @@ const I18N = {
     stats: (words, black, ratio) => `${words} mots placés — ${black} cases noires (${ratio}%)`,
   },
   en: {
-    pageTitle: "CrossWordFalcon — crossword grid generator",
+    pageTitle: "CrossWordFalcon — crossword generator",
     languageLabel: "Language",
     bilingualLanguageLabel: "Bilingual",
     widthLabel: "Width",
