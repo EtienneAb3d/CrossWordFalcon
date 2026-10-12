@@ -166,6 +166,7 @@ const wordVerificationTbody = document.getElementById("word-verification-tbody")
 const liveCluesWrap = document.getElementById("live-clues-wrap");
 const liveCluesList = document.getElementById("live-clues-list");
 const gridTitleEl = document.getElementById("grid-title");
+const gridArchivedWarning = document.getElementById("grid-archived-warning");
 const gridTitleTextEl = document.getElementById("grid-title-text");
 const gridDifficultyEl = document.getElementById("grid-difficulty");
 const gridTimerEl = document.getElementById("grid-timer");
@@ -4671,6 +4672,9 @@ function displayFinalGrid(gridData) {
   // is enough to show the #grid-title line.
   renderGridDifficulty();
   gridTitleEl.hidden = !gridData.title && gridDifficultyEl.hidden;
+  // A grid opened from the archive (an obsolete Falcon version, see
+  // backend/grid_store.py's get_grid) carries `archived`.
+  gridArchivedWarning.hidden = gridData.archived !== true;
   // Time counter: shows 0 for a grid with no saved game, or "where it was
   // at save time" (see savedGame above), but only starts the countdown on
   // the first letter typed (see ensureGridTimerRunning) — at the user's
@@ -8532,6 +8536,7 @@ function enterInteractiveMode(state) {
   recomputeBtn.hidden = true;
   attemptPreviewRevealBtn.hidden = true;
   gridTitleEl.hidden = true;
+  gridArchivedWarning.hidden = true;
   stats.textContent = "";
   generationTimes.textContent = "";
   // These duplicate the "reprise/recherche" history navigation of the

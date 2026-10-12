@@ -2942,7 +2942,8 @@ state, unlike the backend).
   `#library-archived-note` shown while `has_archived`, whose button lists
   the archived grids (`libraryShowArchived`, reset on every opening)
   under the `#library-archived-warning` banner and its "back to current
-  grids" button);
+  grids" button; a grid displayed with `archived: true` shows the red
+  `#grid-archived-warning` above its title, `displayFinalGrid`);
   the dictionary panel (root-family search, each form's "usage : X/5"
   line under it when its usage score is known, "Définir", "Thématique"/
   "Synonymes", bilingual-aware); the chatbot UI (Markdown rendering,

@@ -4129,6 +4129,11 @@ button:disabled {
   display: none;
 }
 
+/* Archived-grid notice above the playable grid's title. */
+#grid-archived-warning {
+  margin: 0 0 0.4rem;
+}
+
 #welcome-form label {
   text-align: left;
 }

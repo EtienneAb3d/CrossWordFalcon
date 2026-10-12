@@ -709,7 +709,10 @@ with a **Voir les grilles archivées / See archived grids** button
 filters, pagination and actions — under a red warning that they come
 from an obsolete version of Falcon and are of lower quality, next to a
 button going back to the current grids (`#library-archived-warning`).
-A shared link to an archived grid still opens it for play.
+A shared link to an archived grid still opens it for play; an archived
+grid opened this way or from the archived list shows, above its title, a
+red warning that it was produced with an obsolete version of Falcon and
+may be of lower quality (`#grid-archived-warning`, `displayFinalGrid`).
 
 ## While a grid is generating
 

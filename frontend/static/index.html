@@ -811,6 +811,10 @@
            #grid-timer). Hidden by default ("Interactif" mode, or
            before a playable grid exists) — see
            hideInteractivePanel()/startGridTimer(). -->
+      <!-- Shown above the title when the grid on screen comes from the
+           archive (GRID_STORE/BACKUP/, GET /api/library/{grid_id}'s
+           `archived`), see displayFinalGrid. -->
+      <p id="grid-archived-warning" class="warning-text" data-i18n="gridArchivedWarning" hidden></p>
       <div id="grid-title-row">
         <h2 id="grid-title" hidden><span id="grid-title-text"></span><span id="grid-difficulty" hidden></span></h2>
         <span id="grid-timer" hidden></span>

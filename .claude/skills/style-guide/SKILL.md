@@ -4689,3 +4689,9 @@ end through the real running API (interactive start/step/save,
   flex` rules carry the usual `[hidden]` override. **Visually confirmed**
   with Playwright/Chromium at 1400×1000: bar on one row under the header,
   red banner above the archived list, mention and buttons as described.
+- **Archived-grid notice on the playable grid** (`#grid-archived-warning`),
+  at the user's explicit request: a `.warning-text` paragraph (bold, centered,
+  `--error` red) right above `#grid-title-row`, `margin: 0 0 0.4rem`, shown
+  only for a grid loaded from the archive. **Visually confirmed** with
+  Playwright/Chromium: above the title for an archived grid, absent for a
+  live one.
