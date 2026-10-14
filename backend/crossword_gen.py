@@ -16597,9 +16597,12 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     def _publish_live_preview():
         if on_live_preview is None:
             return
+        # Shallow copies, taken under the lock: the receiver (backend/
+        # app.py's `_on_live_preview`) annotates and keeps the tiles it gets,
+        # and must never touch the ones this function keeps writing to.
         with live_state_lock:
             snapshot = sorted(
-                live_state_by_process.values(),
+                (dict(e) for e in live_state_by_process.values()),
                 key=lambda e: (e["process_number"] is None, e["process_number"]),
             )
         on_live_preview(snapshot)
@@ -17019,6 +17022,13 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # entries across the non-reset slots, just like for "fresh
                 # pattern" below.
                 reset_count = FULL_RESET_ATTEMPT_COUNT
+                # Every attempt left without a distinct pool grid of its own
+                # (grids dropped or merged at the cleanup) starts from a new
+                # grid instead of resuming an already-assigned one, so the
+                # palier always searches as many distinct grids as workers.
+                if carry_seed_pool_continue:
+                    reset_count = min(PARALLEL_ATTEMPTS,
+                                      max(reset_count, PARALLEL_ATTEMPTS - len(continue_pool)))
                 # "Lineage" number (see `_build_dispatch_lineage`)
                 # inherited by each of THIS palier's own PARALLEL_ATTEMPTS
                 # tasks, even before submitting them — `continue_pool_
@@ -17089,6 +17099,14 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     min(PARALLEL_ATTEMPTS, FULL_RESET_ATTEMPT_COUNT + carry_discarded_count)
                     if just_cleaned else 0
                 )
+                # Every worker left without a distinct pool grid of its own
+                # (grids dropped or merged at the cleanup) starts from a
+                # blank grid instead of resuming an already-assigned one,
+                # so the palier always searches as many distinct grids as
+                # workers.
+                if carry_seed_pool:
+                    reset_count = min(PARALLEL_ATTEMPTS,
+                                      max(reset_count, PARALLEL_ATTEMPTS - len(pool)))
                 # `pool` (see `carry_seed_pool`'s own definition above)
                 # already computed at the very start of this palier, for
                 # the "Génération du motif de cases noires" preview —

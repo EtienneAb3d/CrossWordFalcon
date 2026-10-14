@@ -4766,3 +4766,11 @@ end through the real running API (interactive start/step/save,
   `background-color`/`box-shadow`, so nothing else changes. **Visually
   confirmed** with Playwright/Chromium on a real 9x9 English grid (computed
   `background-size: 100% 100%`, full blue squares) and on its PDF.
+
+- **Presets under the American style**: while "Style de motif" is
+  "Groupé/aligné (américain/NYT)", every "Préconfigurations" option shows
+  and applies an 18 % black rate (`script.js`'s `presetBlack`,
+  `GROUPED_MIN_BLACK_PERCENT`); the list is rebuilt whenever the style
+  changes. No visual change otherwise. **Visually confirmed** with
+  Playwright/Chromium: the eight options read "… 18 % noir", picking
+  Mocha sets 20/20/18, and switching back to Aéré restores 0/10/12/15 %.

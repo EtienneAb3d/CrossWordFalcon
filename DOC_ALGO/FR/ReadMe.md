@@ -2535,8 +2535,13 @@ Une grille qui compte, en fin de palier, plus de `BLACK_OVERFLOW_FACTOR`
   place revient à une tentative partant d'une grille vierge ; en reprise
   « telle quelle », les grilles restantes se partagent les tentatives.
 
-Si plus aucune grille ne reste à reprendre, le palier suivant repart d'une
-grille vierge, comme quand toutes les grilles sont écartées. La règle ne
+Chaque tentative du palier suivant qui n'a pas de grille reprise qui lui
+soit propre (grilles écartées, ou fusionnées parce qu'identiques) part
+d'une **grille neuve** au lieu de reprendre une grille déjà attribuée à
+une autre tentative : un palier cherche toujours autant de grilles
+distinctes que de processeurs (`generate_grid`, `reset_count`, en reprise
+« telle quelle » comme après un nettoyage complet). Si plus aucune grille
+ne reste à reprendre, le palier suivant repart d'une grille vierge, comme quand toutes les grilles sont écartées. La règle ne
 s'applique pas quand l'objectif vaut 0, ni quand les cases noires
 permanentes (« Finir la grille ») dépassent à elles seules la limite.
 

@@ -102,7 +102,8 @@ full again whenever a new generation or an Interactive session starts.
   in bold followed by width x height and black rate: Ristretto noisette
   (6x6, 0 %), Expresso latte (10x10, 10 %), Macchiato (15x10, 12 %),
   Cappuccino (15x15, 15 %), Mocha (20x20, 15 %), Tazza grande (30x20, 15 %),
-  Frappuccino (30x30, 15 %), Caffeteria (50x50, 15 %). Picking one fills Largeur, Hauteur and Taux
+  Frappuccino (30x30, 15 %), Caffeteria (50x50, 15 %) — every one at
+  18 % while the pattern style is Grouped/aligned (American). Picking one fills Largeur, Hauteur and Taux
   noir at once; the three fields stay editable. The button shows the
   preset matching the current values, or "Personnalisée / Custom" when
   none does. Presets wider or taller than 20 cells are greyed out when the
@@ -184,7 +185,8 @@ full again whenever a new generation or an Interactive session starts.
   one, and in Interactive mode a 2-letter word is flagged invalid).
   Such a grid draws its black cells as full squares — on screen, in the
   previews and in the PDF/SVG/PNG pages — instead of the usual centered
-  half-size square. Choosing English
+  half-size square. Selecting Grouped/aligned raises Taux noir to 18 % if
+  it was lower (it can then be lowered again by hand). Choosing English
   as the language selects Grouped/aligned and the Diagonal symmetry (`frontend/static/script.js`,
   `setUiLanguage`; `backend/crossword_gen.py`, `PATTERN_STYLES`,
   `_place_black_cells`).

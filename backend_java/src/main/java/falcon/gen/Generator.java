@@ -848,9 +848,12 @@ public final class Generator {
         };
         Runnable publishLive = () -> {
             if (p.onLivePreview == null) return;
-            List<Map<String, Object>> snap;
+            // Shallow copies, taken under the lock: the receiver (App's onLivePreview) annotates and keeps the tiles
+            // it gets, and must never touch the ones liveState keeps writing to (a ConcurrentModificationException
+            // in copyWithoutPrevious otherwise).
+            List<Map<String, Object>> snap = new ArrayList<>();
             synchronized (liveLock) {
-                snap = new ArrayList<>(liveState.values());
+                for (Map<String, Object> e : liveState.values()) snap.add(new LinkedHashMap<>(e));
             }
             p.onLivePreview.accept(sortExamplesByProcess(snap));
         };
@@ -1056,6 +1059,11 @@ public final class Generator {
                 Map<Long, Integer> seedToSlot = new ConcurrentHashMap<>();
                 if (carryPreseed != null) {
                     int resetCount = FULL_RESET_ATTEMPT_COUNT;
+                    // Every attempt left without a distinct pool grid of its own starts from a new grid instead of
+                    // resuming an already-assigned one: as many distinct grids as workers.
+                    if (carrySeedPoolContinue != null && !carrySeedPoolContinue.isEmpty()) {
+                        resetCount = Math.min(PA, Math.max(resetCount, PA - continuePool.size()));
+                    }
                     dispatchLineage = Cleanup.buildDispatchLineage(PA, resetCount,
                             carrySeedPoolContinueLineage != null && !carrySeedPoolContinueLineage.isEmpty() ? continuePoolLineage : null);
                     publishDispatchMaps(seeds, dispatchLineage, seedToLineage, seedToSlot, seedToLineageRef, seedToSlotRef);
@@ -1080,6 +1088,11 @@ public final class Generator {
                     }
                 } else {
                     int resetCount = justCleaned ? Math.min(PA, FULL_RESET_ATTEMPT_COUNT + carryDiscardedCount) : 0;
+                    // Every worker left without a distinct pool grid of its own starts from a blank grid instead of
+                    // resuming an already-assigned one: as many distinct grids as workers.
+                    if (carrySeedPool != null && !carrySeedPool.isEmpty()) {
+                        resetCount = Math.min(PA, Math.max(resetCount, PA - pool.size()));
+                    }
                     // "pattern_generated" preview: each original worker records the pattern it draws
                     // (patternAttempt, ctx.earlyPatterns) and the harvest loop publishes the preview once every
                     // pattern of the plan is in (publishPatternPreview). Plan entries: {seed, locked letters,

@@ -281,6 +281,22 @@ const wordsPerNodeInput = document.getElementById("words-per-node");
 const symmetrySelect = document.getElementById("symmetry");
 // "Style de motif" (GenerateRequest.pattern_style): "airy" or "grouped".
 const patternStyleSelect = document.getElementById("pattern-style");
+// Selecting the "grouped" (American) style raises "Taux noir" to at least
+// this percentage; the player may lower it again afterwards.
+const GROUPED_MIN_BLACK_PERCENT = 18;
+
+function applyGroupedBlackMinimum() {
+  // The presets' black rates follow the pattern style (presetBlack).
+  if (gridPresetsReady) renderGridPresets();
+  if (patternStyleSelect.value !== "grouped") return;
+  const current = Number(blackEnrichmentInput.value);
+  if (!(current >= GROUPED_MIN_BLACK_PERCENT)) {
+    blackEnrichmentInput.value = GROUPED_MIN_BLACK_PERCENT;
+    if (gridPresetsReady) syncGridPresetSelection();
+  }
+}
+
+patternStyleSelect.addEventListener("change", applyGroupedBlackMinimum);
 // "Thématique" field — shared const so both the generation form's submit
 // handler and Interactive mode's own enterInteractiveMode() (re-filling
 // it from a re-edited grid's own origin theme, at the user's explicit
@@ -3344,6 +3360,7 @@ function setUiLanguage(lang) {
   if (lang === "en") {
     symmetrySelect.value = "diagonal";
     patternStyleSelect.value = "grouped";
+    applyGroupedBlackMinimum();
   }
   // Bilingual grid, at the user's explicit request: "the first language
   // selector sets the interface language, and forces the second language
@@ -3730,10 +3747,16 @@ function gridPresetAllowed(preset) {
     || (preset.width <= REMOTE_MAX_DIMENSION && preset.height <= REMOTE_MAX_DIMENSION);
 }
 
+// A preset's black rate: GROUPED_MIN_BLACK_PERCENT for every preset under
+// the "grouped" (American) pattern style, its own otherwise.
+function presetBlack(preset) {
+  return patternStyleSelect.value === "grouped" ? GROUPED_MIN_BLACK_PERCENT : preset.black;
+}
+
 function matchingGridPreset() {
   return GRID_PRESETS.find((p) => String(p.width) === widthInput.value
     && String(p.height) === heightInput.value
-    && String(p.black) === blackEnrichmentInput.value) || null;
+    && String(presetBlack(p)) === blackEnrichmentInput.value) || null;
 }
 
 // Fills `el` with "<b>name</b> : WxH N % noir".
@@ -3742,7 +3765,7 @@ function fillGridPresetText(el, preset) {
   el.textContent = "";
   const name = document.createElement("strong");
   name.textContent = preset.name;
-  el.append(name, t.presetDescription(preset.width, preset.height, preset.black));
+  el.append(name, t.presetDescription(preset.width, preset.height, presetBlack(preset)));
 }
 
 function syncGridPresetSelection() {
@@ -3784,7 +3807,7 @@ function applyGridPreset(preset) {
   if (!gridPresetAllowed(preset)) return;
   widthInput.value = String(preset.width);
   heightInput.value = String(preset.height);
-  blackEnrichmentInput.value = String(preset.black);
+  blackEnrichmentInput.value = String(presetBlack(preset));
   syncGridPresetSelection();
   closeGridPresetList();
   presetSelectBtn.focus();
@@ -8475,7 +8498,10 @@ function enterInteractiveMode(state) {
       wordsPerNodeInput.value = gp.words_per_node;
     }
     if (gp.symmetry) symmetrySelect.value = gp.symmetry;
-    if (gp.pattern_style) patternStyleSelect.value = gp.pattern_style;
+    if (gp.pattern_style) {
+      patternStyleSelect.value = gp.pattern_style;
+      if (gridPresetsReady) renderGridPresets();
+    }
     if (gp.theme_precision !== undefined && gp.theme_precision !== null) {
       document.getElementById("theme-precision").value = gp.theme_precision;
     }

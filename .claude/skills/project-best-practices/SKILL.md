@@ -2356,7 +2356,14 @@ the current defaults/behavior to know before touching this code.
   starts from a blank grid; the objective is `max(round(rows*cols*
   black_ratio), round(black_enrichment_fraction*rows*cols))`; the rule is
   off when it is 0 or when the permanent black cells alone exceed the
-  limit.
+  limit. Every worker left without a distinct pool grid of its own starts
+  from a new grid — the user's rule: when several grids fail, new grids
+  are generated so there are always as many grids as processors (a pool
+  grid is never resumed by two workers once a pool was built).
+- **Selecting the American ("grouped") style raises "Taux noir" to at
+  least 18 %** (`script.js`'s `GROUPED_MIN_BLACK_PERCENT`), the user's
+  rule; the player may lower it again by hand. Under that style every "Préconfigurations" preset
+  shows and applies 18 % (`presetBlack`), the user's rule.
 - **Both cross-palier resume paths start the next palier the same way**,
   differing only in their cleanup — the user's rule: "La différence est au
   niveau du nettoyage, pas au niveau du démarrage du cycle suivant. Ça

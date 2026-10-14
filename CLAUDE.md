@@ -568,7 +568,9 @@ own rng drawn from the parent's in candidate order:
    level on (`_place_black_cells(grouped=)`; pre-fill keeps its own
    never-adjacent rule); the web UI selects "grouped" and the diagonal
    symmetry whenever the language becomes English (`script.js`'s
-   `setUiLanguage`). Under "grouped" the grid's lexicon has no word
+   `setUiLanguage`), and selecting "grouped" raises "Taux noir" to at
+   least `GROUPED_MIN_BLACK_PERCENT` (18, `applyGroupedBlackMinimum`; the
+   player may lower it again). Under "grouped" the grid's lexicon has no word
    shorter than `GROUPED_MIN_SLOT_LENGTH` (`style_index`, Java
    `Words.styleIndex`: a shallow copy of the cached index without those
    lengths, applied by `generate_grid`, which also ignores such a "Mots
@@ -1019,7 +1021,14 @@ and dropped when it still holds that many. After a full cleanup every
 dropped grid (overflowing success included) adds a blank-grid worker to the
 next palier (`discarded_count`); with no grid left to resume, the next
 palier starts from a blank grid. Off when the objective is 0 or when
-`permanent_black_cells` alone exceed the limit.
+`permanent_black_cells` alone exceed the limit. Every worker of a palier left without a
+distinct pool grid of its own (grids dropped, or merged as identical)
+starts from a new grid rather than resuming one already assigned:
+`reset_count` is at least `PARALLEL_ATTEMPTS - len(pool)` whenever a
+pool was built (`carry_seed_pool`/`carry_seed_pool_continue`, Java
+`carrySeedPool`/`carrySeedPoolContinue`), on "reprise telle quelle" and
+after a full cleanup alike, so a palier always searches as many distinct
+grids as workers.
 
 **Early hardclean** (`EARLY_HARDCLEAN_PERCENT` = 10, 100 = off; Java
 `Filler.EARLY_HARDCLEAN_PERCENT`): the second chance's hard clean, triggered
@@ -2096,7 +2105,12 @@ test was skipped over for arbitrarily long stretches — a worker then
 published no heartbeat, no progress, and noticed neither "Stop" nor a
 sibling's early-stop signal, while its live tile stayed blue and frozen.
 
-Every live-preview example dict (`on_live_preview`'s own `examples`
+`on_live_preview` always receives shallow copies of the stored tiles,
+taken under the live-state lock (`_publish_live_preview`, Java
+`Generator`'s `publishLive`): `backend/app.py`'s callback annotates and
+keeps the tiles it gets, and must never write to the ones the generator
+keeps copying (`_one_step_previous`/`copyWithoutPrevious`) from other
+threads. Every live-preview example dict (`on_live_preview`'s own `examples`
 argument) also carries `budget_percent` — that one process's own share of
 `checks_progress` (via `seed_to_checks_slot`, mirrored by `seed_to_
 lineage`), expressed as a percentage of `resolved_deadline_checks` and never capped
@@ -2899,7 +2913,9 @@ state, unlike the backend).
   Its first line, "Préconfigurations" (`#preset-select`), is a custom
   listbox (`script.js`'s `GRID_PRESETS`/`renderGridPresets`/
   `applyGridPreset`) filling `#width`/`#height`/`#black-enrichment` from
-  eight named formats (6x6 0 % to 50x50 15 %), frontend-only; the
+  eight named formats (6x6 0 % to 50x50 15 %; every one at
+  `GROUPED_MIN_BLACK_PERCENT`, 18 %, under the "grouped" pattern style,
+  `presetBlack`), frontend-only; the
   button shows the preset matching the three fields (`syncGridPresetSelection`),
   presets above `REMOTE_MAX_DIMENSION` are disabled off localhost.
   The form ends with the "Générer les mots croisés :" row (`#generate-row`):
