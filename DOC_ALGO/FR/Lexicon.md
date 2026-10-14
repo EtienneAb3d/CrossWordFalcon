@@ -255,8 +255,8 @@ plusieurs signaux) :
   sont posées le plus loin possible les unes des autres, jamais côte à
   côte. **Groupé/aligné (américain/NYT)** : elles sont posées au plus
   près des cases noires déjà posées, de préférence en prolongeant un
-  alignement (suite horizontale ou verticale de cases noires collées),
-  sans aucun mot de 2 lettres (absents de son dictionnaire), et le long d'un bord
+  alignement (suite horizontale ou verticale de cases noires collées)
+  sans dépasser 4 cases noires alignées, sans aucun mot de 2 lettres (absents de son dictionnaire), et le long d'un bord
   seulement en dernier recours ; une fois le taux atteint, une case noire
   touchant par au moins 3 de ses côtés une case noire ou le bord de la grille est retirée et le tirage
   relancé (dégroupage). L'anglais sélectionne par défaut le style

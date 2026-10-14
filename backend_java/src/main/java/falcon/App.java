@@ -1817,6 +1817,8 @@ public final class App {
                     INTERACTIVE_CLUE_GENERATOR != CLUE_GENERATOR ? INTERACTIVE_CLUE_GENERATOR.model : null,
                     Themes.EMBEDDER.model, layers > 0);
             info.put("experimental_notice", EXPERIMENTAL_NOTICE);
+            // Which back-end implementation answers (the Python one reports "python").
+            info.put("backend", "java");
             return info;
         });
         w.get("/api/library", r -> libraryPage(r.q("preferred_language", "fr"), r.qInt("page", 1), "all", List.of(), "all", "all", null));

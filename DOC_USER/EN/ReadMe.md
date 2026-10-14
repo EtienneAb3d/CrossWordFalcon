@@ -101,7 +101,7 @@ full again whenever a new generation or an Interactive session starts.
   form) — a drop-down of ready-made grid formats, each shown as its name
   in bold followed by width x height and black rate: Ristretto noisette
   (6x6, 0 %), Expresso latte (10x10, 10 %), Macchiato (15x10, 12 %),
-  Cappuccino (15x15, 15 %), Mocha (20x20, 15 %), Tazza grande (30x20, 15 %),
+  Cappuccino (15x15, 15 %), Mocha (21x21, 15 %), Tazza grande (30x20, 15 %),
   Frappuccino (30x30, 15 %), Caffeteria (50x50, 15 %) — every one at
   18 % while the pattern style is Grouped/aligned (American). Picking one fills Largeur, Hauteur and Taux
   noir at once; the three fields stay editable. The button shows the
@@ -208,7 +208,10 @@ full again whenever a new generation or an Interactive session starts.
   need a slower mode to succeed at all. **Ultra**, **Megatron** and **GridZilla** are only
   selectable when the page is opened on the local machine; from another
   machine on the network their options are greyed out and unavailable
-  (`frontend/static/script.js`, `restrictHeavyModesToLocalhost`). The
+  (`frontend/static/script.js`, `restrictHeavyModesToLocalhost`), except
+  **Ultra** when the server runs the Java back end: it is then selectable
+  from any machine and selected by default (`frontend/static/script.js`,
+  `applyBackendModeDefaults`). The
   same mode is used by **Finir la grille / Finish the grid** and **Finir
   la zone / Finish the zone** in Interactive mode.
 - **Précision thématique / Theme precision** (`#theme-precision`, left

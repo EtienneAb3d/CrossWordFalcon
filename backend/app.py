@@ -1930,6 +1930,8 @@ def system_info():
     )
     # See EXPERIMENTAL_NOTICE's own comment above.
     info["experimental_notice"] = EXPERIMENTAL_NOTICE
+    # Which back-end implementation answers (the Java one reports "java").
+    info["backend"] = "python"
     return info
 
 

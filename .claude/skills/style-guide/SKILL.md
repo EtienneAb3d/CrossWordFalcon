@@ -2392,14 +2392,15 @@ English (see `project-best-practices`).
   - **Largeur / Width** (`#width`) and **Hauteur / Height** (`#height`):
     on **every** origin, a committed value below 5 (`MIN_DIMENSION`) is
     forced back to 5 on `blur`/`change` (an empty field is left alone,
-    still being edited). Off localhost, a value above 20
-    (`REMOTE_MAX_DIMENSION`) is forced back to 20 the same way, and the
-    inputs' own `max` attribute is lowered from 50 to 20 so native
+    still being edited). Off localhost, a value above 21
+    (`REMOTE_MAX_DIMENSION`) is forced back to 21 the same way, and the
+    inputs' own `max` attribute is lowered from 50 to 21 so native
     validation blocks a larger value on submit too. On `localhost` the
     `max="50"` markup is untouched.
   - The **Ultra**, **Megatron** and **GridZilla** `<option>`s on `#mode` are `disabled`
     off localhost (`LOCALHOST_ONLY_MODES`,
-    `restrictHeavyModesToLocalhost`). **A
+    `restrictHeavyModesToLocalhost`) — Ultra excepted with the Java back
+    end, re-enabled and selected by `applyBackendModeDefaults`. **A
     disabled `<option>` is greyed out and unselectable by the browser's
     own native rendering**, which is exactly what "en grisé non
     cliquable" asks for; a custom rule would only risk diverging from the
@@ -4773,4 +4774,4 @@ end through the real running API (interactive start/step/save,
   `GROUPED_MIN_BLACK_PERCENT`); the list is rebuilt whenever the style
   changes. No visual change otherwise. **Visually confirmed** with
   Playwright/Chromium: the eight options read "… 18 % noir", picking
-  Mocha sets 20/20/18, and switching back to Aéré restores 0/10/12/15 %.
+  Mocha sets 21/21/18, and switching back to Aéré restores 0/10/12/15 %.

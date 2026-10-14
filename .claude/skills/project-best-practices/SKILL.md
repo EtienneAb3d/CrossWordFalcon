@@ -339,7 +339,7 @@ project's engineering language.
   (fr/en/de/es/it/pt) the request is in.
 - Grid dimensions (`width`/`height`) are independent, default 15×15, with
   a range of 5 to 50 in the web API (`GenerateRequest`, Java `GenReq`, and
-  the `max` of the form's `#width`/`#height` inputs — 20 off localhost);
+  the `max` of the form's `#width`/`#height` inputs — 21 off localhost, the NYT Sunday size);
   the CLI has no upper bound. Below 5 a grid stops making sense as a
   crossword; 50 is the largest preset ("Caffeteria", 50x50).
 - The web UI is a playable crossword, not a read-only viewer: the grid
@@ -1058,6 +1058,11 @@ the current defaults/behavior to know before touching this code.
   grouped ("Groupé/aligné") style: prefer cells building straight bars of
   adjacent black cells (`_black_line_length`); no 2-letter slot — only
   black cells leaving slots of 3 letters or more (`_leaves_short_run`);
+  no candidate building a line of more than 4 adjacent black cells,
+  across or down, while the pattern is generated (`GROUPED_MAX_BLACK_LINE`,
+  `_makes_long_black_line`; choice made with that rule, to revisit with
+  the user: the ratio draw and pre-fill both apply it, the later
+  cross-palier repairs and reshapes do not);
   a border cell extending a black cell along the same border only when no
   other candidate is possible (`_extends_border_line`). Choices made with
   these rules, to revisit with the user: a bar is preferred whatever its
@@ -1401,7 +1406,8 @@ the current defaults/behavior to know before touching this code.
   selector (`backend/app.py`'s `BUDGET_MODES`: flash=1,000, turbo=10,000,
   fast=100,000, medium=500,000 [default], ultra=5,000,000,
   megatron=20,000,000, gridzilla=100,000,000 — Ultra, Megatron and
-  GridZilla offered by the UI on localhost only) instead sends
+  GridZilla offered by the UI on localhost only, except Ultra with the
+  Java back end, offered everywhere and selected by default there) instead sends
   an explicit value, threaded through `generate_grid(deadline_checks=...)`
   → `_pattern_attempt`/`_pattern_continue` → `try_fill`, overriding the
   grid-size formula entirely for that request. The CLI and any other

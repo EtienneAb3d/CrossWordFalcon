@@ -462,7 +462,12 @@ automatic completion to a selected region instead of the whole grid,
 ultra: 5000000, megatron: 20000000, gridzilla: 100000000}` sets the CSP search-check budget per
 attempt for the "Mode" selector; the web UI disables its Ultra,
 Megatron and GridZilla options off localhost (`script.js`'s `LOCALHOST_ONLY_MODES`/
-`restrictHeavyModesToLocalhost`, frontend-only — the API accepts them all).
+`restrictHeavyModesToLocalhost`, frontend-only — the API accepts them all),
+except Ultra with the Java back end: `GET /api/system_info` carries
+`backend` (`"python"`/`"java"`), and on `"java"` `applyBackendModeDefaults`
+enables Ultra everywhere and selects it (`JAVA_BACKEND_DEFAULT_MODE`)
+unless the player already picked a mode (`modeChosenByUser`).
+Off localhost, the form caps width/height at `REMOTE_MAX_DIMENSION` (21).
 The UI no longer offers "Graines" (`force_letters_percent`, left at its
 default 0); `Automation/Populate.py` sends `black_enrichment_percent` 15
 and `force_letters_percent` 0 explicitly. `WORDLISTS` maps each of the six language codes to its
@@ -558,7 +563,10 @@ own rng drawn from the parent's in candidate order:
    accepts an adjacent cell as a last resort (`forbid_adjacency=not
    grouped`), so it can cut a 2-letter slot a cleanup left (each of its
    cells touches its bounding black cell); Java
-   `Grids.leavesShortRun`), a border cell with a black neighbour along
+   `Grids.leavesShortRun`) and if it builds no straight line of more than
+   `GROUPED_MAX_BLACK_LINE` (4) adjacent black cells, across or down
+   (`_makes_long_black_line`, pre-fill too; Java `Grids.makesLongBlackLine`),
+   a border cell with a black neighbour along
    that border is taken only once every run is selected with no other
    valid cell (`_extends_border_line`), only the cells forming a straight
    bar of at least 2 adjacent black cells are kept before the

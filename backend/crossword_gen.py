@@ -973,6 +973,20 @@ def _leaves_short_run(grid, rows, cols, cells):
     return False
 
 
+# Longest straight line of adjacent black cells, across or down, the
+# "grouped" pattern style lets a black cell it places build
+# (`_makes_long_black_line`).
+GROUPED_MAX_BLACK_LINE = 4
+
+
+def _makes_long_black_line(grid, rows, cols, cells):
+    """True when one of `cells` — black in `grid` — belongs to a straight
+    line of adjacent black cells, across or down, longer than
+    `GROUPED_MAX_BLACK_LINE`."""
+    return any(_black_line_length(grid, rows, cols, r, c) > GROUPED_MAX_BLACK_LINE
+               for r, c in cells)
+
+
 # "Grouped" pattern style's de-clumping (`_declump_black_cells`): a drawn
 # black cell with more than this many sides (left, right, up, down) on a
 # black cell or the grid's border is taken off once the ratio draw reaches its target, then the draw
@@ -1617,7 +1631,8 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     `candidates`' shuffled order; adjacency is accepted from the first
     level on (`forbid_adjacency` ignored); a cell (with its images) is
     valid only if it leaves no slot shorter than `GROUPED_MIN_SLOT_LENGTH`
-    next to it (`_leaves_short_run`).
+    next to it (`_leaves_short_run`) and builds no line of black cells
+    longer than `GROUPED_MAX_BLACK_LINE` (`_makes_long_black_line`).
 
     `candidates` is updated in place (placed cells removed). Returns
     (placed, unplaced cells)."""
@@ -1651,7 +1666,8 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
         for cr, cc in group:
             grid[cr][cc] = BLACK
         try:
-            if grouped and _leaves_short_run(grid, rows, cols, group):
+            if grouped and (_leaves_short_run(grid, rows, cols, group)
+                            or _makes_long_black_line(grid, rows, cols, group)):
                 return False
             if len(group) == 1:
                 return True
@@ -2291,7 +2307,8 @@ def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates
 
     `grouped` (the "grouped" `PATTERN_STYLES`): a cell (with its images) is
     placed only if it leaves no slot shorter than `GROUPED_MIN_SLOT_LENGTH`
-    next to it (`_leaves_short_run`)."""
+    next to it (`_leaves_short_run`) and builds no line of black cells
+    longer than `GROUPED_MAX_BLACK_LINE` (`_makes_long_black_line`)."""
     count = 0
     unfixable = set()
     zone_footprints = []  # [cases_d_origine (set), cases_noires_ajoutées (int)]
@@ -2367,7 +2384,8 @@ def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates
                     continue
                 for gr, gc in group:
                     grid[gr][gc] = BLACK
-                if (not (grouped and _leaves_short_run(grid, rows, cols, group))
+                if (not (grouped and (_leaves_short_run(grid, rows, cols, group)
+                                      or _makes_long_black_line(grid, rows, cols, group)))
                         and is_structurally_valid(grid, rows, cols, min_interior_free=1)):
                     for gr, gc in group:
                         row_black[gr] += 1

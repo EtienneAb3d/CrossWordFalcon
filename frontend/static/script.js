@@ -481,6 +481,7 @@ fetch("/api/system_info")
     if (data && data.experimental_notice === false) {
       welcomeExperimentalNotice.hidden = true;
     }
+    applyBackendModeDefaults(data);
   })
   .catch(() => {});
 
@@ -3678,12 +3679,12 @@ function isLocalhostOrigin() {
 }
 
 const MIN_DIMENSION = 5;
-const REMOTE_MAX_DIMENSION = 20;
+const REMOTE_MAX_DIMENSION = 21;
 
 // Width/height are forced back into range whenever the field loses focus
 // (or the entry is committed): never below MIN_DIMENSION (5), on every
 // origin; and — off localhost only — never above REMOTE_MAX_DIMENSION
-// (20), where the <input max> attribute is also lowered from 50 to 20 so
+// (21), where the <input max> attribute is also lowered from 50 to 21 so
 // the browser's own native validation blocks a larger value on submit
 // too. An empty field is left alone (still being edited; `required` +
 // `min` already block a submit).
@@ -3711,16 +3712,30 @@ const REMOTE_MAX_DIMENSION = 20;
 // localhost: off it, their <option>s are disabled — greyed out and
 // non-selectable by the browser's own native rendering, no extra CSS
 // needed — and a leftover value of any of them falls back to "medium".
+// With the Java back end (GET /api/system_info's `backend: "java"`),
+// "Ultra" is offered everywhere and selected by default
+// (`applyBackendModeDefaults`, unless the player already picked a mode).
 const LOCALHOST_ONLY_MODES = ["ultra", "megatron", "gridzilla"];
+const JAVA_BACKEND_DEFAULT_MODE = "ultra";
+const modeSelect = document.getElementById("mode");
+let modeChosenByUser = false;
+modeSelect.addEventListener("change", () => { modeChosenByUser = true; });
 (function restrictHeavyModesToLocalhost() {
   if (isLocalhostOrigin()) return;
-  const modeSelect = document.getElementById("mode");
   for (const mode of LOCALHOST_ONLY_MODES) {
     const option = modeSelect.querySelector(`option[value="${mode}"]`);
     if (option) option.disabled = true;
   }
   if (LOCALHOST_ONLY_MODES.includes(modeSelect.value)) modeSelect.value = "medium";
 })();
+
+function applyBackendModeDefaults(info) {
+  if (!info || info.backend !== "java") return;
+  const option = modeSelect.querySelector(`option[value="${JAVA_BACKEND_DEFAULT_MODE}"]`);
+  if (!option) return;
+  option.disabled = false;
+  if (!modeChosenByUser) modeSelect.value = JAVA_BACKEND_DEFAULT_MODE;
+}
 
 // "Préconfigurations" drop-down (#preset-select): one click fills
 // Largeur (horizontal), Hauteur (vertical) and Taux noir. A custom
@@ -3734,7 +3749,7 @@ const GRID_PRESETS = [
   { name: "Expresso latte", width: 10, height: 10, black: 10 },
   { name: "Macchiato", width: 15, height: 10, black: 12 },
   { name: "Cappuccino", width: 15, height: 15, black: 15 },
-  { name: "Mocha", width: 20, height: 20, black: 15 },
+  { name: "Mocha", width: 21, height: 21, black: 15 },
   { name: "Tazza grande", width: 30, height: 20, black: 15 },
   { name: "Frappuccino", width: 30, height: 30, black: 15 },
   { name: "Caffeteria", width: 50, height: 50, black: 15 },
@@ -8488,8 +8503,10 @@ function enterInteractiveMode(state) {
   // has none, and every field below is simply left untouched.
   if (state.generation_params) {
     const gp = state.generation_params;
-    const modeSelect = document.getElementById("mode");
-    if (gp.mode && modeSelect.querySelector(`option[value="${gp.mode}"]`)) modeSelect.value = gp.mode;
+    if (gp.mode && modeSelect.querySelector(`option[value="${gp.mode}"]`)) {
+      modeSelect.value = gp.mode;
+      modeChosenByUser = true;
+    }
     if (gp.black_enrichment_percent !== undefined && gp.black_enrichment_percent !== null) {
       blackEnrichmentInput.value = gp.black_enrichment_percent;
       syncGridPresetSelection();

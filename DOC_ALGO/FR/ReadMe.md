@@ -504,6 +504,10 @@ valeurs `PATTERN_STYLES`) choisit le critère de pose des cases noires
     couper un emplacement de 2 lettres hérité du nettoyage précédent
     (aucun mot de 2 lettres, donc aucun candidat), dont chaque case touche
     presque toujours la case noire qui le borne ;
+  - une case n'est valide que si elle (ou l'une de ses images) ne forme
+    **aucune ligne de plus de `GROUPED_MAX_BLACK_LINE` (4) cases noires**
+    côte à côte, horizontale ou verticale (`backend/crossword_gen.py`,
+    `_makes_long_black_line`) ; le pré-remplissage applique la même règle ;
   - une case du **bord** ayant une case noire voisine le long de ce même
     bord n'est prise que si, tous les segments étant retenus, aucune autre
     case n'est valide (`_extends_border_line`) ;

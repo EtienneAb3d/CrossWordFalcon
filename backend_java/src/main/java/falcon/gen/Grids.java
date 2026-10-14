@@ -712,6 +712,23 @@ public final class Grids {
         return false;
     }
 
+    /**
+     * Longest straight line of adjacent black cells, across or down, the "grouped" pattern style lets a black cell it
+     * places build ({@link #makesLongBlackLine}).
+     */
+    static final int GROUPED_MAX_BLACK_LINE = 4;
+
+    /**
+     * True when one of {@code cells} — black in {@code grid} — belongs to a straight line of adjacent black cells,
+     * across or down, longer than {@link #GROUPED_MAX_BLACK_LINE}.
+     */
+    static boolean makesLongBlackLine(char[][] grid, int rows, int cols, List<Integer> cells) {
+        for (int cell : cells) {
+            if (blackLineLength(grid, rows, cols, Cells.r(cell), Cells.c(cell)) > GROUPED_MAX_BLACK_LINE) return true;
+        }
+        return false;
+    }
+
     static int blackLineLength(char[][] grid, int rows, int cols, int r, int c) {
         int best = 1;
         int[][] directions = {{0, 1}, {1, 0}};
@@ -1014,7 +1031,8 @@ public final class Grids {
      * along that same border ({@link #extendsBorderLine}) only once every run is selected and no other cell is valid,
      * keeps, before the crossing-length window, only the valid cells building a straight run of adjacent black cells ({@link #blackLineLength} at least 2), when
      * some do, accepts a cell (with its images) only if it leaves no slot shorter than
-     * {@link #GROUPED_MIN_SLOT_LENGTH} next to it ({@link #leavesShortRun}), and inverts the last ranking: closest first, by increasing plain Euclidean distance to the closest black cell ({@link NearestBlacks#closest}), then
+     * {@link #GROUPED_MIN_SLOT_LENGTH} next to it ({@link #leavesShortRun}) and builds no line of black cells longer
+     * than {@link #GROUPED_MAX_BLACK_LINE} ({@link #makesLongBlackLine}), and inverts the last ranking: closest first, by increasing plain Euclidean distance to the closest black cell ({@link NearestBlacks#closest}), then
      * by increasing spread score, both without the aligned factor and without the virtual ring of the grid's edges,
      * ties keeping the shuffled order; adjacency is accepted from the first level on ({@code forbidAdjacency}
      * ignored). {@code candidates} is updated in place. Returns the cells still unplaced.
@@ -1170,7 +1188,9 @@ public final class Grids {
         }
         for (int cell : group) grid[Cells.r(cell)][Cells.c(cell)] = BLACK;
         try {
-            if (grouped && leavesShortRun(grid, rows, cols, group)) return false;
+            if (grouped && (leavesShortRun(grid, rows, cols, group) || makesLongBlackLine(grid, rows, cols, group))) {
+                return false;
+            }
             if (group.size() == 1) return true;
             if (!allowAdjacency) {
                 for (int cell : group) if (hasBlackNeighbor(grid, rows, cols, Cells.r(cell), Cells.c(cell))) return false;
@@ -1476,7 +1496,8 @@ public final class Grids {
      * With a {@code symmetry} ({@link #BLACK_SYMMETRIES}), a cell is placed together with its images
      * ({@link #blackGroup}), each image still white being a candidate itself ({@link #prefillGroupAllowed}).
      * {@code grouped} (the "grouped" {@link #PATTERN_STYLES}): a cell (with its images) is placed only if it leaves no
-     * slot shorter than {@link #GROUPED_MIN_SLOT_LENGTH} next to it ({@link #leavesShortRun}).
+     * slot shorter than {@link #GROUPED_MIN_SLOT_LENGTH} next to it ({@link #leavesShortRun}) and builds no line of
+     * black cells longer than {@link #GROUPED_MAX_BLACK_LINE} ({@link #makesLongBlackLine}).
      */
     static List<Integer> prefillUnfillableSlots(char[][] grid, int rows, int cols, int[] rowBlack, int[] colBlack,
                                                 List<Integer> candidates, LengthSets available, DualIndex index,
@@ -1541,7 +1562,8 @@ public final class Grids {
                         continue;
                     }
                     for (int g : group) grid[Cells.r(g)][Cells.c(g)] = BLACK;
-                    if (!(grouped && leavesShortRun(grid, rows, cols, group)) && isStructurallyValid(grid, rows, cols, 1)) {
+                    if (!(grouped && (leavesShortRun(grid, rows, cols, group) || makesLongBlackLine(grid, rows, cols, group)))
+                            && isStructurallyValid(grid, rows, cols, 1)) {
                         for (int g : group) {
                             rowBlack[Cells.r(g)]++;
                             colBlack[Cells.c(g)]++;
