@@ -27,7 +27,8 @@ the grid for you.
   grids up to 30×30 work reliably; 50×50 is still being fine-tuned.
 - Three difficulty levels (Easy, Medium, Hard).
 - Symmetric black-cell layouts: horizontal, vertical, diagonal, both ways,
-  or rotation.
+  or rotation — with black cells kept apart (French style) or grouped
+  (American/NYT style).
 - Seven levels of computing effort for filling the grid automatically,
   from the quick "Flash" to the exhaustive "GridZilla".
 - Themed grids: vocabulary and clues steered toward a subject you choose.
@@ -268,7 +269,7 @@ plain, unthemed grids — pass `--no-theme` to turn this off.
 On the page:
 
 1. Choose a **language** (the interface itself switches to that language
-   too), a **width**, a **height** (15×10 by default) — or pick a ready-made
+   too), a **width**, a **height** (15×15 by default) — or pick a ready-made
    format in **"Préconfigurations"** (from the 6×6 "Ristretto noisette" to
    the 50×50 "Caffeteria"), which sets the size and black-cell rate in one
    click — and a **difficulty
@@ -284,7 +285,11 @@ On the page:
    groups (horizontal, vertical, diagonal, both ways, or "Rotation" — four cells turned by quarter turns — for a
    square grid); every black cell the generator later adds, removes or
    moves follows the same symmetry (words in the way are removed first),
-   so the finished grid stays symmetric.
+   so the finished grid stays symmetric. The **"Pattern style"** menu,
+   right of it, keeps the black cells apart ("Sparse (French)", the
+   default) or groups them in straight bars with no 2-letter word
+   ("Grouped/aligned (American/NYT)"); choosing English selects
+   Grouped/aligned with a diagonal symmetry.
 2. Two optional fields sit above the generate buttons,
    both built the same way: type a word and click **+** (or just type a
    space, comma, or other punctuation right after it) to add it to the

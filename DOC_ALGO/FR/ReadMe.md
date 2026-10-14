@@ -61,7 +61,8 @@ palier échoué :
 - **nettoyage profond, puis grille écartée** — une grille nettoyée qui
   reproduit le même état deux nettoyages de suite est nettoyée plus en
   profondeur ; à la troisième fois, elle seule est remplacée par une
-  grille vierge.
+  grille vierge ; une grille qui dépasse 1,5 fois l'objectif de cases
+  noires en fin de palier est elle aussi une grille échouée, écartée.
 
 Chaque palier hérite donc du contenu réellement confirmé par les
 précédents.
@@ -399,7 +400,7 @@ l'est sur l'état brut : sa tentative ne réapparaît pas plus loin.
 
 ## Chapitre 3 — Phase 1 : poser les cases noires
 
-Chaque tentative part d'une grille de `width` × `height` cases (15×10 par
+Chaque tentative part d'une grille de `width` × `height` cases (15×15 par
 défaut) — blanche au premier palier, ou déjà partiellement noircie et
 verrouillée si elle hérite d'un palier précédent — et y ajoute des cases
 noires **une par une** (`make_pattern`/`_place_black_cells`), ce qui
@@ -485,6 +486,73 @@ hasard** parmi les **5 %** de meilleur score d'écartement (au moins une). Si le
 aucune case valide, le pourcentage est **augmenté de 5 %** (10 %, 15 %…),
 pour les segments retenus (pris plus loin dans le même classement) comme
 pour la fenêtre de score de longueurs et la fenêtre de distance, et le tirage recommence (`_place_black_cells`).
+
+**Style de motif.** Le réglage « Style de motif » (`pattern_style`,
+valeurs `PATTERN_STYLES`) choisit le critère de pose des cases noires
+(`make_pattern`, `_place_black_cells`) :
+
+- **Aéré (français)** (`airy`, par défaut) : le classement ci-dessus,
+  les cases les plus **éloignées** des cases noires d'abord, et jamais
+  deux cases noires côte à côte ;
+- **Groupé/aligné (américain/NYT)** (`grouped`) :
+  - une case n'est valide que si elle ne laisse, à côté d'elle (avec ses
+    images), **aucun emplacement de 2 lettres** : chaque suite de cases
+    non noires qui la touche, horizontale ou verticale, fait 1 case ou au
+    moins `GROUPED_MIN_SLOT_LENGTH` (**3**) cases (`_leaves_short_run`) ;
+    le pré-remplissage applique la même règle ;
+  - une case du **bord** ayant une case noire voisine le long de ce même
+    bord n'est prise que si, tous les segments étant retenus, aucune autre
+    case n'est valide (`_extends_border_line`) ;
+  - avant la fenêtre de score de longueurs cumulées, seules les cases qui
+    forment un **alignement** de cases noires collées (une suite
+    horizontale ou verticale d'au moins 2 cases noires une fois la case
+    posée, `_black_line_length`) sont gardées, quand il y en a ;
+  - le dernier classement est inversé, les
+  cases les plus **proches** des cases noires d'abord — par distance
+  euclidienne croissante à la case noire la plus proche (une case
+  adjacente vient donc en premier), puis par score d'écartement
+  croissant (`_black_closest_sq`, `_black_spread_score`), à égalité
+  l'ordre du mélange initial ; les distances ne sont pas pondérées par
+  `BLACK_ALIGNED_DISTANCE_FACTOR` et les bords ne comptent pas comme des
+  cases noires. Une case **adjacente** à une case noire est acceptée dès
+  le premier tirage. Les fenêtres de segments et de score de longueurs
+  cumulées, les autres contraintes fortes, les coins et la limite des
+  emplacements courts restent les mêmes.
+
+**Dégroupage (style « Groupé/aligné »).** Une fois l'objectif « Taux
+noir » atteint — et de nouveau après chaque relance de la limite des
+emplacements courts —, les cases noires posées par ce tirage dont plus
+de `GROUPED_MAX_BLACK_NEIGHBORS` (**2**) côtés (donc 3 ou 4) touchent une
+case noire ou le bord de la grille, le bord comptant comme une case noire
+(`_black_neighbor_count`), sont énumérées, ligne par ligne, et retirées une à une avec leurs images
+de symétrie (une case qu'un retrait précédent a déjà ramenée sous la
+limite est gardée). Si un retrait laisse une zone blanche fermée, coupée
+du reste de la grille, la zone est ouverte en retirant, un groupe à la
+fois, une case noire de ce tirage qui touche à la fois cette zone (la plus
+petite d'abord) et une autre zone blanche. Le retrait est annulé quand
+aucune case ne permet d'ouvrir la zone, quand la grille n'est plus
+structurellement valide (exigence de 1 case) ou quand il crée un
+emplacement de 2 lettres. Le tirage est ensuite relancé jusqu'à
+l'objectif, les cases retirées n'étant plus candidates ; au plus
+`GROUPED_DECLUMP_MAX_ROUNDS` (**10**) tours (`make_pattern`,
+`_declump_black_cells`).
+
+En style « Groupé/aligné », le dictionnaire de la grille ne contient
+**aucun mot de moins de `GROUPED_MIN_SLOT_LENGTH` (3) lettres**
+(`style_index`, appliqué par `generate_grid` et au lexique d'une session
+Interactive ; un « Mot Défi » de 2 lettres est ignoré). Un emplacement de
+2 lettres, quelle que soit l'étape qui le crée (réparations entre
+paliers, optimisations, réaménagements, édition à la main), n'a donc
+aucun candidat : c'est un emplacement bloqué, que le pré-remplissage
+coupe, que le nettoyage répare comme tout autre, et qu'aucune grille
+réussie ne peut contenir — `minimize_black_squares` refuse lui aussi
+tout retrait qui en ferait apparaître un, chaque mot devant exister dans
+le dictionnaire. En mode Interactif, « Suivant » n'y pose jamais de mot
+et un mot de 2 lettres tapé à la main est signalé invalide.
+
+Dans l'interface, choisir l'anglais comme langue sélectionne la symétrie
+« Diagonale » et le style « Groupé/aligné » (`frontend/static/script.js`,
+`setUiLanguage`).
 
 Les contraintes fortes : la case est encore blanche, ne **touche aucune
 autre case noire**, ne fait pas tomber un emplacement touchant une lettre
@@ -592,9 +660,10 @@ ce mode, à la case noircie ou blanchie à la main (ses images vides
 noircissent, ses images noires blanchissent ; `frontend/static/script.js`,
 `interactiveToggleBlack`).
 
-**L'adjacence n'est jamais acceptée par la génération de motif**, à aucun
-palier : si aucune candidate isolée ne convient, plus aucune case n'est
-posée.
+**En style « Aéré », l'adjacence n'est jamais acceptée par la
+génération de motif**, à aucun palier : si aucune candidate isolée ne
+convient, plus aucune case n'est posée. En style « Groupé/aligné », seul le
+tirage par pourcentage l'accepte.
 Un palier peut donc finir avec moins de cases noires que visé ; la
 recherche est tentée sur la grille telle quelle. Le pré-remplissage
 (`_prefill_unfillable_slots`) suit la même règle : un emplacement qu'il ne
@@ -2448,6 +2517,28 @@ suivante reconstruit la même impasse. Si toutes les grilles d'un palier
 sont écartées en même temps, la recherche repart entièrement d'une grille
 vierge — motif, contenu, viviers de grilles candidates et compteur de
 série « telle quelle » réinitialisés, exactement l'état du premier palier.
+
+#### Grilles trop noires : grille échouée
+
+Une grille qui compte, en fin de palier, plus de `BLACK_OVERFLOW_FACTOR`
+(**1,5**) fois l'objectif « Taux noir » en cases noires (l'objectif :
+`max(round(L × H × black_ratio), round(taux × L × H))`) est une grille
+**échouée** (`generate_grid`, `black_overflow_limit`) :
+
+- une tentative **réussie** qui en compte autant ne compte pas comme un
+  succès et n'est pas reprise ; après un nettoyage complet, sa place
+  revient à une tentative repartant d'une grille vierge, comme une grille
+  écartée ;
+- une tentative **échouée** est mesurée **après son nettoyage** de fin de
+  palier (reprise « telle quelle » comme nettoyage complet) : si elle en
+  compte encore autant, elle est écartée — après un nettoyage complet, sa
+  place revient à une tentative partant d'une grille vierge ; en reprise
+  « telle quelle », les grilles restantes se partagent les tentatives.
+
+Si plus aucune grille ne reste à reprendre, le palier suivant repart d'une
+grille vierge, comme quand toutes les grilles sont écartées. La règle ne
+s'applique pas quand l'objectif vaut 0, ni quand les cases noires
+permanentes (« Finir la grille ») dépassent à elles seules la limite.
 
 Le suivi se limite au nettoyage complet, jamais à la reprise « telle
 quelle » : sur cette branche, un motif stable plusieurs cycles de suite

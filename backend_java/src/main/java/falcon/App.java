@@ -370,12 +370,19 @@ public final class App {
             throw http(400, "mode inconnu : " + Log.repr(req.mode) + " (attendu : ['fast', 'flash', 'gridzilla', 'medium', 'megatron', 'turbo', 'ultra'])");
         }
         validateSymmetry(req.symmetry);
+        validatePatternStyle(req.patternStyle);
     }
 
     static void validateSymmetry(String symmetry) {
         if (!Grids.BLACK_SYMMETRIES.contains(symmetry)) {
             throw http(400, "symétrie inconnue : " + Log.repr(symmetry)
                     + " (attendu : ['none', 'horizontal', 'vertical', 'diagonal', 'bidirectional', 'rotation'])");
+        }
+    }
+
+    static void validatePatternStyle(String patternStyle) {
+        if (!Grids.PATTERN_STYLES.contains(patternStyle)) {
+            throw http(400, "style de motif inconnu : " + Log.repr(patternStyle) + " (attendu : ['airy', 'grouped'])");
         }
     }
 
@@ -949,9 +956,9 @@ public final class App {
         };
         try {
             Log.info("[%s] starting generation: language=%s bilingual_language=%s width=%s height=%s difficulty=%s "
-                            + "force_letters_percent=%s black_enrichment_percent=%s words_per_node=%s symmetry=%s mode=%s theme_precision=%s source=%s", shortId,
+                            + "force_letters_percent=%s black_enrichment_percent=%s words_per_node=%s symmetry=%s pattern_style=%s mode=%s theme_precision=%s source=%s", shortId,
                     req.language, req.bilingualLanguage, req.width, req.height, req.difficulty, req.forceLettersPercent,
-                    req.blackEnrichmentPercent, req.wordsPerNode, req.symmetry, req.mode, req.themePrecision, req.source);
+                    req.blackEnrichmentPercent, req.wordsPerNode, req.symmetry, req.patternStyle, req.mode, req.themePrecision, req.source);
             String theme = req.theme == null ? "" : Py.strip(req.theme);
             List<String> themePriority = null, bilingualThemePriority = null;
             String themeDescription = "";
@@ -1012,6 +1019,7 @@ public final class App {
                         p.blackEnrichmentFraction = req.blackEnrichmentPercent / 100.0;
                         p.wordsPerNode = req.wordsPerNode;
                         p.blackSymmetry = req.symmetry;
+                        p.patternStyle = req.patternStyle;
                         p.cancelEvent = job.cancel;
                         p.deadlineChecks = BUDGET_MODES.get(req.mode);
                         p.resumeState = gridResume;
@@ -1164,8 +1172,11 @@ public final class App {
             progress.on("saving", new LinkedHashMap<>());
             String pseudo = pseudoOf(req.pseudo);
             Map<String, Object> generationParams = Json.obj("black_enrichment_percent", req.blackEnrichmentPercent,
-                    "words_per_node", req.wordsPerNode, "symmetry", req.symmetry, "force_letters_percent", req.forceLettersPercent, "mode", req.mode, "theme_precision", req.themePrecision);
+                    "words_per_node", req.wordsPerNode, "symmetry", req.symmetry, "pattern_style", req.patternStyle, "force_letters_percent", req.forceLettersPercent, "mode", req.mode, "theme_precision", req.themePrecision);
             if (a.publish) {
+                // On the result too: the play view and the SVG/PNG pages draw a "grouped" grid's black cells full
+                // size (pattern_style).
+                result.put("generation_params", generationParams);
                 try {
                     String gridId = GridStore.saveGridJson(result, req.language, req.difficulty, req.mode, title,
                             (String) result.get("bilingual_language"), pseudo, theme.isEmpty() ? null : theme, false, null,
@@ -1250,13 +1261,17 @@ public final class App {
 
     // ================================================================== interactive jobs
 
-    static Object[] loadInteractiveIndex(String language, String difficulty, String bilingual) throws IOException {
+    static Object[] loadInteractiveIndex(String language, String difficulty, String bilingual, String patternStyle)
+            throws IOException {
         Generator.Loaded a = Generator.load(WORDLISTS.get(language).toString(), null, difficulty);
         boolean isBilingual = bilingual != null && !bilingual.isEmpty() && !bilingual.equals(language);
-        if (!isBilingual) return new Object[]{new DualIndex(a.index(), a.index()), (Predicate<String>) a::contains};
+        if (!isBilingual) {
+            return new Object[]{Words.styleIndex(new DualIndex(a.index(), a.index()), patternStyle),
+                    (Predicate<String>) a::contains};
+        }
         Generator.Loaded d = Generator.load(WORDLISTS.get(bilingual).toString(), null, difficulty);
         Predicate<String> known = w -> a.contains(w) || d.contains(w);
-        return new Object[]{new DualIndex(a.index(), d.index()), known};
+        return new Object[]{Words.styleIndex(new DualIndex(a.index(), d.index()), patternStyle), known};
     }
 
     static Set<String> knownUpper(Collection<?> words, Predicate<String> known) {
@@ -1289,7 +1304,7 @@ public final class App {
             }
             job.put("step", Json.obj("code", "interactive_building"));
             boolean isBilingual = req.isBilingual();
-            Object[] loaded = loadInteractiveIndex(req.language, req.difficulty, req.bilingualLanguage);
+            Object[] loaded = loadInteractiveIndex(req.language, req.difficulty, req.bilingualLanguage, req.patternStyle);
             DualIndex index = (DualIndex) loaded[0];
             @SuppressWarnings("unchecked")
             Predicate<String> known = (Predicate<String>) loaded[1];
@@ -1297,7 +1312,7 @@ public final class App {
             Rng rng = Rng.of(req.seed);
             int rows = req.height, cols = req.width;
             char[][] grid = Grids.makePattern(rows, cols, 0.0, rng, Words.LengthSets.available(index, Grids.PREFILL_MIN_WORD_COUNT),
-                    null, null, index, req.blackEnrichmentPercent / 100.0, req.symmetry);
+                    null, null, index, req.blackEnrichmentPercent / 100.0, req.symmetry, req.patternStyle);
             Set<String> challenge = challengeSet(req.challengeWords);
             PW scrabble = scrabbleWords(req.language, req.bilingualLanguage, req.difficulty);
             Map<String, Object> placed = Interactive.placeWord(grid, rows, cols, index, rng, PW.single(priority), challenge,
@@ -1314,6 +1329,9 @@ public final class App {
             meta.put("theme_description", themeDescription);
             meta.put("theme_precision", req.themePrecision);
             meta.put("challenge_words", new ArrayList<>(req.challengeWords));
+            // The "Style de motif" the session's lexicon follows (loadInteractiveIndex), saved with its drafts and
+            // grids so a resumed session keeps it.
+            meta.put("generation_params", Json.obj("pattern_style", req.patternStyle));
             boolean impossible = Boolean.TRUE.equals(placed.get("impossible"));
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("width", req.width);
@@ -1332,6 +1350,8 @@ public final class App {
             result.put("bilingual_language", meta.get("bilingual_language"));
             result.put("difficulty", req.difficulty);
             result.put("challenge_words", new ArrayList<>(req.challengeWords));
+            // The session's "Style de motif" (see meta).
+            result.put("generation_params", meta.get("generation_params"));
             job.update(d -> {
                 d.put("interactive", meta);
                 d.put("result", result);
@@ -1368,7 +1388,11 @@ public final class App {
                 return;
             }
             job.put("step", Json.obj("code", "interactive_building"));
-            Object[] loaded = loadInteractiveIndex(language, difficulty, bilingual);
+            // The "Style de motif" the record was made with (generation_params, absent from an older record).
+            Object gpRaw = record.get("generation_params");
+            String recordStyle = gpRaw instanceof Map<?, ?> gpMap && gpMap.get("pattern_style") != null
+                    ? gpMap.get("pattern_style").toString() : null;
+            Object[] loaded = loadInteractiveIndex(language, difficulty, bilingual, recordStyle);
             DualIndex index = (DualIndex) loaded[0];
             @SuppressWarnings("unchecked")
             Predicate<String> known = (Predicate<String>) loaded[1];
@@ -2181,6 +2205,7 @@ public final class App {
             }
             if (!Words.DIFFICULTY_PRESETS.containsKey(req.difficulty)) throw http(400, "difficulté inconnue");
             validateSymmetry(req.symmetry);
+            validatePatternStyle(req.patternStyle);
             String id = newJob();
             runInBackground("interactive-" + id.substring(0, 8), () -> runInteractiveJob(id, req));
             return Json.obj("job_id", id);
@@ -2446,6 +2471,7 @@ public final class App {
                     challengeWords.isEmpty() ? null : challengeWords);
             Map<String, Object> exported = new LinkedHashMap<>(result);
             exported.put("id", gridId);
+            exported.put("generation_params", meta.get("generation_params"));
             saveGridImages(exported, language, difficulty, title, "interactive save");
             Session s = INTERACTIVE_SESSIONS.get(jobId);
             if (s != null) {
@@ -2506,12 +2532,14 @@ public final class App {
             String difficulty = b.str("difficulty", "easy");
             String theme = b.str("theme", null);
             List<String> challengeWords = b.strList("challenge_words");
+            String patternStyle = b.str("pattern_style", "airy");
             if (!wordlistExists(language)) throw http(400, "langue inconnue ou dictionnaire absent");
             if (bilingual != null && !bilingual.equals(language) && !wordlistExists(bilingual)) {
                 throw http(400, "langue bilingue inconnue ou dictionnaire absent");
             }
             if (!Words.DIFFICULTY_PRESETS.containsKey(difficulty)) throw http(400, "difficulté inconnue");
             if (gridJson.isEmpty() || Json.asList(gridJson.get(0)).isEmpty()) throw http(400, "grille vide");
+            validatePatternStyle(patternStyle);
             String id = newJob();
             Map<String, Object> synthetic = new LinkedHashMap<>();
             synthetic.put("language", language);
@@ -2521,7 +2549,7 @@ public final class App {
             synthetic.put("definitions", new ArrayList<>());
             synthetic.put("title", "");
             synthetic.put("theme", theme);
-            synthetic.put("generation_params", null);
+            synthetic.put("generation_params", Json.obj("pattern_style", patternStyle));
             synthetic.put("challenge_words", challengeWords);
             synthetic.put("priority_words", new ArrayList<>());
             synthetic.put("seed", 0);
@@ -2538,6 +2566,7 @@ public final class App {
             int bep = b.integer("black_enrichment_percent", 15, 0, 100);
             int wpn = b.integer("words_per_node", falcon.gen.Filler.WORDS_PER_NODE, 1, MAX_WORDS_PER_NODE);
             String symmetry = b.str("symmetry", "none");
+            String patternStyle = b.str("pattern_style", "airy");
             int flp = b.integer("force_letters_percent", 0, 0, 100);
             String pseudo = b.str("pseudo", null);
             String reqDifficulty = b.str("difficulty", null);
@@ -2645,6 +2674,7 @@ public final class App {
             genreq.blackEnrichmentPercent = bep;
             genreq.wordsPerNode = wpn;
             genreq.symmetry = symmetry;
+            genreq.patternStyle = patternStyle;
             genreq.mode = mode;
             genreq.theme = theme.isEmpty() ? null : theme;
             genreq.themePrecision = themePrecision;

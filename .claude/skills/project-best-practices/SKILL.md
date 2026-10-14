@@ -337,7 +337,7 @@ project's engineering language.
   SKILL, `CLAUDE.md`, `README.md`); product content (crossword words/clues,
   web UI text) is written in whichever of the 6 supported languages
   (fr/en/de/es/it/pt) the request is in.
-- Grid dimensions (`width`/`height`) are independent, default 15×10, with
+- Grid dimensions (`width`/`height`) are independent, default 15×15, with
   a range of 5 to 50 in the web API (`GenerateRequest`, Java `GenReq`, and
   the `max` of the form's `#width`/`#height` inputs — 20 off localhost);
   the CLI has no upper bound. Below 5 a grid stops making sense as a
@@ -1047,6 +1047,62 @@ the current defaults/behavior to know before touching this code.
   refused; plugging isolated cells is refused when an image is neither
   black nor isolated; if undoing a change would break structural
   validity, the change stays unpaired (rare).
+- **"Style de motif"** (`GenerateRequest.pattern_style`, `PATTERN_STYLES`,
+  right of "Symétrie" in the form) — the user's rule: "Aéré (français)"
+  keeps the current placement rule; "Groupé (américain/NYT)" inverts
+  the black-cell placement criterion, preferring cells adjacent to, or as
+  close as possible to, the black cells already placed
+  (`_place_black_cells(grouped=)`, Java `Grids.placeBlackCells`); choosing
+  English as the language selects the diagonal symmetry and the grouped
+  style (`script.js`'s `setUiLanguage`). Further user rules for the
+  grouped ("Groupé/aligné") style: prefer cells building straight bars of
+  adjacent black cells (`_black_line_length`); no 2-letter slot — only
+  black cells leaving slots of 3 letters or more (`_leaves_short_run`);
+  a border cell extending a black cell along the same border only when no
+  other candidate is possible (`_extends_border_line`). Choices made with
+  these rules, to revisit with the user: a bar is preferred whatever its
+  length (keeping only the longest gave walls of 6-7 cells), applied
+  before the crossing-length window (applied after it, it almost never
+  mattered: that window leaves 1-2 cells per draw); a 1-cell white zone is
+  still allowed. The 2-letter rule applies to every situation of the
+  grouped style (the user's rule: "appliquer l'interdiction de mots de 2
+  lettres à toutes les situations (uniquement en mode Américain)"): the
+  grid's lexicon drops every word shorter than 3 letters (`style_index`),
+  so any 2-letter slot is an "emplacement bloqué" every step repairs and
+  no successful grid holds, Interactive sessions included. Choices made
+  with that rule, to revisit with the user: enforced through the lexicon
+  rather than a check in each black-cell mechanism (a 2-letter slot can
+  still appear on an intermediate grid, shown blocked); a 2-letter "Mots
+  Défi" word is ignored; an Interactive session's style is stored in its
+  `generation_params`. De-clumping — the user's rule: once the grouped
+  draw reaches its target, take off the black cells adjacent on 3 sides
+  or more to other black cells (`GROUPED_MAX_BLACK_NEIGHBORS` 2), open any
+  zone this closes by taking off more black cells, then redraw to the
+  target (`_declump_black_cells`); the user's further rule: the grid
+  border counts as an adjacency (`_black_neighbor_count`). Choices made
+  with that rule, to revisit with the user: only cells this draw placed are
+  taken off or opened, with their symmetry images; the cells taken off
+  are no longer candidates of the redraw; a removal that cannot be opened,
+  or leaves the grid invalid or a 2-letter slot, is undone; the
+  de-clumping also follows every short-slot redraw, at most 10 rounds;
+  measured on 10 patterns each, cells with 3 black neighbours or more
+  drop from 48 to 2 (15x15, 15 %) and 466 to 36 (20x20, 25 %), the black
+  rate unchanged (the rest: removals undone). A grouped grid's black
+  cells are drawn full size — the user's rule ("en mode Américain,
+  dessiner des cases noires occupant 100% de la taille des cases") — on
+  screen, in the previews and in the PDF/SVG/PNG pages; a grid knows its
+  style from its `generation_params` (also on an automatic generation's
+  and an Interactive session's result). Choice made with it, to revisit
+  with the user: a grid with no recorded style (older records,
+  "Recalculer" previews) keeps the half-size square. The border cell is the last resort within one structural
+  level of the draw; only the drawn cell is checked for the border rule.
+  The run and crossing-length windows stay; "closest" is the
+  plain Euclidean distance to the closest black cell, ties broken by the
+  spread score, both without the aligned factor and without the edges'
+  virtual ring (otherwise every border cell would rank first); grouped
+  accepts adjacency from the first level of the ratio draw, while
+  pre-fill keeps its never-adjacent rule; leaving English does not reset
+  the symmetry or the style; Populate keeps the airy default.
 - The ratio-based ("Taux noir") black-cell draw of `make_pattern` never
   blackens a cell of the 2x2 square at each corner (`_in_corner_square`,
   `CORNER_SQUARE_SIZE`); pre-fill tries a corner cell only after every
@@ -2289,6 +2345,18 @@ the current defaults/behavior to know before touching this code.
   than without the rule (median 7-100 vs 6-27), at 100 it fired 0-1 times
   per attempt and the zone filled as well as without it (median 2-7); the
   current limit is 1000.
+- **A grid holding more than 1.5 × the "Taux noir" objective of black
+  cells at the end of a palier is a failed grid** (`BLACK_OVERFLOW_
+  FACTOR`) — the user's rule, with the user's choices: a success that
+  overflows is not counted and is dropped; a failed grid is measured after
+  its end-of-palier cleanup and dropped when it still overflows, its place
+  going to a blank-grid worker. Choices made with it, to revisit with the
+  user: on "reprise telle quelle" (which has no blank-grid workers) the
+  remaining grids share the attempts; with no grid left the next palier
+  starts from a blank grid; the objective is `max(round(rows*cols*
+  black_ratio), round(black_enrichment_fraction*rows*cols))`; the rule is
+  off when it is 0 or when the permanent black cells alone exceed the
+  limit.
 - **Both cross-palier resume paths start the next palier the same way**,
   differing only in their cleanup — the user's rule: "La différence est au
   niveau du nettoyage, pas au niveau du démarrage du cycle suivant. Ça

@@ -188,11 +188,18 @@ public final class SvgExport {
 
     /** Grid for the puzzle sheets, empty or showing {@code letters} (Python's {@code _puzzle_grid_svg}). */
     static String puzzleGridSvg(List<Object> pattern, List<Object> words, double x0, double y0, double cell) {
-        return puzzleGridSvg(pattern, words, x0, y0, cell, null);
+        return puzzleGridSvg(pattern, words, x0, y0, cell, null, false);
     }
 
+    /** Whether {@code result}'s black cells fill their whole cell: a "grouped" pattern style grid (Python's {@code _full_black}). */
+    static boolean fullBlack(Map<String, Object> result) {
+        Object gp = result.get("generation_params");
+        return gp instanceof Map<?, ?> m && "grouped".equals(m.get("pattern_style"));
+    }
+
+    /** A black cell is a centered half-size square, or fills the whole cell with {@code fullBlack}. */
     static String puzzleGridSvg(List<Object> pattern, List<Object> words, double x0, double y0, double cell,
-                                List<Object> letters) {
+                                List<Object> letters, boolean fullBlack) {
         int rows = pattern.size(), cols = rowLength(pattern.get(0));
         Map<String, Object> numberByCell = new HashMap<>();
         for (Object w : words) numberByCell.put(Json.integer(w, "row", 0) + "," + Json.integer(w, "col", 0), Json.get(w, "number"));
@@ -213,6 +220,12 @@ public final class SvgExport {
                 double x = gridX0 + c * cell, y = gridY0 + r * cell;
                 parts.append("<rect x=\"").append(n2(x)).append("\" y=\"").append(n2(y)).append("\" width=\"").append(n2(cell))
                         .append("\" height=\"").append(n2(cell)).append("\" fill=\"#ffffff\" stroke=\"#1f2937\" stroke-width=\"1\"/>");
+                if ("#".equals(cell(pattern, r, c)) && fullBlack) {
+                    parts.append("<rect x=\"").append(n2(x)).append("\" y=\"").append(n2(y)).append("\" width=\"").append(n2(cell))
+                            .append("\" height=\"").append(n2(cell)).append("\" fill=\"").append(BLACK_CELL_FILL)
+                            .append("\" stroke=\"#1f2937\" stroke-width=\"1\"/>");
+                    continue;
+                }
                 if ("#".equals(cell(pattern, r, c))) {
                     parts.append("<rect x=\"").append(n2(x + cell / 4)).append("\" y=\"").append(n2(y + cell / 4))
                             .append("\" width=\"").append(n2(cell / 2)).append("\" height=\"").append(n2(cell / 2))
@@ -385,7 +398,7 @@ public final class SvgExport {
         double fontSize = layout.fontSize(), cell = layout.cell();
 
         return puzzlePageSvg(puzzleHeaderSvg(language, title, difficulty)
-                + puzzleGridSvg(pattern, words, pageW - margin - cell * (cols + 1), bodyTop, cell)
+                + puzzleGridSvg(pattern, words, pageW - margin - cell * (cols + 1), bodyTop, cell, null, fullBlack(result))
                 + puzzleClueItemsSvg(layout.items(), fontSize, 0.0)
                 + puzzleFooterSvg(language, gridId));
     }
@@ -500,7 +513,7 @@ public final class SvgExport {
         }
         double cell = Math.min(Math.min((bodyBottom - bodyTop) / (rows + 1), contentW / (cols + 1)), PDF_MAX_CELL_SIZE);
         double gridX0 = margin + (contentW - cell * (cols + 1)) / 2;
-        parts.append(puzzleGridSvg(pattern, words, gridX0, bodyTop, cell, letters));
+        parts.append(puzzleGridSvg(pattern, words, gridX0, bodyTop, cell, letters, fullBlack(result)));
         parts.append(puzzleFooterSvg(language, gridId));
         return puzzlePageSvg(parts.toString());
     }

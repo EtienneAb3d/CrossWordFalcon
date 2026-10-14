@@ -53,7 +53,7 @@ from .secret_store import verify_or_claim as verify_or_claim_pseudo_secret
 from .puz_export import PUZ_MEDIA_TYPE, render_puz
 from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, GenerationPaused,
-    BLACK_SYMMETRIES, PREFILL_MIN_WORD_COUNT, WORDS_PER_NODE, DualIndex, DualSet, build_letters_grid,
+    BLACK_SYMMETRIES, PATTERN_STYLES, PREFILL_MIN_WORD_COUNT, style_index, WORDS_PER_NODE, DualIndex, DualSet, build_letters_grid,
     build_word_entries, challenge_word_grid_form, extract_slots, generate_grid, slot_direction,
     word_forms,
     _interactive_fill_diagnostics, _interactive_letter_stats,
@@ -885,6 +885,14 @@ class GenerateRequest(BaseModel):
         default="none",
         description=f"Black-cell symmetry: {list(BLACK_SYMMETRIES)}",
     )
+    # "Style de motif": the ratio draw's black-cell placement criterion
+    # (crossword_gen.py's PATTERN_STYLES, `make_pattern`'s `pattern_style`):
+    # "airy" keeps black cells apart, "grouped" groups them; also applied to
+    # an Interactive session's starting pattern.
+    pattern_style: str = Field(
+        default="airy",
+        description=f"Black-cell pattern style: {list(PATTERN_STYLES)}",
+    )
     # "Mode" selector (see BUDGET_MODES above), at the user's explicit
     # request — directly sets the search budget per
     # attempt, replacing for this request the default formula of
@@ -1263,7 +1271,7 @@ class InteractiveFinishRequest(BaseModel):
     words of that language, so the search must keep its dictionary.
     Every other generation parameter mirrors the generation form's own
     CURRENT values, which the player may have changed since the session
-    started: `mode`/`black_enrichment_percent`/`words_per_node`/`symmetry`/`force_letters_percent`/
+    started: `mode`/`black_enrichment_percent`/`words_per_node`/`symmetry`/`pattern_style`/`force_letters_percent`/
     `difficulty`/`theme`/`theme_precision`/`challenge_words`. The last four
     fall back to the session's own value when omitted (`None`). The
     session's already-resolved theme glossary is reused only while it
@@ -1276,6 +1284,7 @@ class InteractiveFinishRequest(BaseModel):
     black_enrichment_percent: int = Field(default=15, ge=0, le=100)
     words_per_node: int = Field(default=WORDS_PER_NODE, ge=1, le=MAX_WORDS_PER_NODE)
     symmetry: str = "none"
+    pattern_style: str = "airy"
     force_letters_percent: int = Field(default=0, ge=0, le=100)
     difficulty: Optional[str] = None
     theme: Optional[str] = None
@@ -1345,6 +1354,8 @@ class InteractiveFromAttemptRequest(BaseModel):
     difficulty: str = "easy"
     theme: Optional[str] = None
     challenge_words: list[str] = []
+    # The form's "Style de motif" (GenerateRequest.pattern_style).
+    pattern_style: str = "airy"
 
 
 @dataclass
@@ -4062,10 +4073,11 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         logger.info(
             "[%s] starting generation: language=%s bilingual_language=%s width=%s "
             "height=%s difficulty=%s force_letters_percent=%s black_enrichment_percent=%s "
-            "words_per_node=%s symmetry=%s mode=%s theme_precision=%s source=%s",
+            "words_per_node=%s symmetry=%s pattern_style=%s mode=%s theme_precision=%s source=%s",
             short_id, req.language, req.bilingual_language, req.width, req.height,
             req.difficulty, req.force_letters_percent, req.black_enrichment_percent,
-            req.words_per_node, req.symmetry, req.mode, req.theme_precision, req.source,
+            req.words_per_node, req.symmetry, req.pattern_style, req.mode, req.theme_precision,
+            req.source,
         )
         # Grid (CPU) queue, at the user's explicit request — see GRID_
         # QUEUE's own module-level docstring: at most one grid search runs
@@ -4238,6 +4250,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                         challenge_words=challenge_words,
                         words_per_node=req.words_per_node,
                         black_symmetry=req.symmetry,
+                        pattern_style=req.pattern_style,
                         start_grid=start_grid,
                     )
                     break
@@ -4615,6 +4628,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
             "black_enrichment_percent": req.black_enrichment_percent,
             "words_per_node": req.words_per_node,
             "symmetry": req.symmetry,
+            "pattern_style": req.pattern_style,
             "force_letters_percent": req.force_letters_percent,
             "mode": req.mode,
             "theme_precision": req.theme_precision,
@@ -4626,6 +4640,9 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
             # the SVG/PNG saves just above: a failure to persist this grid
             # for later browsing is logged, never allowed to fail the request
             # the player is actually waiting on.
+            # On the result too: the play view and the SVG/PNG pages draw a
+            # "grouped" grid's black cells full size (pattern_style).
+            result["generation_params"] = generation_params
             try:
                 grid_id = await asyncio.to_thread(
                     save_grid_json, result, req.language, req.difficulty, req.mode, title,
@@ -4716,7 +4733,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         logger.exception("[%s] unhandled error during generation", short_id)
 
 
-async def _load_interactive_index(language, difficulty, bilingual_language=None):
+async def _load_interactive_index(language, difficulty, bilingual_language=None, pattern_style=None):
     """Loads the wordlist/frequency index for one language/difficulty and
     wraps it as the DualIndex every interactive-mode helper
     (interactive_place_word, interactive_slot_candidates, _interactive_
@@ -4749,11 +4766,11 @@ async def _load_interactive_index(language, difficulty, bilingual_language=None)
     )
     is_bilingual = bool(bilingual_language) and bilingual_language != language
     if not is_bilingual:
-        return DualIndex(across.index, across.index), across
+        return style_index(DualIndex(across.index, across.index), pattern_style), across
     down = await asyncio.to_thread(
         load_lexicon, str(WORDLISTS[bilingual_language]), None, difficulty,
     )
-    return DualIndex(across.index, down.index), _KnownWords(across, down)
+    return style_index(DualIndex(across.index, down.index), pattern_style), _KnownWords(across, down)
 
 
 class _KnownWords:
@@ -4811,7 +4828,7 @@ async def _run_interactive_job(job_id, req):
         bilingual_language = req.bilingual_language
         is_bilingual = bool(bilingual_language) and bilingual_language != req.language
         index, known = await _load_interactive_index(
-            req.language, req.difficulty, bilingual_language,
+            req.language, req.difficulty, bilingual_language, req.pattern_style,
         )
 
         # Same MOT-form normalization generate_grid applies to its own
@@ -4838,7 +4855,7 @@ async def _run_interactive_job(job_id, req):
             make_pattern, rows, cols, 0.0, rng,
             available_lengths=available_lengths, index=index,
             black_enrichment_fraction=req.black_enrichment_percent / 100,
-            symmetry=req.symmetry,
+            symmetry=req.symmetry, pattern_style=req.pattern_style,
         )
         # "Mots Défi (personnalisation)" typed on the main generation form
         # before switching to "mode == interactive" (GenerateRequest.
@@ -4900,6 +4917,10 @@ async def _run_interactive_job(job_id, req):
             # "Mots Défi" panel(s) on this entry path too, exactly like a
             # resumed/from-library session already does.
             "challenge_words": req.challenge_words or [],
+            # The "Style de motif" the session's lexicon follows (see
+            # _load_interactive_index), saved with its drafts and grids so
+            # a resumed session keeps it.
+            "generation_params": {"pattern_style": req.pattern_style},
         }
         result_grid = grid if placed["impossible"] else placed["grid"]
         job["result"] = {
@@ -4936,6 +4957,8 @@ async def _run_interactive_job(job_id, req):
             # Same reasoning as "theme"/"language" above — see job
             # ["interactive"]["challenge_words"]'s own comment just above.
             "challenge_words": req.challenge_words or [],
+            # The session's "Style de motif" (see job["interactive"]).
+            "generation_params": job["interactive"]["generation_params"],
         }
         progress("done")
         job["status"] = "done"
@@ -5209,6 +5232,7 @@ def _validate_generate_request(req):
             detail=f"mode inconnu : {req.mode!r} (attendu : {sorted(BUDGET_MODES)})",
         )
     _validate_symmetry(req.symmetry)
+    _validate_pattern_style(req.pattern_style)
 
 
 def _validate_symmetry(symmetry):
@@ -5216,6 +5240,14 @@ def _validate_symmetry(symmetry):
         raise HTTPException(
             status_code=400,
             detail=f"symétrie inconnue : {symmetry!r} (attendu : {list(BLACK_SYMMETRIES)})",
+        )
+
+
+def _validate_pattern_style(pattern_style):
+    if pattern_style not in PATTERN_STYLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"style de motif inconnu : {pattern_style!r} (attendu : {list(PATTERN_STYLES)})",
         )
 
 
@@ -5280,6 +5312,7 @@ async def interactive_start(req: GenerateRequest):
     if req.difficulty not in DIFFICULTY_PRESETS:
         raise HTTPException(status_code=400, detail="difficulté inconnue")
     _validate_symmetry(req.symmetry)
+    _validate_pattern_style(req.pattern_style)
     job_id = _new_job()
     task = asyncio.create_task(_run_interactive_job(job_id, req))
     _BACKGROUND_TASKS.add(task)
@@ -5768,7 +5801,8 @@ async def interactive_save(req: InteractiveSaveRequest):
         challenge_words=req.challenge_words or None,
     )
     await _save_grid_images(
-        {**result, "id": grid_id}, req.language, req.difficulty, req.title, "interactive save",
+        {**result, "id": grid_id, "generation_params": meta.get("generation_params")},
+        req.language, req.difficulty, req.title, "interactive save",
     )
     # Also refresh this session's own GRID_WORK snapshot to the final,
     # published state (at the user's explicit request: "Au moment de
@@ -5923,7 +5957,12 @@ async def _run_interactive_resume_job(job_id, record):
             return
 
         progress("interactive_building")
-        index, known = await _load_interactive_index(language, difficulty, bilingual_language)
+        # The "Style de motif" the record was made with (generation_params,
+        # absent from an older record): "grouped" drops the 2-letter words.
+        index, known = await _load_interactive_index(
+            language, difficulty, bilingual_language,
+            (record.get("generation_params") or {}).get("pattern_style"),
+        )
         priority_words = frozenset(
             u for w in (record.get("priority_words") or ())
             if (u := str(w).upper()) in known
@@ -6193,6 +6232,7 @@ async def interactive_from_attempt(req: InteractiveFromAttemptRequest):
         raise HTTPException(status_code=400, detail="difficulté inconnue")
     if not req.grid or not req.grid[0]:
         raise HTTPException(status_code=400, detail="grille vide")
+    _validate_pattern_style(req.pattern_style)
     job_id = _new_job()
     synthetic = {
         "language": req.language,
@@ -6202,7 +6242,7 @@ async def interactive_from_attempt(req: InteractiveFromAttemptRequest):
         "definitions": [],
         "title": "",
         "theme": req.theme,
-        "generation_params": None,
+        "generation_params": {"pattern_style": req.pattern_style},
         "challenge_words": req.challenge_words,
         "priority_words": [],
         "seed": 0,
@@ -6491,6 +6531,7 @@ async def interactive_finish(req: InteractiveFinishRequest):
         black_enrichment_percent=req.black_enrichment_percent,
         words_per_node=req.words_per_node,
         symmetry=req.symmetry,
+        pattern_style=req.pattern_style,
         mode=req.mode,
         theme=theme or None,
         theme_precision=theme_precision,

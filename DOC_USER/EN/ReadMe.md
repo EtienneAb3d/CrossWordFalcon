@@ -136,7 +136,9 @@ full again whenever a new generation or an Interactive session starts.
   5 to 50 on the local machine, from 5 to 20 from another machine on the
   network; same out-of-range snap-back on blur as **Largeur / Width**
   above (`frontend/static/script.js`, `clampDimensionInputs`).
-- **Difficulté / Difficulty** (`#difficulty`) — Easy, Medium, or Hard.
+- **Difficulté / Difficulty** (`#difficulty`, first field of the line
+  above "Générer les mots croisés", followed by Mots par pose, Mode and
+  "Voir les mots (spoiler)") — Easy, Medium, or Hard.
   Easy and Medium use a smaller, more common vocabulary and never place a
   word that looks like it could be a proper noun (a person's or place's
   name); Hard can use the entire dictionary, including proper nouns. The
@@ -168,6 +170,24 @@ full again whenever a new generation or an Interactive session starts.
   was not (`frontend/static/script.js`, `symmetryCells`;
   `backend/crossword_gen.py`, `symmetry_cells`, `make_pattern`,
   `_symmetrize_black_changes`).
+- **Style de motif / Pattern style** (`#pattern-style`, right of
+  Symétrie) — how the pattern draw places its black cells: **Aéré
+  (français) / Sparse (French)**, the default, keeps them as far from each
+  other as possible and never side by side; **Groupé/aligné (américain/NYT)
+  / Grouped/aligned (American/NYT)** places them as close as possible to
+  the black cells already there, preferably extending a straight bar of
+  black cells, and along a border only as a last resort, as in an
+  American crossword — once the black rate is reached, a black cell
+  touching black cells or the grid border on three sides or more is taken off (opening any
+  area this closes) and the draw tops the rate back up; a grid in this style never holds a 2-letter word
+  (its dictionary has none: such a slot is repaired like any blocked
+  one, and in Interactive mode a 2-letter word is flagged invalid).
+  Such a grid draws its black cells as full squares — on screen, in the
+  previews and in the PDF/SVG/PNG pages — instead of the usual centered
+  half-size square. Choosing English
+  as the language selects Grouped/aligned and the Diagonal symmetry (`frontend/static/script.js`,
+  `setUiLanguage`; `backend/crossword_gen.py`, `PATTERN_STYLES`,
+  `_place_black_cells`).
 - **Mots par pose / Words per placement** (`#words-per-node`) — the most
   words the search places in one go before checking how the rest of the
   grid copes, and takes back off together when that leads nowhere (1-50,
@@ -189,7 +209,8 @@ full again whenever a new generation or an Interactive session starts.
   (`frontend/static/script.js`, `restrictHeavyModesToLocalhost`). The
   same mode is used by **Finir la grille / Finish the grid** and **Finir
   la zone / Finish the zone** in Interactive mode.
-- **Précision thématique / Theme precision** (`#theme-precision`) — the
+- **Précision thématique / Theme precision** (`#theme-precision`, left
+  of "Thématique" on the same line) — the
   minimum closeness a word must have to the theme to enter the theme
   glossary, a number from 0 to 1 (0.78 by default; use a **point**, not a
   comma, for the decimal — a typed comma is converted automatically).
@@ -1582,7 +1603,10 @@ white grid and adds black cells one at a time, entirely independently
 unless a symmetry is chosen (each cell then comes with its mirror images,
 and every later addition, removal or move of a black cell does too) —
 with no symmetry it reaches far sparser layouts (and so grids with far
-more visible letters) than a traditional symmetric crossword would. Every candidate cell has to
+more visible letters) than a traditional symmetric crossword would. In
+the default "airy" pattern style each new black cell goes as far as
+possible from the others; in the "grouped" (American) style it goes as
+close as possible to them, side by side when it can. Every candidate cell has to
 respect a few hard rules: a white cell can never end up boxed in on all
 four sides (it would belong to no word at all and could never receive a
 letter); the white area of the grid must stay fully connected, never

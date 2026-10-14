@@ -8,13 +8,14 @@ import java.util.Map;
 public final class GenReq {
     public String language = "fr";
     public String bilingualLanguage;
-    public int width = 15, height = 10;
+    public int width = 15, height = 15;
     public String difficulty = "easy";
     public Long seed;
     public int forceLettersPercent = 0;
     public int blackEnrichmentPercent = 15;
     public int wordsPerNode = falcon.gen.Filler.WORDS_PER_NODE;
     public String symmetry = "none";
+    public String patternStyle = "airy";
     public String mode = "medium";
     public String pseudo;
     public String theme;
@@ -35,6 +36,7 @@ public final class GenReq {
         r.blackEnrichmentPercent = b.integer("black_enrichment_percent", 15, 0, 100);
         r.wordsPerNode = b.integer("words_per_node", falcon.gen.Filler.WORDS_PER_NODE, 1, App.MAX_WORDS_PER_NODE);
         r.symmetry = b.str("symmetry", "none");
+        r.patternStyle = b.str("pattern_style", "airy");
         r.mode = b.str("mode", "medium");
         r.pseudo = b.str("pseudo", null);
         r.theme = b.str("theme", null);
@@ -56,6 +58,7 @@ public final class GenReq {
         m.put("black_enrichment_percent", blackEnrichmentPercent);
         m.put("words_per_node", wordsPerNode);
         m.put("symmetry", symmetry);
+        m.put("pattern_style", patternStyle);
         m.put("mode", mode);
         m.put("pseudo", pseudo);
         m.put("theme", theme);

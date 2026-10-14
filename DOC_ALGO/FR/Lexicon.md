@@ -248,6 +248,22 @@ plusieurs signaux) :
   `Filler._backtrack`). Encadrée en gras pointillé sur les aperçus
   (`frontend/static/style.css`, `.attempt-preview-grid .attention-edge`).
 
+## Motif de cases noires
+
+- **Style de motif** : le critère de pose des cases noires du tirage par
+  pourcentage (« Taux noir »). **Aéré (français)** : les cases noires
+  sont posées le plus loin possible les unes des autres, jamais côte à
+  côte. **Groupé/aligné (américain/NYT)** : elles sont posées au plus
+  près des cases noires déjà posées, de préférence en prolongeant un
+  alignement (suite horizontale ou verticale de cases noires collées),
+  sans aucun mot de 2 lettres (absents de son dictionnaire), et le long d'un bord
+  seulement en dernier recours ; une fois le taux atteint, une case noire
+  touchant par au moins 3 de ses côtés une case noire ou le bord de la grille est retirée et le tirage
+  relancé (dégroupage). L'anglais sélectionne par défaut le style
+  Groupé/aligné avec la symétrie Diagonale.
+  (`backend/crossword_gen.py`, `PATTERN_STYLES`, `make_pattern`,
+  `_place_black_cells` ; `frontend/static/script.js`, `setUiLanguage`.)
+
 ## Choix des mots
 
 - **Fenêtre de tirage des mots** : la règle unique par laquelle le moteur

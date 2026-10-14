@@ -444,6 +444,8 @@ json`. Holds all server-side state in plain module dicts/lists:
 `black_enrichment_percent` [0-100, default 15], `words_per_node` [1-50,
 default `WORDS_PER_NODE`], `symmetry` [`BLACK_SYMMETRIES`, default
 "none", 400 otherwise, also applied to an Interactive session's starting
+pattern], `pattern_style` [`PATTERN_STYLES`: airy/grouped, default
+"airy", 400 otherwise, also applied to an Interactive session's starting
 pattern], `mode` [flash/turbo/fast/
 medium/ultra/megatron/gridzilla, default medium], `pseudo`, `theme`, `theme_precision`
 [0.0-1.0, default `THEME_MIN_SCORE`], `source`, `challenge_words`
@@ -545,7 +547,46 @@ own rng drawn from the parent's in candidate order:
    ring of virtual black cells just outside it (`_black_distance_sq`,
    `_nearest_black_distances_sq`, kept per candidate and updated as each
    cell is placed; highest first, ties keeping the shuffled order), and
-   draws at random among the same percentage best scored (at least one); when the selected runs hold
+   draws at random among the same percentage best scored (at least one) —
+   under the "grouped" **pattern style** ("Style de motif",
+   `make_pattern(pattern_style=)`, `generate_grid(pattern_style=)` ->
+   `_worker_pattern_style`, `GenerateRequest.pattern_style`,
+   `PATTERN_STYLES` airy/grouped; Java `Grids.PATTERN_STYLES`,
+   `Generator.Params.patternStyle`) a cell (with its images) is valid
+   only if no white run touching it is 2 cells long
+   (`_leaves_short_run`, `GROUPED_MIN_SLOT_LENGTH` 3, pre-fill too; Java
+   `Grids.leavesShortRun`), a border cell with a black neighbour along
+   that border is taken only once every run is selected with no other
+   valid cell (`_extends_border_line`), only the cells forming a straight
+   bar of at least 2 adjacent black cells are kept before the
+   crossing-length window when some do (`_black_line_length`), and the
+   last ranking is inverted:
+   closest first, by increasing plain Euclidean distance to the closest
+   black cell (`_black_closest_sq`, Java `NearestBlacks.closest`), then by
+   increasing spread score, both without the aligned factor and without
+   the edges' virtual ring, and adjacency is accepted from the first
+   level on (`_place_black_cells(grouped=)`; pre-fill keeps its own
+   never-adjacent rule); the web UI selects "grouped" and the diagonal
+   symmetry whenever the language becomes English (`script.js`'s
+   `setUiLanguage`). Under "grouped" the grid's lexicon has no word
+   shorter than `GROUPED_MIN_SLOT_LENGTH` (`style_index`, Java
+   `Words.styleIndex`: a shallow copy of the cached index without those
+   lengths, applied by `generate_grid`, which also ignores such a "Mots
+   Défi" word, and by `backend/app.py`'s `_load_interactive_index`, whose
+   style comes from the start request or the record's
+   `generation_params.pattern_style` — an Interactive session stores
+   `{"pattern_style"}` there, `InteractiveFromAttemptRequest.pattern_style`
+   too), so a 2-letter slot, whatever step creates it, is an "emplacement
+   bloqué" and no successful grid holds one. Once the grouped draw reaches
+   its target (and after every short-slot redraw), `_declump_black_cells`
+   (Java `Grids.declumpBlackCells`) takes off, in row-major order with
+   their images, the drawn black cells with more than
+   `GROUPED_MAX_BLACK_NEIGHBORS` (2) sides (3 or 4) on a black cell or the grid border (`_black_neighbor_count`), opens any white
+   zone this closes by whitening a drawn black cell touching it and another
+   zone (smallest zone first), undoes a removal it cannot open or that
+   leaves the grid invalid or a 2-letter slot, and the draw runs again to
+   the target without the cells taken off, at most
+   `GROUPED_DECLUMP_MAX_ROUNDS` (10) rounds; when the selected runs hold
    no valid cell, the percentage grows by 5 (more runs, same order, every
    window widened alike) and the draw starts over. The
    hard constraints: still white, not adjacent to a black cell,
@@ -566,7 +607,7 @@ own rng drawn from the parent's in candidate order:
    considers a cell of the four corner 2x2 squares (`_in_corner_square`/
    `CORNER_SQUARE_SIZE=2`, which only the repair mechanisms below may
    blacken, and pre-fill as a last resort: it ranks such a cell after every
-   other cell of the slot it cuts). Adjacency is never accepted at all, on any palier
+   other cell of the slot it cuts). Under the "airy" pattern style, adjacency is never accepted at all, on any palier
    (`forbid_adjacency=True`, always): a palier whose black-fill
    percentage target can't be reached without an adjacent cell simply
    ends up short of that target, left as-is, rather than forcing one.
@@ -965,6 +1006,20 @@ palier gives its place to one more blank-grid worker (`carry_discarded_
 count`, added to `FULL_RESET_ATTEMPT_COUNT` in `reset_count`) while every
 other candidate is kept. Only when every candidate is dropped does the
 whole search restart from a blank grid.
+
+**Black overflow** (`BLACK_OVERFLOW_FACTOR` = 1.5; Java `Generator.
+BLACK_OVERFLOW_FACTOR`): a grid holding more than that factor times the
+"Taux noir" objective (`max(round(rows*cols*black_ratio),
+round(black_enrichment_fraction*rows*cols))`, `black_overflow_limit`) of
+black cells at the end of a palier is a failed grid. A success holding that
+many is not counted (`live_success_count` corrected) nor resumed; a failed
+grid is measured after its end-of-palier cleanup (`cleaned_continue_
+candidates` on "reprise telle quelle", `kept_candidates` on a full cleanup)
+and dropped when it still holds that many. After a full cleanup every
+dropped grid (overflowing success included) adds a blank-grid worker to the
+next palier (`discarded_count`); with no grid left to resume, the next
+palier starts from a blank grid. Off when the objective is 0 or when
+`permanent_black_cells` alone exceed the limit.
 
 **Early hardclean** (`EARLY_HARDCLEAN_PERCENT` = 10, 100 = off; Java
 `Filler.EARLY_HARDCLEAN_PERCENT`): the second chance's hard clean, triggered
@@ -2687,7 +2742,15 @@ takes one SVG (stdin) or a list (temporary files, `rsvg-convert -f pdf
 page1.svg page2.svg ...`, one PDF page each); Java `SvgExport.
 renderPuzzlePages`/`renderTwoPagePuzzle`/`svgToPdfBytes(List)`. Both draw
 a black cell like the web UI: a bordered white cell holding a centered
-half-size square of `BLACK_CELL_FILL` (`#2563eb`).
+half-size square of `BLACK_CELL_FILL` (`#2563eb`), or, for a grid made
+with the "grouped" pattern style (`generation_params.pattern_style`,
+`_full_black`, Java `SvgExport.fullBlack`), a bordered cell filled whole
+with it. An automatic generation's result carries `generation_params`
+(set before its library save), an Interactive session's result and
+published record too, so the play view (`#grid.full-black`), Interactive
+mode (`interactivePatternStyle`) and the attempt previews
+(`#attempt-preview-grids.full-black`, from the polled job's
+`request.pattern_style`) draw a "grouped" grid's black cells full size.
 
 The SVG/PNG record (`render_export_pages`, Java `SvgExport.
 renderExportPages`) is a list of `(suffix, svg)` pages laid out like the
@@ -3101,7 +3164,7 @@ section for the full variable list and the dual-GPU LLM routing scheme.
 data_builder/build_fr.sh   # or build_en.sh / build_de.sh / build_es.sh / build_it.sh / build_pt.sh
 data_builder/build_all.sh  # the six languages in turn
 
-# Generate a crossword grid from the CLI (defaults: 15x10, easy)
+# Generate a crossword grid from the CLI (defaults: 15x15, easy)
 python3 backend/crossword_gen.py
 python3 backend/crossword_gen.py --width 15 --height 15 --difficulty hard --seed 42
 python3 backend/crossword_gen.py --wordlist data/wordlist_en_freq.tsv

@@ -124,16 +124,7 @@
 
       <label for="height">
         <span data-i18n="heightLabel">Hauteur</span>
-        <input type="number" id="height" name="height" min="5" max="50" step="1" value="10" required>
-      </label>
-
-      <label for="difficulty">
-        <span data-i18n="difficultyLabel">Difficulté</span>
-        <select id="difficulty" name="difficulty">
-          <option value="easy" selected data-i18n="difficultyEasy">Facile</option>
-          <option value="medium" data-i18n="difficultyMedium">Moyenne</option>
-          <option value="hard" data-i18n="difficultyHard">Difficile</option>
-        </select>
+        <input type="number" id="height" name="height" min="5" max="50" step="1" value="15" required>
       </label>
 
       <label for="black-enrichment">
@@ -161,45 +152,17 @@
         </select>
       </label>
 
-      <!-- "Mots par pose": the most words a search node places at once,
-           on an empty attention zone (GenerateRequest.words_per_node,
-           crossword_gen.py's WORDS_PER_NODE; decreasing to 1 as the zone
-           fills, Filler._group_size). -->
-      <label for="words-per-node">
-        <span data-i18n="wordsPerNodeLabel">Mots par pose</span>
-        <input type="number" id="words-per-node" name="words_per_node"
-               min="1" max="50" step="1" value="2">
-      </label>
-
-      <label for="mode">
-        <span data-i18n="modeLabel">Mode</span>
-        <select id="mode" name="mode">
-          <option value="flash" data-i18n="modeFlash">Flash</option>
-          <option value="turbo" data-i18n="modeTurbo">Turbo</option>
-          <option value="fast" data-i18n="modeFast">Rapide</option>
-          <option value="medium" selected data-i18n="modeMedium">Moyen</option>
-          <option value="ultra" data-i18n="modeUltra">Ultra</option>
-          <option value="megatron" data-i18n="modeMegatron">Megatron</option>
-          <option value="gridzilla" data-i18n="modeGridzilla">GridZilla</option>
+      <!-- "Style de motif": the ratio draw's black-cell placement criterion,
+           automatic and Interactive alike (GenerateRequest.pattern_style,
+           crossword_gen.py's PATTERN_STYLES): "airy" keeps black cells
+           apart, "grouped" groups them. script.js selects "grouped" (and a
+           diagonal symmetry) whenever the language becomes English. -->
+      <label for="pattern-style">
+        <span data-i18n="patternStyleLabel">Style de motif</span>
+        <select id="pattern-style" name="pattern_style">
+          <option value="airy" selected data-i18n="patternStyleAiry">Aéré (français)</option>
+          <option value="grouped" data-i18n="patternStyleGrouped">Groupé/aligné (américain/NYT)</option>
         </select>
-      </label>
-
-      <!-- Minimum Qdrant similarity threshold for the theme glossary for
-           THIS generation (see backend/app.py's THEME_MIN_SCORE /
-           GenerateRequest.theme_precision) — has no effect if "Thématique"
-           is empty. Free-text field, at the user's explicit request
-           ("configure by hand"). -->
-      <label for="theme-precision">
-        <span data-i18n="themePrecisionLabel">Précision thématique</span>
-        <!-- type="text" (not "number") to control the decimal
-             separator: the dot is enforced (a typed comma is
-             normalized to a dot by script.js, at the user's explicit
-             request) — a localized "number" input could accept/
-             display a comma, a source of confusion. -->
-        <input type="text" id="theme-precision" name="theme_precision"
-               inputmode="decimal" autocomplete="off" spellcheck="false"
-               pattern="[0-9]*([.,][0-9]+)?" value="0.78"
-               data-i18n-title="themePrecisionTitle">
       </label>
 
       <!-- Action buttons on their own row, below the option combos, at
@@ -207,6 +170,23 @@
            width (flex-basis: 100%) so it wraps onto the next line in
            the form's own flex-wrap. -->
       <div id="form-actions">
+        <!-- Left of "Thématique" on the same row. Minimum Qdrant similarity threshold for the theme glossary for
+             THIS generation (see backend/app.py's THEME_MIN_SCORE /
+             GenerateRequest.theme_precision) — has no effect if "Thématique"
+             is empty. Free-text field, at the user's explicit request
+             ("configure by hand"). -->
+        <label for="theme-precision">
+          <span data-i18n="themePrecisionLabel">Précision thématique</span>
+          <!-- type="text" (not "number") to control the decimal
+               separator: the dot is enforced (a typed comma is
+               normalized to a dot by script.js, at the user's explicit
+               request) — a localized "number" input could accept/
+               display a comma, a source of confusion. -->
+          <input type="text" id="theme-precision" name="theme_precision"
+                 inputmode="decimal" autocomplete="off" spellcheck="false"
+                 pattern="[0-9]*([.,][0-9]+)?" value="0.78"
+                 data-i18n-title="themePrecisionTitle">
+        </label>
         <!-- Optional theme (word list) — in the action-button row, at
              the user's explicit request. Non-empty -> a Qdrant
              pre-search of the 5000 closest words, prioritized by the
@@ -262,10 +242,45 @@
           </div>
           <ul id="generate-challenge-list" hidden></ul>
         </div>
-        <button type="button" id="attempt-preview-reveal-btn" class="toggle-btn"
-                data-i18n="attemptPreviewRevealBtn">Voir les mots (spoiler)</button>
         <button type="button" id="stop-btn" data-i18n="stopBtn" hidden>Stop</button>
         <button type="button" id="continue-btn" data-i18n="continueBtn" hidden>Continuer</button>
+      </div>
+      <!-- "Difficulté", "Mots par pose", "Mode" and "Voir les mots (spoiler)" on a line of their own, right above
+           the "Générer les mots croisés :" row. -->
+      <div id="generate-options-row">
+        <label for="difficulty">
+          <span data-i18n="difficultyLabel">Difficulté</span>
+          <select id="difficulty" name="difficulty">
+            <option value="easy" selected data-i18n="difficultyEasy">Facile</option>
+            <option value="medium" data-i18n="difficultyMedium">Moyenne</option>
+            <option value="hard" data-i18n="difficultyHard">Difficile</option>
+          </select>
+        </label>
+
+        <!-- "Mots par pose": the most words a search node places at once,
+             on an empty attention zone (GenerateRequest.words_per_node,
+             crossword_gen.py's WORDS_PER_NODE; decreasing to 1 as the zone
+             fills, Filler._group_size). -->
+        <label for="words-per-node">
+          <span data-i18n="wordsPerNodeLabel">Mots par pose</span>
+          <input type="number" id="words-per-node" name="words_per_node"
+                 min="1" max="50" step="1" value="2">
+        </label>
+
+        <label for="mode">
+          <span data-i18n="modeLabel">Mode</span>
+          <select id="mode" name="mode">
+            <option value="flash" data-i18n="modeFlash">Flash</option>
+            <option value="turbo" data-i18n="modeTurbo">Turbo</option>
+            <option value="fast" data-i18n="modeFast">Rapide</option>
+            <option value="medium" selected data-i18n="modeMedium">Moyen</option>
+            <option value="ultra" data-i18n="modeUltra">Ultra</option>
+            <option value="megatron" data-i18n="modeMegatron">Megatron</option>
+            <option value="gridzilla" data-i18n="modeGridzilla">GridZilla</option>
+          </select>
+        </label>
+        <button type="button" id="attempt-preview-reveal-btn" class="toggle-btn"
+                data-i18n="attemptPreviewRevealBtn">Voir les mots (spoiler)</button>
       </div>
       <!-- "Générer les mots croisés :" row, the form's last line: one button
            per way of building the grid, then the tool buttons.

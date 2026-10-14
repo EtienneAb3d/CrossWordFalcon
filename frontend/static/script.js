@@ -279,6 +279,8 @@ const heightInput = document.getElementById("height");
 const blackEnrichmentInput = document.getElementById("black-enrichment");
 const wordsPerNodeInput = document.getElementById("words-per-node");
 const symmetrySelect = document.getElementById("symmetry");
+// "Style de motif" (GenerateRequest.pattern_style): "airy" or "grouped".
+const patternStyleSelect = document.getElementById("pattern-style");
 // "Thématique" field — shared const so both the generation form's submit
 // handler and Interactive mode's own enterInteractiveMode() (re-filling
 // it from a re-edited grid's own origin theme, at the user's explicit
@@ -826,6 +828,9 @@ let interactivePlacedHistory = [];
 let interactiveChallengeWords = [];
 let interactiveHasTheme = false;
 let interactiveLanguage = "fr";
+// The Interactive session's "Style de motif" (its generation_params):
+// "grouped" draws the grid's black cells full size.
+let interactivePatternStyle = "airy";
 // The session's own second (vertical-words) language on a genuinely
 // bilingual "Interactif" grid — "" (falsy) for an ordinary monolingual
 // one, mirroring interactiveLanguage's own always-a-string convention.
@@ -1862,6 +1867,7 @@ async function openAttemptPreviewInteractive(exampleGrid) {
       difficulty,
       theme: theme || undefined,
       challenge_words: generateChallengeWords.length ? generateChallengeWords : undefined,
+      pattern_style: patternStyleSelect.value,
     },
     "/api/interactive/from-attempt"
   );
@@ -2671,6 +2677,11 @@ function renderGrid() {
   const keptScrollLeft = gridViewportEl.scrollLeft;
   const keptScrollTop = gridViewportEl.scrollTop;
   gridEl.innerHTML = "";
+  // A "grouped" (American) grid draws its black cells full size.
+  const gridStyle = interactiveMode
+    ? interactivePatternStyle
+    : ((puzzle && puzzle.generation_params) || {}).pattern_style;
+  gridEl.classList.toggle("full-black", gridStyle === "grouped");
   // The grid is fully rebuilt below, so every previous cell element (and
   // any hover state referring to it) is about to become stale.
   cellElements = new Map();
@@ -3328,6 +3339,12 @@ function setUiLanguage(lang) {
   uiLanguage = lang;
   languageSelect.value = lang;
   welcomeLanguageSelect.value = lang;
+  // An English grid defaults to the American pattern: diagonal symmetry,
+  // grouped black cells.
+  if (lang === "en") {
+    symmetrySelect.value = "diagonal";
+    patternStyleSelect.value = "grouped";
+  }
   // Bilingual grid, at the user's explicit request: "the first language
   // selector sets the interface language, and forces the second language
   // selector to take the same value." A plain interface-language change
@@ -4431,6 +4448,12 @@ async function pollJob(jobId, t, { timed = false } = {}) {
         throw new Error(t.errorConnectionLostDuringGeneration);
       }
       const data = await response.json();
+      // A "grouped" (American) generation's preview grids draw their black
+      // cells full size, like its final grid.
+      if (response.ok && isCurrentJob()) {
+        attemptPreviewGrids.classList.toggle(
+          "full-black", (data.request || {}).pattern_style === "grouped");
+      }
       if (!response.ok) {
         consecutivePollFailures += 1;
         if (consecutivePollFailures <= POLL_RECONNECT_ATTEMPTS) {
@@ -8349,6 +8372,7 @@ async function proposeInteractiveTitle(autoFill) {
 
 // ---- Mode lifecycle ----
 function enterInteractiveMode(state) {
+  interactivePatternStyle = (state.generation_params || {}).pattern_style || "airy";
   gridZoomCellPx = null;
   gridLastRevealedSelection = null;
   gridViewportEl.scrollLeft = 0;
@@ -8451,6 +8475,7 @@ function enterInteractiveMode(state) {
       wordsPerNodeInput.value = gp.words_per_node;
     }
     if (gp.symmetry) symmetrySelect.value = gp.symmetry;
+    if (gp.pattern_style) patternStyleSelect.value = gp.pattern_style;
     if (gp.theme_precision !== undefined && gp.theme_precision !== null) {
       document.getElementById("theme-precision").value = gp.theme_precision;
     }
@@ -9927,6 +9952,7 @@ async function runInteractiveFinish(zoneCells) {
           black_enrichment_percent: Number(blackEnrichmentInput.value),
           words_per_node: Number(wordsPerNodeInput.value),
           symmetry: symmetrySelect.value,
+          pattern_style: patternStyleSelect.value,
           difficulty: document.getElementById("difficulty").value,
           theme: themeKeywords.join(" "),
           theme_precision: readThemePrecision(),
@@ -10258,6 +10284,7 @@ form.addEventListener("submit", async (event) => {
       bilingual_language: interactiveBilingualLanguage || undefined,
       black_enrichment_percent: blackEnrichmentPercent,
       symmetry: symmetrySelect.value,
+      pattern_style: patternStyleSelect.value,
       theme: theme || undefined,
       theme_precision: themePrecision,
       pseudo: userPseudo || undefined,
@@ -10290,6 +10317,7 @@ form.addEventListener("submit", async (event) => {
           black_enrichment_percent: blackEnrichmentPercent,
           words_per_node: wordsPerNode,
           symmetry: symmetrySelect.value,
+          pattern_style: patternStyleSelect.value,
           // Thématique: a word list semantically steering the grid
           // (a backend-side Qdrant pre-search — see backend/app.py's
           // THEME_PRESEARCH_LIMIT). Omitted if empty.

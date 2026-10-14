@@ -221,12 +221,19 @@ def _n(value):
     return f"{value:.2f}"
 
 
-def _puzzle_grid_svg(pattern, words, x0, y0, cell, letters=None):
+def _full_black(result):
+    """Whether `result`'s black cells fill their whole cell: a grid made
+    with the "grouped" pattern style (`generation_params.pattern_style`)."""
+    return (result.get("generation_params") or {}).get("pattern_style") == "grouped"
+
+
+def _puzzle_grid_svg(pattern, words, x0, y0, cell, letters=None, full_black=False):
     """Grid (black/white cells, clue numbers, 1-based row/column headers)
     for the puzzle sheets, with its top-left corner (headers included) at
     (x0, y0) and `cell` px cells, every text sized from `cell`. Empty, or
     showing each white cell's letter of `letters` (the solution) when
-    given."""
+    given. A black cell is a centered half-size `BLACK_CELL_FILL` square,
+    or fills the whole cell with `full_black`."""
     rows, cols = len(pattern), len(pattern[0])
     number_by_cell = {(w["row"], w["col"]): w["number"] for w in words}
     parts = []
@@ -253,10 +260,16 @@ def _puzzle_grid_svg(pattern, words, x0, y0, cell, letters=None):
                 f'fill="#ffffff" stroke="#1f2937" stroke-width="1"/>'
             )
             if pattern[r][c] == BLACK:
-                parts.append(
-                    f'<rect x="{_n(x + cell / 4)}" y="{_n(y + cell / 4)}" '
-                    f'width="{_n(cell / 2)}" height="{_n(cell / 2)}" fill="{BLACK_CELL_FILL}"/>'
-                )
+                if full_black:
+                    parts.append(
+                        f'<rect x="{_n(x)}" y="{_n(y)}" width="{_n(cell)}" height="{_n(cell)}" '
+                        f'fill="{BLACK_CELL_FILL}" stroke="#1f2937" stroke-width="1"/>'
+                    )
+                else:
+                    parts.append(
+                        f'<rect x="{_n(x + cell / 4)}" y="{_n(y + cell / 4)}" '
+                        f'width="{_n(cell / 2)}" height="{_n(cell / 2)}" fill="{BLACK_CELL_FILL}"/>'
+                    )
                 continue
             number = number_by_cell.get((r, c))
             if number:
@@ -446,7 +459,8 @@ def render_puzzle_svg(result, language, title="", difficulty=None):
     font_size, cell, items = layout
 
     parts = [_puzzle_header_svg(language, title, difficulty)]
-    parts.append(_puzzle_grid_svg(pattern, words, page_w - margin - cell * (cols + 1), body_top, cell))
+    parts.append(_puzzle_grid_svg(pattern, words, page_w - margin - cell * (cols + 1), body_top, cell,
+                                  full_black=_full_black(result)))
     parts.append(_puzzle_clue_items_svg(items, font_size))
     parts.append(_puzzle_footer_svg(language, grid_id))
     return _puzzle_page_svg("".join(parts))
@@ -580,7 +594,8 @@ def _large_grid_page(result, language, title, difficulty, letters=None, heading=
         body_top += PDF_SOLUTION_HEADING_HEIGHT
     cell = min((body_bottom - body_top) / (rows + 1), content_w / (cols + 1), PDF_MAX_CELL_SIZE)
     grid_x0 = margin + (content_w - cell * (cols + 1)) / 2
-    parts.append(_puzzle_grid_svg(pattern, words, grid_x0, body_top, cell, letters))
+    parts.append(_puzzle_grid_svg(pattern, words, grid_x0, body_top, cell, letters,
+                                  full_black=_full_black(result)))
     parts.append(_puzzle_footer_svg(language, grid_id))
     return _puzzle_page_svg("".join(parts))
 

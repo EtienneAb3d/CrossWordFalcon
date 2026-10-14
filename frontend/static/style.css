@@ -410,10 +410,21 @@ form {
 #generate-form.play-collapsed #theme-field,
 #generate-form.play-collapsed #generate-challenge-panel,
 #generate-form.play-collapsed #form-actions,
+#generate-form.play-collapsed #generate-options-row,
 #generate-form.play-collapsed #generate-row-label,
 #generate-form.play-collapsed #generate-interactive-btn,
 #generate-form.play-collapsed #generate-auto-btn {
   display: none;
+}
+
+/* "Difficulté", "Mots par pose", "Mode" and "Voir les mots (spoiler)" on their own line of the form's flex-wrap,
+   right above #generate-row; same field spacing as the option combos. */
+#generate-options-row {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: end;
 }
 
 /* "Générer la grille :" row, the form's last line (its own line of the
@@ -2768,6 +2779,13 @@ button:disabled {
   background-size: 50% 50%;
   background-position: center;
   background-repeat: no-repeat;
+}
+
+/* A grid made with the "grouped" (American) pattern style: its black cells
+   fill the whole cell (script.js sets .full-black on #grid and on the
+   attempt-preview container). */
+.full-black .cell.black {
+  background-size: 100% 100%;
 }
 
 /* "Interactif" mode: click-drag zone selection (script.js's

@@ -327,6 +327,27 @@ public final class Words {
         }
     }
 
+    /**
+     * {@code index} as the grid's {@code patternStyle} uses it: under "grouped" ({@link Grids#PATTERN_STYLES}), without
+     * the words shorter than {@link Grids#GROUPED_MIN_SLOT_LENGTH} — a 2-letter slot then has no candidate, so it is an
+     * "emplacement bloqué" that every step repairs and no successful grid can hold. The cached lexicon is never
+     * modified: the lengths kept are copied into new maps (the same one on both sides of a monolingual grid).
+     */
+    public static DualIndex styleIndex(DualIndex index, String patternStyle) {
+        if (!"grouped".equals(patternStyle)) return index;
+        Map<Integer, LenIndex> across = withoutShortWords(index.across);
+        Map<Integer, LenIndex> down = index.down == index.across ? across : withoutShortWords(index.down);
+        return new DualIndex(across, down);
+    }
+
+    private static Map<Integer, LenIndex> withoutShortWords(Map<Integer, LenIndex> lexicon) {
+        Map<Integer, LenIndex> kept = new LinkedHashMap<>();
+        lexicon.forEach((length, entry) -> {
+            if (length >= Grids.GROUPED_MIN_SLOT_LENGTH) kept.put(length, entry);
+        });
+        return kept;
+    }
+
     /** Available slot lengths per direction (Python's DualSet of ints). */
     public static final class LengthSets {
         public final Set<Integer> across;

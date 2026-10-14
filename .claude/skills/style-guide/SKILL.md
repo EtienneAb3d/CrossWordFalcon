@@ -4734,3 +4734,35 @@ end through the real running API (interactive start/step/save,
   on one line (tools ending at the form's right edge, 1244px); at 1000px
   Créations and Qdrant (admin) wrap to a second line ending at the right
   edge (884px); collapsed shows "Créer une grille" left, tools right.
+
+- **Generation form layout** (`frontend/static/index.html`), at the user's
+  explicit requests: the option row holds Langue, Largeur, Bilingue,
+  Hauteur, Taux noir, Symétrie and "Style de motif" (`#pattern-style`, a
+  plain `<select>` right of Symétrie: "Aéré (français)" / "Groupé/aligné
+  (américain/NYT)"); "Précision thématique" (`#theme-precision`) is the
+  first item of `#form-actions`, left of "Thématique", its plain
+  label-above-input shape top-aligned with Thématique's label by the row's
+  `align-items: flex-start`; "Difficulté", "Mots par pose", "Mode" and the
+  "Voir les mots (spoiler)" toggle sit on a line of their own,
+  `#generate-options-row` (`flex-basis: 100%`, `gap: 1rem`,
+  `align-items: end` like the option row, so the toggle lines up with the
+  input boxes), right above `#generate-row`, and are hidden with the other
+  fields in `.play-collapsed`. No new token. **Visually confirmed** with
+  Playwright/Chromium at 1400×1000: the option row fits on one line, the
+  three rows read Précision/Thématique/Mots Défi, then
+  Difficulté/Mots par pose/Mode/Voir les mots, then the generate row.
+
+- **Full-size black cells for an American grid** (`.full-black .cell.black
+  { background-size: 100% 100% }`), at the user's explicit request: a grid
+  made with the "grouped" pattern style ("Groupé/aligné (américain/NYT)")
+  draws each black cell as a `--black-cell` square filling the whole cell
+  instead of the centered half-size square. `script.js` sets `.full-black`
+  on `#grid` (play mode: `puzzle.generation_params.pattern_style`;
+  Interactive mode: `interactivePatternStyle`, from the session's
+  `generation_params`) and on `#attempt-preview-grids` (the polled job's
+  `request.pattern_style`). The PDF/SVG/PNG pages follow
+  (`svg_export._full_black`: a bordered cell filled whole with
+  `BLACK_CELL_FILL`). Every overlay on a black cell still only sets
+  `background-color`/`box-shadow`, so nothing else changes. **Visually
+  confirmed** with Playwright/Chromium on a real 9x9 English grid (computed
+  `background-size: 100% 100%`, full blue squares) and on its PDF.

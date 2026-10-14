@@ -117,7 +117,7 @@ class GenerationPaused(Exception):
 
 
 DEFAULT_WIDTH = 15
-DEFAULT_HEIGHT = 10
+DEFAULT_HEIGHT = 15
 
 # Number of attempts (pattern + CSP fill) launched in parallel at each
 # black-cell-ratio palier — see generate_grid(). The machine is typically far
@@ -860,13 +860,14 @@ def _new_black_cell_breaks_locked_slot(grid, rows, cols, r, c, index, locked_let
 BLACK_ALIGNED_DISTANCE_FACTOR = 10
 
 
-def _black_distance_sq(r, c, br, bc):
+def _black_distance_sq(r, c, br, bc, grouped=False):
     """Squared distance from (r, c) to the black cell (br, bc) as
     `_place_black_cells` weighs it: Euclidean, multiplied by
     `BLACK_ALIGNED_DISTANCE_FACTOR` when both cells share a row or a
-    column."""
+    column — plain Euclidean under the "grouped" pattern style
+    (`grouped`)."""
     d = (r - br) ** 2 + (c - bc) ** 2
-    if r == br or c == bc:
+    if not grouped and (r == br or c == bc):
         d *= BLACK_ALIGNED_DISTANCE_FACTOR ** 2
     return d
 
@@ -889,13 +890,14 @@ def _black_direction(r, c, br, bc):
     return None
 
 
-def _record_black(nearest, r, c, br, bc):
+def _record_black(nearest, r, c, br, bc, grouped=False):
     """Adds the black cell (br, bc) to `nearest` — (r, c)'s `[aligned,
     others]` pair: the smallest `_black_distance_sq` per direction, and the
     `BLACK_DISTANCE_NEIGHBORS - 4` smallest among non-aligned cells,
-    ascending. Returns whether `nearest` changed."""
+    ascending (`grouped`: see `_black_distance_sq`). Returns whether
+    `nearest` changed."""
     aligned, others = nearest
-    d = _black_distance_sq(r, c, br, bc)
+    d = _black_distance_sq(r, c, br, bc, grouped)
     direction = _black_direction(r, c, br, bc)
     if direction is not None:
         if aligned[direction] is None or d < aligned[direction]:
@@ -910,13 +912,199 @@ def _record_black(nearest, r, c, br, bc):
     return False
 
 
-def _nearest_black_distances_sq(blacks, r, c):
+def _nearest_black_distances_sq(blacks, r, c, grouped=False):
     """(r, c)'s `[aligned, others]` pair over `blacks` (see
     `_record_black`)."""
     nearest = [[None] * 4, []]
     for br, bc in blacks:
-        _record_black(nearest, r, c, br, bc)
+        _record_black(nearest, r, c, br, bc, grouped)
     return nearest
+
+
+def _black_line_length(grid, rows, cols, r, c):
+    """The length of the longest straight run of adjacent black cells,
+    across or down, the white cell (r, c) would belong to once blackened
+    (1 when it touches no black cell side by side) — the "grouped" pattern
+    style's first ranking criterion (`_place_black_cells`)."""
+    best = 1
+    for dr, dc in ((0, 1), (1, 0)):
+        length = 1
+        for sign in (1, -1):
+            rr, cc = r + sign * dr, c + sign * dc
+            while 0 <= rr < rows and 0 <= cc < cols and grid[rr][cc] == BLACK:
+                length += 1
+                rr, cc = rr + sign * dr, cc + sign * dc
+        best = max(best, length)
+    return best
+
+
+def _extends_border_line(grid, rows, cols, r, c):
+    """True for a cell of the grid's border with a black neighbour along
+    that same border — the "grouped" pattern style's last-resort cells
+    (`_place_black_cells`)."""
+    if r in (0, rows - 1):
+        if (c > 0 and grid[r][c - 1] == BLACK) or (c < cols - 1 and grid[r][c + 1] == BLACK):
+            return True
+    if c in (0, cols - 1):
+        if (r > 0 and grid[r - 1][c] == BLACK) or (r < rows - 1 and grid[r + 1][c] == BLACK):
+            return True
+    return False
+
+
+# Shortest slot the "grouped" pattern style lets a black cell it places
+# leave next to it (`_leaves_short_run`): no 2-letter slot.
+GROUPED_MIN_SLOT_LENGTH = 3
+
+
+def _leaves_short_run(grid, rows, cols, cells):
+    """True when a white run (maximal run of non-black cells, across or
+    down) touching one of `cells` — black in `grid` — is a slot shorter
+    than `GROUPED_MIN_SLOT_LENGTH` (at least 2 cells long; a single cell is
+    no slot)."""
+    for r, c in cells:
+        for dr, dc in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+            length = 0
+            rr, cc = r + dr, c + dc
+            while 0 <= rr < rows and 0 <= cc < cols and grid[rr][cc] != BLACK:
+                length += 1
+                rr, cc = rr + dr, cc + dc
+            if 2 <= length < GROUPED_MIN_SLOT_LENGTH:
+                return True
+    return False
+
+
+# "Grouped" pattern style's de-clumping (`_declump_black_cells`): a drawn
+# black cell with more than this many sides (left, right, up, down) on a
+# black cell or the grid's border is taken off once the ratio draw reaches its target, then the draw
+# runs again, at most `GROUPED_DECLUMP_MAX_ROUNDS` times.
+GROUPED_MAX_BLACK_NEIGHBORS = 2
+GROUPED_DECLUMP_MAX_ROUNDS = 10
+
+_SIDES = ((0, 1), (0, -1), (1, 0), (-1, 0))
+
+
+def _black_neighbor_count(grid, rows, cols, r, c):
+    """(r, c)'s sides that are a black cell or the grid's border."""
+    return sum(1 for dr, dc in _SIDES
+               if not (0 <= r + dr < rows and 0 <= c + dc < cols) or grid[r + dr][c + dc] == BLACK)
+
+
+def _white_component_ids(grid, rows, cols):
+    """Maps every non-black cell to the id of its connected white zone
+    (side neighbours), ids numbered in row-major order of first cell."""
+    ids = {}
+    next_id = 0
+    for r in range(rows):
+        for c in range(cols):
+            if grid[r][c] == BLACK or (r, c) in ids:
+                continue
+            ids[(r, c)] = next_id
+            stack = [(r, c)]
+            while stack:
+                cr, cc = stack.pop()
+                for dr, dc in _SIDES:
+                    nr, nc = cr + dr, cc + dc
+                    if (0 <= nr < rows and 0 <= nc < cols and grid[nr][nc] != BLACK
+                            and (nr, nc) not in ids):
+                        ids[(nr, nc)] = next_id
+                        stack.append((nr, nc))
+            next_id += 1
+    return ids
+
+
+def _run_through(grid, rows, cols, r, c, dr, dc):
+    """Length of the run of non-black cells through (r, c) along (dr, dc)."""
+    length = 1
+    for sign in (1, -1):
+        rr, cc = r + sign * dr, c + sign * dc
+        while 0 <= rr < rows and 0 <= cc < cols and grid[rr][cc] != BLACK:
+            length += 1
+            rr, cc = rr + sign * dr, cc + sign * dc
+    return length
+
+
+def _declump_black_cells(grid, rows, cols, row_black, col_black, drawn, symmetry):
+    """The "grouped" pattern style's de-clumping (`make_pattern`): every
+    black cell of `drawn` (the cells the ratio draw placed) with more than
+    `GROUPED_MAX_BLACK_NEIGHBORS` sides on a black cell or the grid's border
+    (`_black_neighbor_count`), listed in row-major
+    order, is turned white with its symmetry images (`_black_group`, every
+    image a black cell of `drawn`), unless an earlier removal already
+    brought it under the limit. A white zone this closes off from the rest
+    of the grid is opened by whitening, one group at a time, a black cell of
+    `drawn` touching both that zone (the smallest closed one first) and
+    another white zone. A removal is undone when no such cell exists, when
+    the grid is no longer structurally valid (`min_interior_free=1`) or when
+    a run through a whitened cell is a slot shorter than
+    `GROUPED_MIN_SLOT_LENGTH`. Updates `grid`, the counts and `drawn` in
+    place; returns the cells turned white."""
+    whitened = set()
+
+    def _group(cell):
+        group = _black_group(rows, cols, cell, symmetry)
+        if any(g not in drawn or grid[g[0]][g[1]] != BLACK for g in group):
+            return None
+        return group
+
+    clumped = [(r, c) for r in range(rows) for c in range(cols)
+               if (r, c) in drawn and grid[r][c] == BLACK
+               and _black_neighbor_count(grid, rows, cols, r, c) > GROUPED_MAX_BLACK_NEIGHBORS]
+    for cell in clumped:
+        r, c = cell
+        if grid[r][c] != BLACK or _black_neighbor_count(grid, rows, cols, r, c) <= GROUPED_MAX_BLACK_NEIGHBORS:
+            continue
+        group = _group(cell)
+        if group is None:
+            continue
+        step = list(group)
+        for gr, gc in step:
+            grid[gr][gc] = WHITE
+        kept = True
+        while True:
+            ids = _white_component_ids(grid, rows, cols)
+            sizes = {}
+            for zone in ids.values():
+                sizes[zone] = sizes.get(zone, 0) + 1
+            if len(sizes) <= 1:
+                break
+            smallest = min(sizes, key=lambda zone: (sizes[zone], zone))
+            opener = None
+            for (br, bc) in sorted(drawn):
+                if grid[br][bc] != BLACK:
+                    continue
+                touching = {ids[(br + dr, bc + dc)] for dr, dc in _SIDES
+                            if (br + dr, bc + dc) in ids}
+                if smallest in touching and len(touching) > 1:
+                    opener = _group((br, bc))
+                    if opener is not None:
+                        break
+            if opener is None:
+                kept = False
+                break
+            for gr, gc in opener:
+                grid[gr][gc] = WHITE
+            step.extend(opener)
+        if kept and (not is_structurally_valid(grid, rows, cols, min_interior_free=1) or any(
+                2 <= _run_through(grid, rows, cols, gr, gc, dr, dc) < GROUPED_MIN_SLOT_LENGTH
+                for gr, gc in step for dr, dc in ((0, 1), (1, 0)))):
+            kept = False
+        if not kept:
+            for gr, gc in step:
+                grid[gr][gc] = BLACK
+            continue
+        for gr, gc in step:
+            row_black[gr] -= 1
+            col_black[gc] -= 1
+            drawn.discard((gr, gc))
+            whitened.add((gr, gc))
+    return whitened
+
+
+def _black_closest_sq(nearest):
+    """The smallest squared distance of `nearest` (`_record_black`): the
+    closest black cell's, `math.inf` while there is none."""
+    values = [d for d in nearest[0] if d is not None] + nearest[1]
+    return min(values) if values else math.inf
 
 
 def _black_spread_score(nearest):
@@ -935,6 +1123,14 @@ def _in_corner_square(rows, cols, r, c):
     drawn by `make_pattern`'s ratio-based ("Taux noir") placement."""
     return (r < CORNER_SQUARE_SIZE or r >= rows - CORNER_SQUARE_SIZE) and (
         c < CORNER_SQUARE_SIZE or c >= cols - CORNER_SQUARE_SIZE)
+
+
+# Black-cell pattern styles of the "Style de motif" selector
+# (`make_pattern`'s `pattern_style`): "airy" (French style) ranks the ratio
+# draw's candidates farthest from the black cells first and never places
+# two black cells side by side; "grouped" (American/NYT style) ranks them
+# closest first and accepts adjacent black cells (`_place_black_cells`).
+PATTERN_STYLES = ("airy", "grouped")
 
 
 # Black-cell symmetries of the "Symétrie" selector (`make_pattern`'s
@@ -1241,7 +1437,7 @@ def _run_score(run, cell_score):
 
 def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, target, placed,
                         rng, index=None, locked_letters=None, available_lengths=None,
-                        forbid_adjacency=False, symmetry=None):
+                        forbid_adjacency=False, symmetry=None, grouped=False):
     """Ratio-based black-cell placement of `make_pattern` ("Taux noir"):
     places black cells one at a time until `placed` reaches `target` or no
     candidate can be placed any more.
@@ -1297,6 +1493,23 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     black cell nor another cell of the group, and the grid with the whole
     group blackened must stay structurally valid.
 
+    `grouped` (the "grouped" `PATTERN_STYLES`, "Style de motif"): a border
+    cell with a black neighbour along that same border
+    (`_extends_border_line`) is a valid cell only once every run is
+    selected and no other cell is valid; before the
+    `_crossing_length_score` window, only the valid cells building a
+    straight run of adjacent black cells, across or down, are kept when
+    some do (`_black_line_length` at least 2); the last ranking is inverted — the cells
+    closest to a black cell come first: by increasing plain Euclidean
+    distance to the closest black cell
+    (`_black_closest_sq`, an adjacent cell first), then by increasing
+    `_black_spread_score`, both without `BLACK_ALIGNED_DISTANCE_FACTOR`
+    and without the virtual ring of the grid's edges, ties keeping
+    `candidates`' shuffled order; adjacency is accepted from the first
+    level on (`forbid_adjacency` ignored); a cell (with its images) is
+    valid only if it leaves no slot shorter than `GROUPED_MIN_SLOT_LENGTH`
+    next to it (`_leaves_short_run`).
+
     `candidates` is updated in place (placed cells removed). Returns
     (placed, unplaced cells)."""
     remaining = candidates
@@ -1319,17 +1532,20 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     def _valid(r, c, structure, allow_adjacency, position):
         if not _valid_single(r, c, structure, allow_adjacency):
             return False
-        if not symmetric:
+        group = _group(r, c) if symmetric else [(r, c)]
+        if len(group) == 1 and not grouped:
             return True
-        group = _group(r, c)
-        if len(group) == 1:
-            return True
-        if any(cell not in position or not _valid_single(*cell, structure, allow_adjacency)
-               for cell in group):
+        if len(group) > 1 and any(
+                cell not in position or not _valid_single(*cell, structure, allow_adjacency)
+                for cell in group):
             return False
         for cr, cc in group:
             grid[cr][cc] = BLACK
         try:
+            if grouped and _leaves_short_run(grid, rows, cols, group):
+                return False
+            if len(group) == 1:
+                return True
             if not allow_adjacency and any(
                     _has_black_neighbor(grid, rows, cols, cr, cc) for cr, cc in group):
                 return False
@@ -1354,10 +1570,27 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
                     checked[i] = _valid(*remaining[i], structure, allow_adjacency, position)
                 if checked[i]:
                     valid.append(i)
+            if grouped:
+                # A border cell extending a black cell along the same border
+                # is taken only once every run is selected without another
+                # valid cell.
+                edge = [i for i in valid if _extends_border_line(grid, rows, cols, *remaining[i])]
+                if edge:
+                    valid = [i for i in valid if i not in set(edge)]
+                    if not valid and run_count == len(run_order):
+                        valid = edge
             if valid:
+                if grouped:
+                    aligned = [i for i in valid
+                               if _black_line_length(grid, rows, cols, *remaining[i]) >= 2]
+                    if aligned:
+                        valid = aligned
                 valid.sort(key=lambda i: -cell_score[remaining[i]])
                 valid = valid[:_window_size(len(valid), percent)]
-                valid.sort(key=lambda i: -dist[i])
+                if grouped:
+                    valid.sort(key=lambda i: (_black_closest_sq(nearest[i]), dist[i]))
+                else:
+                    valid.sort(key=lambda i: -dist[i])
                 window = valid[:_window_size(len(valid), percent)]
                 return window[rng.randrange(len(window))]
             if run_count == len(run_order):
@@ -1368,14 +1601,15 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     runs = _ordered_runs(run_at, rows, cols)
     cell_score = {cell: _crossing_length_score(run_at, rows, cols, *cell) for cell in run_at}
     blacks = [(br, bc) for br in range(rows) for bc in range(cols) if grid[br][bc] == BLACK]
-    # The grid's edges count as black cells: a ring of virtual black cells
-    # just outside the grid.
-    blacks += [(br, bc) for br in (-1, rows) for bc in range(-1, cols + 1)]
-    blacks += [(br, bc) for br in range(rows) for bc in (-1, cols)]
+    if not grouped:
+        # The grid's edges count as black cells: a ring of virtual black
+        # cells just outside the grid.
+        blacks += [(br, bc) for br in (-1, rows) for bc in range(-1, cols + 1)]
+        blacks += [(br, bc) for br in range(rows) for bc in (-1, cols)]
     # Per candidate, kept parallel to `remaining` and updated as each new
     # black cell is placed: its closest aligned and non-aligned black cells'
     # squared weighted distances, and the resulting score.
-    nearest = [_nearest_black_distances_sq(blacks, r, c) for r, c in remaining]
+    nearest = [_nearest_black_distances_sq(blacks, r, c, grouped) for r, c in remaining]
     dist = [_black_spread_score(n) for n in nearest]
 
     def _place(cell):
@@ -1395,7 +1629,7 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
             if other in cell_score:
                 cell_score[other] = _crossing_length_score(run_at, rows, cols, *other)
         for i, (cr, cc) in enumerate(remaining):
-            if _record_black(nearest[i], cr, cc, r, c):
+            if _record_black(nearest[i], cr, cc, r, c, grouped):
                 dist[i] = _black_spread_score(nearest[i])
         grid[r][c] = BLACK
         row_black[r] += 1
@@ -1408,7 +1642,8 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
         run_scores = {id(run): _run_score(run, cell_score) for run in run_order}
         run_order.sort(key=lambda run: -run_scores[id(run)])
         chosen = None
-        for allow_adjacency in ((False,) if forbid_adjacency else (False, True)):
+        adjacency_levels = (True,) if grouped else (False,) if forbid_adjacency else (False, True)
+        for allow_adjacency in adjacency_levels:
             for min_free in range(STRUCTURAL_MIN_INTERIOR_FREE, 0, -1):
                 chosen = _draw(run_order, position, min_free, allow_adjacency)
                 if chosen is not None:
@@ -1826,7 +2061,7 @@ def _prefill_group_allowed(grid, rows, cols, group, candidate_set, forbid_adjace
 def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates,
                                available_lengths, index=None, locked_letters=None, rng=None,
                                fill_objective_fraction=1.0, forbid_adjacency=False,
-                               symmetry=None):
+                               symmetry=None, grouped=False):
     """Pre-fill phase, at the user's explicit request: as long as the grid
     has a slot (`extract_slots`) whose length has fewer than `PREFILL_MIN_
     WORD_COUNT` candidate words in the dictionary (`available_lengths` —
@@ -1943,7 +2178,11 @@ def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates
     together with its images (`_black_group`), each image still white being
     itself in `candidates` (never a locked letter) and, under
     `forbid_adjacency`, touching no black cell nor another cell of the
-    group; the structural check covers the whole group."""
+    group; the structural check covers the whole group.
+
+    `grouped` (the "grouped" `PATTERN_STYLES`): a cell (with its images) is
+    placed only if it leaves no slot shorter than `GROUPED_MIN_SLOT_LENGTH`
+    next to it (`_leaves_short_run`)."""
     count = 0
     unfixable = set()
     zone_footprints = []  # [cases_d_origine (set), cases_noires_ajoutées (int)]
@@ -2019,7 +2258,8 @@ def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates
                     continue
                 for gr, gc in group:
                     grid[gr][gc] = BLACK
-                if is_structurally_valid(grid, rows, cols, min_interior_free=1):
+                if (not (grouped and _leaves_short_run(grid, rows, cols, group))
+                        and is_structurally_valid(grid, rows, cols, min_interior_free=1)):
                     for gr, gc in group:
                         row_black[gr] += 1
                         col_black[gc] += 1
@@ -2058,13 +2298,21 @@ def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates
 
 def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
                   seed_grid=None, locked_letters=None, index=None,
-                  black_enrichment_fraction=POST_PREFILL_BLACK_FRACTION, symmetry=None):
+                  black_enrichment_fraction=POST_PREFILL_BLACK_FRACTION, symmetry=None,
+                  pattern_style=None):
     """Places black cells one at a time, independently unless `symmetry`
     ("Symétrie", `BLACK_SYMMETRIES`) is set — the ratio draw then places
     every drawn cell together with its images (`symmetry_cells`), and the
     short-slot limit reopens a bounding cell with its images, and pre-fill
     places each cell with its images too — biased to keep black cells
-    apart from each other.
+    apart from each other — or, with `pattern_style` "grouped"
+    (`PATTERN_STYLES`, "Style de motif"; `None`/"airy" = apart), biased to
+    group them, adjacent cells accepted and preferred (`_place_black_cells`'
+    `grouped`); then, once the target is reached (and after every
+    short-slot redraw), the drawn black cells with more than
+    `GROUPED_MAX_BLACK_NEIGHBORS` black neighbours are taken off, the zones
+    this closes opened (`_declump_black_cells`), and the draw runs again up
+    to the target, at most `GROUPED_DECLUMP_MAX_ROUNDS` rounds.
 
     A purely random placement order (just shuffling every cell) tends to
     let black cells end up touching each other by chance, forming small
@@ -2283,12 +2531,13 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     # are accounted for here purely for robustness, for a caller (the
     # CLI) that might still set `--black-ratio`.
     fill_objective_fraction = max(black_ratio, black_enrichment_fraction)
+    grouped = pattern_style == "grouped"
 
     if available_lengths is not None:
         candidates = _prefill_unfillable_slots(
             grid, rows, cols, row_black, col_black, candidates, available_lengths,
             index, locked_letters, rng, fill_objective_fraction,
-            forbid_adjacency=True, symmetry=symmetry,
+            forbid_adjacency=True, symmetry=symmetry, grouped=grouped,
         )
 
     placed = sum(row.count(BLACK) for row in grid)
@@ -2308,8 +2557,28 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     drawn = set(ratio_candidates)
     _place_black_cells(grid, rows, cols, row_black, col_black, ratio_candidates, target, placed,
                         rng, index=index, locked_letters=locked_letters, available_lengths=available_lengths,
-                        forbid_adjacency=True, symmetry=symmetry)
+                        forbid_adjacency=True, symmetry=symmetry, grouped=grouped)
     drawn -= set(ratio_candidates)
+
+    def _declump_and_redraw():
+        # "Grouped" style: black cells with more than
+        # GROUPED_MAX_BLACK_NEIGHBORS black neighbours are taken off (their
+        # closed zones opened), then the draw runs again up to the target;
+        # the cells taken off are no longer candidates.
+        for _ in range(GROUPED_DECLUMP_MAX_ROUNDS):
+            if not _declump_black_cells(grid, rows, cols, row_black, col_black, drawn, symmetry):
+                break
+            if sum(row_black) >= target:
+                break
+            before = set(ratio_candidates)
+            _place_black_cells(grid, rows, cols, row_black, col_black, ratio_candidates, target,
+                                sum(row_black), rng, index=index, locked_letters=locked_letters,
+                                available_lengths=available_lengths, forbid_adjacency=True,
+                                symmetry=symmetry, grouped=grouped)
+            drawn.update(before - set(ratio_candidates))
+
+    if grouped:
+        _declump_and_redraw()
     # Short-slot limit: once the target is reached, too many slots of at
     # most `SHORT_SLOT_MAX_LENGTH` letters reopen the drawn black cells
     # bounding them, and the draw runs again to reach the target.
@@ -2332,8 +2601,10 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
         _place_black_cells(grid, rows, cols, row_black, col_black, ratio_candidates, target,
                             sum(row_black), rng, index=index, locked_letters=locked_letters,
                             available_lengths=available_lengths, forbid_adjacency=True,
-                            symmetry=symmetry)
+                            symmetry=symmetry, grouped=grouped)
         drawn |= before - set(ratio_candidates)
+        if grouped:
+            _declump_and_redraw()
     still_candidates = set(ratio_candidates)
     candidates = [
         cell for cell in candidates
@@ -2344,7 +2615,7 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
         _prefill_unfillable_slots(
             grid, rows, cols, row_black, col_black, candidates, available_lengths,
             index, locked_letters, rng, fill_objective_fraction,
-            forbid_adjacency=True, symmetry=symmetry,
+            forbid_adjacency=True, symmetry=symmetry, grouped=grouped,
         )
 
     return grid
@@ -2393,6 +2664,25 @@ def slot_direction(cells):
     straight horizontal or vertical run, never diagonal, so this never
     needs the whole list."""
     return "across" if cells[0][0] == cells[1][0] else "down"
+
+
+def style_index(index, pattern_style):
+    """`index` (a `DualIndex`) as the grid's `pattern_style` uses it: under
+    "grouped" (`PATTERN_STYLES`), without the words shorter than
+    `GROUPED_MIN_SLOT_LENGTH` — a 2-letter slot then has no candidate, so
+    it is an "emplacement bloqué" that every step repairs and no
+    successful grid can hold. The cached lexicon is never modified: the
+    lengths kept are shallow-copied (the same copy on both sides of a
+    monolingual grid)."""
+    if pattern_style != "grouped":
+        return index
+
+    def _kept(idx):
+        return {length: entry for length, entry in idx.items() if length >= GROUPED_MIN_SLOT_LENGTH}
+
+    across = _kept(index.across)
+    down = across if index.down is index.across else _kept(index.down)
+    return DualIndex(across, down)
 
 
 class DualIndex:
@@ -3337,6 +3627,17 @@ MAX_CONSECUTIVE_CONTINUE_PALIERS = 4
 # already bounds that branch.
 GRID_REPEAT_DEEP_CLEANUP_STREAK = 2
 GRID_REPEAT_DISCARD_STREAK = 3
+
+# A grid holding more than this factor times the "Taux noir" objective
+# (`max(round(rows*cols*black_ratio), round(black_enrichment_fraction*rows*
+# cols))`) of black cells at the end of a palier is a failed grid
+# (`generate_grid`'s `black_overflow_limit`): a success that holds that
+# many is not counted, and a failed grid that still holds that many after
+# its end-of-palier cleanup is dropped from the next palier's pool, its
+# place going to a blank-grid worker (after a full cleanup, like
+# GRID_REPEAT_DISCARD_STREAK). Off when the objective is 0, or when the
+# permanent black cells alone exceed the limit.
+BLACK_OVERFLOW_FACTOR = 1.5
 
 # Number of PARALLEL_ATTEMPTS workers that, right after a full cleanup
 # ("nettoyage complet" — see generate_grid's own `else:` branch, as opposed
@@ -13958,6 +14259,9 @@ _worker_words_per_node = WORDS_PER_NODE
 # Black-cell symmetry of the ratio draw (generate_grid's `black_symmetry`,
 # see `make_pattern`'s `symmetry`), shared the same way.
 _worker_black_symmetry = None
+# Black-cell pattern style of the ratio draw (generate_grid's
+# `pattern_style`, see `make_pattern`'s `pattern_style`), shared the same way.
+_worker_pattern_style = None
 # "Stop" button (see CANCEL_CHECK_INTERVAL/Filler.__init__), at the
 # user's explicit request — like `_worker_index` right above, passed once
 # per worker via the pool's initializer rather than as an argument of
@@ -14199,7 +14503,7 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
                   proper_noun_words=None,
                   max_proper_nouns=None, non_gloss_words=None, max_non_gloss=None,
                   priority_words=None, challenge_words=None, scrabble_words=None,
-                  words_per_node=WORDS_PER_NODE, black_symmetry=None):
+                  words_per_node=WORDS_PER_NODE, black_symmetry=None, pattern_style=None):
     # See GENERATION_PROCESS_NICE_INCREMENT (right after PARALLEL_ATTEMPTS)
     # for the full reasoning — applied only once here, the very first time
     # this worker starts up (never per submitted task), since the pool
@@ -14225,10 +14529,11 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
         _worker_proper_noun_words, _worker_max_proper_nouns, \
         _worker_non_gloss_words, _worker_max_non_gloss, _worker_priority_words, \
         _worker_challenge_words, _worker_scrabble_words, _worker_words_per_node, \
-        _worker_black_symmetry
+        _worker_black_symmetry, _worker_pattern_style
     _worker_index = index
     _worker_words_per_node = words_per_node
     _worker_black_symmetry = black_symmetry
+    _worker_pattern_style = pattern_style
     _worker_priority_words = priority_words
     _worker_challenge_words = challenge_words
     _worker_scrabble_words = scrabble_words
@@ -14735,7 +15040,7 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
     grid = make_pattern(rows, cols, ratio, rng, available_lengths=available_lengths,
                          seed_grid=seed_grid, locked_letters=locked_letters, index=_worker_index,
                          black_enrichment_fraction=black_enrichment_fraction,
-                         symmetry=_worker_black_symmetry)
+                         symmetry=_worker_black_symmetry, pattern_style=_worker_pattern_style)
     # The palier's "pattern_generated" preview is built from this very
     # pattern (see `generate_grid`, `_publish_pattern_preview`).
     if racing and _worker_best_state_queue is not None:
@@ -15383,7 +15688,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                    bilingual_priority_words=None, permanent_locked_letters=None,
                    permanent_black_cells=None, required_cells=None, challenge_words=None,
                    on_live_preview=None, words_per_node=WORDS_PER_NODE, black_symmetry=None,
-                   start_grid=None):
+                   start_grid=None, pattern_style=None):
     """`start_grid` (`None` by default: a blank grid): the grid every
     attempt that starts afresh starts from instead of a blank grid — the
     reset attempts of a palier, the mid-palier replacement attempts and the
@@ -15399,6 +15704,12 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     `black_symmetry` (`BLACK_SYMMETRIES`, `None` = "none"): the web UI's
     "Symétrie" selector, applied by every attempt's ratio draw
     (`make_pattern`'s `symmetry`).
+
+    `pattern_style` (`PATTERN_STYLES`, `None` = "airy"): the web UI's
+    "Style de motif" selector, applied by every attempt's ratio draw
+    (`make_pattern`'s `pattern_style`); under "grouped", the lexicon has
+    no word shorter than `GROUPED_MIN_SLOT_LENGTH` (`style_index`) and
+    such a "Mots Défi" word is ignored, so no grid holds a 2-letter word.
 
     The Scrabble wordlist of each language (`merge_scrabble_lexicon`)
     is merged into the lexicon loaded for it, whatever `max_words` — whole,
@@ -15763,7 +16074,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # dictionaries on a bilingual one.
     index_across = lexicon_across.index
     index_down = lexicon_down.index
-    index = DualIndex(index_across, index_down)
+    index = style_index(DualIndex(index_across, index_down), pattern_style)
+    index_across, index_down = index.across, index.down
 
     # Theme preselection (see the docstring / `priority_words`). Words
     # already arrive in MOT form (uppercase, accent-stripped — Qdrant's
@@ -15806,6 +16118,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # the loaded dictionary.
     challenge_words = frozenset(
         gf for w in (challenge_words or ()) if (gf := challenge_word_grid_form(w))
+        and (pattern_style != "grouped" or len(gf) >= GROUPED_MIN_SLOT_LENGTH)
     )
     # Their usage scores, even outside the lexicon (`_usage_correction`),
     # per direction's language like the lexicon.
@@ -15854,6 +16167,18 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # (every palier included), never reset by the failure-side retry
     # machinery below — see MIN_SUCCESSFUL_ATTEMPTS.
     accumulated_successes = []
+    # See BLACK_OVERFLOW_FACTOR: the most black cells a grid may hold at
+    # the end of a palier, `None` when the rule is off.
+    black_objective = max(round(rows * cols * black_ratio),
+                          round(black_enrichment_fraction * rows * cols))
+    black_overflow_limit = BLACK_OVERFLOW_FACTOR * black_objective if black_objective else None
+    if black_overflow_limit is not None and len(permanent_black_cells or ()) > black_overflow_limit:
+        black_overflow_limit = None
+
+    def _black_overflow(grid):
+        return (black_overflow_limit is not None
+                and _candidate_black_count(grid) > black_overflow_limit)
+
     # Genuine successes counted the moment each attempt finishes (during
     # the palier's harvest, before `accumulated_successes` is merged at its
     # end), published live as the "success_count" progress event.
@@ -16391,7 +16716,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         initargs=(index, cancel_event, batch_abandoned_event, attempt_done_event, best_state_queue,
                   checks_progress, attempt_active, warmup_barrier, proper_noun_words, max_proper_nouns,
                   non_gloss_words, max_non_gloss, priority_words, challenge_words, scrabble_words,
-                  words_per_node, black_symmetry)
+                  words_per_node, black_symmetry, pattern_style)
     ) as executor:
         # Pool warm-up: forces every worker to finish its real startup
         # before the very first palier (see `_warmup_worker`/`warmup_
@@ -17184,6 +17509,17 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         progress("success_count", count=live_success_count)
                 plugged_outcomes.append((g, r, d))
             outcomes = plugged_outcomes
+            # A success holding too many black cells (BLACK_OVERFLOW_FACTOR)
+            # is a failed grid: not counted, and dropped like a discarded
+            # one (its diagnostics carry no partial state to clean).
+            overflow_successes = [
+                (g, r, d) for g, r, d in outcomes if r is not None and _black_overflow(g)
+            ]
+            if overflow_successes:
+                outcomes = [o for o in outcomes if not (o[1] is not None and _black_overflow(o[0]))]
+                superseded_checks += sum(d.get("checks", 0) for _, _, d in overflow_successes)
+                live_success_count -= len(overflow_successes)
+                progress("success_count", count=live_success_count)
             successes = [(g, r, d) for g, r, d in outcomes if r is not None]
             # Cumulative across the whole search — see MIN_SUCCESSFUL_
             # ATTEMPTS/accumulated_successes's own docstring above.
@@ -17459,6 +17795,26 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # cleaned, depending on the length of the word crossing the
             # impossible slot — see `_cleaned_playable_score`'s own
             # docstring for the complete detail.
+            if not failed_unique:
+                # Every attempt of this palier was a success dropped for
+                # holding too many black cells (BLACK_OVERFLOW_FACTOR) and
+                # the threshold is not reached: no grid to resume, the next
+                # palier starts again from a blank grid (`start_grid` when
+                # given), like a cleanup that dropped every grid.
+                carry_seed_grid = _fresh_seed_grid()
+                carry_locked_letters = None
+                carry_preseed_assignment = None
+                carry_excluded_slots = None
+                carry_continue_locked = None
+                carry_seed_pool = None
+                carry_seed_pool_continue = None
+                carry_seed_pool_lineage = None
+                carry_seed_pool_continue_lineage = None
+                consecutive_continue_paliers = 0
+                carry_cleanup_streaks = {}
+                carry_discarded_count = 0
+                just_cleaned = True
+                continue
             failed_pairs = sorted(
                 failed_unique,
                 key=lambda gd: _cleaned_playable_score(
@@ -17942,6 +18298,27 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     priority_words=priority_words, challenge_words=challenge_words, index=index,
                     challenge_usage=challenge_usage,
                 )
+                # A cleaned grid holding too many black cells
+                # (BLACK_OVERFLOW_FACTOR) is a failed grid: dropped from the
+                # pool; none left -> the next palier starts from a blank grid.
+                cleaned_continue_candidates = [
+                    sc for sc in cleaned_continue_candidates if not _black_overflow(sc[0])
+                ]
+                if not cleaned_continue_candidates:
+                    carry_seed_grid = _fresh_seed_grid()
+                    carry_locked_letters = None
+                    carry_preseed_assignment = None
+                    carry_excluded_slots = None
+                    carry_continue_locked = None
+                    carry_seed_pool = None
+                    carry_seed_pool_continue = None
+                    carry_seed_pool_lineage = None
+                    carry_seed_pool_continue_lineage = None
+                    consecutive_continue_paliers = 0
+                    carry_cleanup_streaks = {}
+                    carry_discarded_count = 0
+                    just_cleaned = True
+                    continue
                 carry_seed_pool_continue = _continue_seed_pool(cleaned_continue_candidates)
                 (carry_seed_grid, carry_preseed_assignment, carry_excluded_slots,
                  carry_continue_locked) = (
@@ -18095,6 +18472,13 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     c.result() if isinstance(c, concurrent.futures.Future) else c
                     for c in kept_candidates
                 ]
+                # A cleaned grid holding too many black cells, or a success
+                # dropped for the same reason (BLACK_OVERFLOW_FACTOR), is a
+                # failed grid: dropped, its place going to a blank-grid
+                # worker like a discarded one.
+                overflow_count = sum(1 for c in kept_candidates if _black_overflow(c[0]))
+                kept_candidates = [c for c in kept_candidates if not _black_overflow(c[0])]
+                discarded_count += overflow_count + len(overflow_successes)
                 carry_cleanup_streaks = cleanup_streaks
                 just_cleaned = True
                 if kept_candidates:
@@ -18409,6 +18793,8 @@ def main():
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--symmetry", choices=BLACK_SYMMETRIES, default="none",
                      help="symétrie des cases noires tirées")
+    ap.add_argument("--pattern-style", choices=PATTERN_STYLES, default="airy",
+                     help="style de motif : aérée (cases noires éloignées) ou groupée (rapprochées)")
     args = ap.parse_args()
 
     result = generate_grid(
@@ -18421,6 +18807,7 @@ def main():
         seed=args.seed,
         wordlist_path=args.wordlist,
         black_symmetry=args.symmetry,
+        pattern_style=args.pattern_style,
     )
 
     if result is None:

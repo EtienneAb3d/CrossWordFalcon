@@ -48,7 +48,7 @@ public final class Generator {
     private Generator() {}
 
     public static final int DEFAULT_WIDTH = 15;
-    public static final int DEFAULT_HEIGHT = 10;
+    public static final int DEFAULT_HEIGHT = 15;
     public static final int PARALLEL_ATTEMPTS = resolveParallel();
     public static final double PALIER_ATTEMPT_INTERRUPT_FRACTION = 1.0;
     public static final int MIN_SUCCESSFUL_ATTEMPTS = 2;
@@ -57,6 +57,13 @@ public final class Generator {
     public static final int MAX_CONSECUTIVE_CONTINUE_PALIERS = 4;
     public static final int GRID_REPEAT_DEEP_CLEANUP_STREAK = 2;
     public static final int GRID_REPEAT_DISCARD_STREAK = 3;
+    /**
+     * A grid holding more than this factor times the "Taux noir" objective of black cells at the end of a palier is a
+     * failed grid (mirrors BLACK_OVERFLOW_FACTOR): a success holding that many is not counted, a failed grid still
+     * holding that many after its end-of-palier cleanup is dropped (its place going to a blank-grid worker after a
+     * full cleanup). Off when the objective is 0 or the permanent black cells alone exceed the limit.
+     */
+    public static final double BLACK_OVERFLOW_FACTOR = 1.5;
     public static final int FULL_RESET_ATTEMPT_COUNT = 1;
 
     private static int resolveParallel() {
@@ -222,6 +229,8 @@ public final class Generator {
         int wordsPerNode = Filler.WORDS_PER_NODE;
         /** Black-cell symmetry of the ratio draw (Params.blackSymmetry, mirrors _worker_black_symmetry). */
         String blackSymmetry = null;
+        /** Black-cell pattern style of the ratio draw (Params.patternStyle, mirrors _worker_pattern_style). */
+        String patternStyle = null;
         /** Pattern each original attempt of a fresh-pattern palier drew (patternAttempt), by attempt seed: the
          * palier's "pattern_generated" preview is built from them (mirrors generate_grid's early_patterns). */
         final Map<Long, char[][]> earlyPatterns = new ConcurrentHashMap<>();
@@ -317,7 +326,7 @@ public final class Generator {
             for (int cell : permanentBlack) seedGrid[Cells.r(cell)][Cells.c(cell)] = BLACK;
         }
         char[][] grid = Grids.makePattern(rows, cols, ratio, rng, available, seedGrid, locked, ctx.index, enrichment,
-                ctx.blackSymmetry);
+                ctx.blackSymmetry, ctx.patternStyle);
         // The palier's "pattern_generated" preview is built from this very pattern (publishPatternPreview).
         if (racing) ctx.earlyPatterns.put(seed, Grids.copy(grid));
         List<int[]> slots = Grids.extractSlots(grid, rows, cols);
@@ -658,6 +667,8 @@ public final class Generator {
         public int wordsPerNode = Filler.WORDS_PER_NODE;
         /** The "Symétrie" selector (Grids.BLACK_SYMMETRIES, null = none), applied by every attempt's ratio draw. */
         public String blackSymmetry = null;
+        /** The "Style de motif" selector (Grids.PATTERN_STYLES, null = airy), applied by every attempt's ratio draw. */
+        public String patternStyle = null;
         /** Seed grid of every attempt starting afresh instead of a blank grid (mirrors generate_grid's start_grid):
          *  "Finir la grille"/"Finir la zone" pass the Interactive grid's black cells. */
         public char[][] startGrid = null;
@@ -703,7 +714,7 @@ public final class Generator {
         Integer maxNonGloss = Words.MAX_NON_GLOSS_WORDS.getOrDefault(p.difficulty, Words.MAX_NON_GLOSS_WORDS.get("hard"));
         Set<String> nonGloss = new HashSet<>(across.nonGloss());
         if (bilingual) nonGloss.addAll(down.nonGloss());
-        DualIndex index = new DualIndex(across.index(), down.index());
+        DualIndex index = Words.styleIndex(new DualIndex(across.index(), down.index()), p.patternStyle);
         PW priority;
         boolean anyPriority = (p.priorityWords != null && !p.priorityWords.isEmpty())
                 || (p.bilingualPriorityWords != null && !p.bilingualPriorityWords.isEmpty());
@@ -738,6 +749,8 @@ public final class Generator {
             nonGloss.removeAll(down.scrabbleWords());
         }
         Set<String> challenge = new LinkedHashSet<>(Words.challengeSet(p.challengeWords));
+        // Under the "grouped" style, a "Mots Défi" word shorter than Grids.GROUPED_MIN_SLOT_LENGTH is ignored.
+        if ("grouped".equals(p.patternStyle)) challenge.removeIf(w -> w.length() < Grids.GROUPED_MIN_SLOT_LENGTH);
         // Their usage scores, even outside the lexicon (Fill.usageCorrection), per direction's language.
         Fill.ChallengeUsage challengeUsage = null;
         if (!challenge.isEmpty()) {
@@ -746,7 +759,7 @@ public final class Generator {
                     bilingual ? Words.usageScoresOf(bilingualLanguage, challenge) : usageAcross);
         }
         Map<String, Object> lengthCounts = new LinkedHashMap<>();
-        new TreeMap<>(across.index()).forEach((len, li) -> lengthCounts.put(String.valueOf(len), li.size()));
+        new TreeMap<>(index.across).forEach((len, li) -> lengthCounts.put(String.valueOf(len), li.size()));
         int wordCount = across.wordCount();
         Integer bilingualWordCount = bilingual ? down.wordCount() : null;
         progress.on("wordlist_loaded", data("word_count", wordCount, "length_counts", lengthCounts,
@@ -768,6 +781,14 @@ public final class Generator {
         // Genuine successes counted the moment each attempt finishes,
         // published live as the "success_count" progress event.
         int[] liveSuccessCount = {0};
+        // See BLACK_OVERFLOW_FACTOR: the most black cells a grid may hold at the end of a palier, null when off.
+        long blackObjective = (long) Math.max(Math.rint(rows * cols * p.blackRatio),
+                Math.rint(p.blackEnrichmentFraction * rows * cols));
+        Double overflowLimit = blackObjective == 0 ? null : BLACK_OVERFLOW_FACTOR * blackObjective;
+        if (overflowLimit != null && permanentBlack != null && permanentBlack.size() > overflowLimit) overflowLimit = null;
+        final Double blackOverflowLimit = overflowLimit;
+        java.util.function.Predicate<char[][]> blackOverflow =
+                g -> blackOverflowLimit != null && Grids.countBlack(g) > blackOverflowLimit;
         Diag bestDiag = null;
         Diag lastDiag = null;
         List<Object> lastExamples = new ArrayList<>();
@@ -841,6 +862,7 @@ public final class Generator {
         ctx.challengeWords = challenge;
         ctx.wordsPerNode = p.wordsPerNode;
         ctx.blackSymmetry = p.blackSymmetry;
+        ctx.patternStyle = p.patternStyle;
         ctx.cancelEvent = p.cancelEvent;
         ctx.attemptDoneEvent = attemptDoneEvent;
         ctx.bestStateQueue = bestStateQueue::add;
@@ -1266,6 +1288,21 @@ public final class Generator {
                     liveSuccessCount[0]++;
                     progress.on("success_count", data("count", liveSuccessCount[0]));
                 }
+                // A success holding too many black cells (BLACK_OVERFLOW_FACTOR) is a failed grid: not counted,
+                // and dropped like a discarded one (its diagnostics carry no partial state to clean).
+                int overflowSuccesses = 0;
+                for (java.util.Iterator<Outcome> it = outcomes.iterator(); it.hasNext(); ) {
+                    Outcome o = it.next();
+                    if (o.result() != null && blackOverflow.test(o.grid())) {
+                        it.remove();
+                        overflowSuccesses++;
+                        supersededChecks += o.diag().checks == null ? 0 : o.diag().checks;
+                    }
+                }
+                if (overflowSuccesses > 0) {
+                    liveSuccessCount[0] -= overflowSuccesses;
+                    progress.on("success_count", data("count", liveSuccessCount[0]));
+                }
                 List<Outcome> successes = new ArrayList<>();
                 List<Outcome> failedAll = new ArrayList<>();
                 for (Outcome o : outcomes) (o.result() != null ? successes : failedAll).add(o);
@@ -1330,6 +1367,24 @@ public final class Generator {
                 for (Outcome o : failedUnique) {
                     cleanedScores.put(o, Cleanup.cleanedPlayableScore(o.grid(), o.diag(), rows, cols, index, rng, priority, challenge,
                             challengeUsage));
+                }
+                if (failedUnique.isEmpty()) {
+                    // Every attempt was a success dropped for holding too many black cells and the threshold is not
+                    // reached: the next palier starts again from a blank grid (startGrid when given).
+                    carrySeedGrid = freshSeedGrid.get();
+                    carryLocked = null;
+                    carryPreseed = null;
+                    carryExcluded = null;
+                    carryContinueLocked = null;
+                    carrySeedPool = null;
+                    carrySeedPoolContinue = null;
+                    carrySeedPoolLineage = null;
+                    carrySeedPoolContinueLineage = null;
+                    consecutiveContinue = 0;
+                    carryCleanupStreaks = new HashMap<>();
+                    carryDiscardedCount = 0;
+                    justCleaned = true;
+                    continue;
                 }
                 List<Outcome> failedPairs = new ArrayList<>(failedUnique);
                 failedPairs.sort((a, b) -> Double.compare(cleanedScores.get(b), cleanedScores.get(a)));
@@ -1469,6 +1524,25 @@ public final class Generator {
                     List<Cleanup.ContinueCandidate> cc = new ArrayList<>();
                     for (Future<Cleanup.ContinueCandidate> f : cleaning) cc.add(await(f));
                     cc = sortContinue(cc, priority, challenge, index, challengeUsage);
+                    // A cleaned grid holding too many black cells (BLACK_OVERFLOW_FACTOR) is a failed grid: dropped;
+                    // none left -> the next palier starts from a blank grid.
+                    cc.removeIf(c -> blackOverflow.test(c.seedGrid()));
+                    if (cc.isEmpty()) {
+                        carrySeedGrid = freshSeedGrid.get();
+                        carryLocked = null;
+                        carryPreseed = null;
+                        carryExcluded = null;
+                        carryContinueLocked = null;
+                        carrySeedPool = null;
+                        carrySeedPoolContinue = null;
+                        carrySeedPoolLineage = null;
+                        carrySeedPoolContinueLineage = null;
+                        consecutiveContinue = 0;
+                        carryCleanupStreaks = new HashMap<>();
+                        carryDiscardedCount = 0;
+                        justCleaned = true;
+                        continue;
+                    }
                     int keep = Cleanup.seedPoolKeep(cc.size(), PA, FULL_RESET_ATTEMPT_COUNT);
                     carrySeedPoolContinue = new ArrayList<>();
                     List<Integer> rawLineage = new ArrayList<>();
@@ -1537,6 +1611,12 @@ public final class Generator {
                         Object[] cand = c instanceof Future<?> f ? await((Future<Object[]>) f) : (Object[]) c;
                         kept.add(cand);
                     }
+                    // A cleaned grid holding too many black cells, or a success dropped for the same reason
+                    // (BLACK_OVERFLOW_FACTOR), is a failed grid: dropped, its place going to a blank-grid worker.
+                    int overflowCount = 0;
+                    for (Object[] cand : kept) if (blackOverflow.test((char[][]) cand[0])) overflowCount++;
+                    kept.removeIf(cand -> blackOverflow.test((char[][]) cand[0]));
+                    discarded += overflowCount + overflowSuccesses;
                     carryCleanupStreaks = cleanupStreaks;
                     justCleaned = true;
                     if (!kept.isEmpty()) {
@@ -1784,6 +1864,7 @@ public final class Generator {
                 case "--seed" -> p.seed = Long.parseLong(args[++i]);
                 case "--deadline-checks" -> p.deadlineChecks = Long.parseLong(args[++i]);
                 case "--symmetry" -> p.blackSymmetry = args[++i];
+                case "--pattern-style" -> p.patternStyle = args[++i];
                 default -> {
                     System.err.println("unknown option " + args[i]);
                     System.exit(2);
