@@ -1100,6 +1100,115 @@ def _declump_black_cells(grid, rows, cols, row_black, col_black, drawn, symmetry
     return whitened
 
 
+def _short_runs(grid, rows, cols):
+    """Every white run (maximal run of non-black cells) shorter than
+    `GROUPED_MIN_SLOT_LENGTH` but at least 2 cells long, across (row by
+    row) then down (column by column), as `(cells, bounds)`: its cells and
+    the cells right before and after it inside the grid."""
+    out = []
+    for r in range(rows):
+        c = 0
+        while c < cols:
+            if grid[r][c] == BLACK:
+                c += 1
+                continue
+            start = c
+            while c < cols and grid[r][c] != BLACK:
+                c += 1
+            if 2 <= c - start < GROUPED_MIN_SLOT_LENGTH:
+                bounds = [(r, b) for b in (start - 1, c) if 0 <= b < cols]
+                out.append(([(r, k) for k in range(start, c)], bounds))
+    for c in range(cols):
+        r = 0
+        while r < rows:
+            if grid[r][c] == BLACK:
+                r += 1
+                continue
+            start = r
+            while r < rows and grid[r][c] != BLACK:
+                r += 1
+            if 2 <= r - start < GROUPED_MIN_SLOT_LENGTH:
+                bounds = [(b, c) for b in (start - 1, r) if 0 <= b < rows]
+                out.append(([(k, c) for k in range(start, r)], bounds))
+    return out
+
+
+def _undo_short_run_changes(before, after, rows, cols, confirmed, symmetry=None):
+    """The "grouped" pattern style's guard on an end-of-palier cleanup
+    (`_clean_continue_candidate`, `_clean_retry_candidate_task`): the
+    cleanup may not leave a slot shorter than `GROUPED_MIN_SLOT_LENGTH`.
+    For each such run (`_short_runs` order), each black/white change from
+    `before` to `after` lying in it or bounding it (row-major order) is
+    undone with its symmetry images the cleanup changed too
+    (`_black_group`), then, failing that, with the whole block of side-
+    adjacent changed cells it belongs to (images included); as a last
+    resort every change is undone. An undo is kept only if the grid then
+    holds fewer such runs and does not turn structurally invalid
+    (`min_interior_free=1`; a cleanup output already invalid may stay so).
+    A cell carrying a `confirmed` letter is never blackened back. Returns
+    the new grid."""
+    after = [row[:] for row in after]
+    changed = {(r, c) for r in range(rows) for c in range(cols)
+               if (before[r][c] == BLACK) != (after[r][c] == BLACK)
+               and not (before[r][c] == BLACK and (r, c) in confirmed)}
+    count = len(_short_runs(after, rows, cols))
+    valid = is_structurally_valid(after, rows, cols, min_interior_free=1)
+
+    def _with_images(cells):
+        out = set(cells)
+        frontier = list(cells)
+        while frontier:
+            cell = frontier.pop()
+            for g in _black_group(rows, cols, cell, symmetry):
+                if g in changed and g not in out:
+                    out.add(g)
+                    frontier.append(g)
+        return out
+
+    def _block(cell):
+        out = {cell}
+        frontier = [cell]
+        while frontier:
+            r, c = frontier.pop()
+            for dr, dc in _SIDES:
+                n = (r + dr, c + dc)
+                if n in changed and n not in out:
+                    out.add(n)
+                    frontier.append(n)
+        return out
+
+    def _try(cells):
+        nonlocal count, valid
+        if not cells:
+            return False
+        saved = [(g, after[g[0]][g[1]]) for g in cells]
+        for gr, gc in cells:
+            after[gr][gc] = BLACK if before[gr][gc] == BLACK else WHITE
+        new_count = len(_short_runs(after, rows, cols))
+        new_valid = is_structurally_valid(after, rows, cols, min_interior_free=1)
+        if new_count < count and (new_valid or not valid):
+            changed.difference_update(cells)
+            count, valid = new_count, new_valid
+            return True
+        for (gr, gc), value in saved:
+            after[gr][gc] = value
+        return False
+
+    while count:
+        progress = False
+        for cells, bounds in _short_runs(after, rows, cols):
+            for cell in sorted(set(cells + bounds) & changed):
+                if _try(sorted(_with_images([cell]))) or _try(sorted(_with_images(_block(cell)))):
+                    progress = True
+                    break
+            if progress:
+                break
+        if not progress:
+            _try(sorted(changed))
+            break
+    return after
+
+
 def _black_closest_sq(nearest):
     """The smallest squared distance of `nearest` (`_record_black`): the
     closest black cell's, `math.inf` while there is none."""
@@ -2537,7 +2646,7 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
         candidates = _prefill_unfillable_slots(
             grid, rows, cols, row_black, col_black, candidates, available_lengths,
             index, locked_letters, rng, fill_objective_fraction,
-            forbid_adjacency=True, symmetry=symmetry, grouped=grouped,
+            forbid_adjacency=not grouped, symmetry=symmetry, grouped=grouped,
         )
 
     placed = sum(row.count(BLACK) for row in grid)
@@ -2615,7 +2724,7 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
         _prefill_unfillable_slots(
             grid, rows, cols, row_black, col_black, candidates, available_lengths,
             index, locked_letters, rng, fill_objective_fraction,
-            forbid_adjacency=True, symmetry=symmetry, grouped=grouped,
+            forbid_adjacency=not grouped, symmetry=symmetry, grouped=grouped,
         )
 
     return grid
@@ -14065,7 +14174,7 @@ def _reassign_lineage_numbers(raw_lineage, previous_lineage, next_lineage_number
 # (same objects, same indices) as long as neither one changed anything.
 def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng,
                                permanent_locked_letters=None, permanent_black_cells=None,
-                               challenge_words=None, symmetry=None):
+                               challenge_words=None, symmetry=None, grouped=False):
     """Cleans up a single failed attempt of a "reprise telle quelle"
     palier (see `_continue_seed_pool`) — removes whatever crosses an
     impossible slot (`_clean_blocked_slots`), after first trying to
@@ -14183,6 +14292,12 @@ def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng,
             permanent_locked_letters=permanent_locked_letters,
             permanent_black_cells=permanent_black_cells, moves=moves,
         )
+    if grouped:
+        # "Grouped" style: the cleanup may leave no 2-letter slot.
+        cand_seed_grid = _undo_short_run_changes(
+            original_grid, cand_seed_grid, rows, cols, confirmed, symmetry)
+        confirmed = {cell: ch for cell, ch in confirmed.items()
+                     if cand_seed_grid[cell[0]][cell[1]] != BLACK}
     if new_black_cells or reopened_cells or cand_seed_grid != cand_grid:
         new_slots = extract_slots(cand_seed_grid, rows, cols)
         cand_preseed_assignment = [
@@ -15653,6 +15768,7 @@ def _clean_continue_candidate_task(cand_grid, cand_diag, rows, cols, rng_seed,
         permanent_black_cells=permanent_black_cells,
         challenge_words=challenge_words,
         symmetry=_worker_black_symmetry,
+        grouped=_worker_pattern_style == "grouped",
     )
 
 
@@ -15675,6 +15791,10 @@ def _clean_retry_candidate_task(cand_grid, cand_diag, rows, cols, deep, rng_seed
         permanent_black_cells=permanent_black_cells,
         symmetry=_worker_black_symmetry,
     )
+    if _worker_pattern_style == "grouped":
+        # "Grouped" style: the cleanup may leave no 2-letter slot.
+        cand_seed = _undo_short_run_changes(
+            cand_grid, cand_seed, rows, cols, cand_confirmed, _worker_black_symmetry)
     return cand_seed, cand_confirmed, cand_slots, cand_diag.get("process_number")
 
 

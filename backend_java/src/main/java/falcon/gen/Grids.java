@@ -551,6 +551,142 @@ public final class Grids {
         }
     }
 
+    /**
+     * Every white run shorter than {@link #GROUPED_MIN_SLOT_LENGTH} but at least 2 cells long, across (row by row) then
+     * down (column by column), as {cells, bounds}: its cells and the cells right before and after it inside the grid
+     * (mirrors _short_runs).
+     */
+    static List<int[][]> shortRuns(char[][] grid, int rows, int cols) {
+        List<int[][]> out = new ArrayList<>();
+        for (int r = 0; r < rows; r++) {
+            int c = 0;
+            while (c < cols) {
+                if (grid[r][c] == BLACK) {
+                    c++;
+                    continue;
+                }
+                int start = c;
+                while (c < cols && grid[r][c] != BLACK) c++;
+                if (c - start >= 2 && c - start < GROUPED_MIN_SLOT_LENGTH) {
+                    int[] cells = new int[c - start];
+                    for (int k = start; k < c; k++) cells[k - start] = Cells.of(r, k);
+                    List<Integer> bounds = new ArrayList<>();
+                    if (start - 1 >= 0) bounds.add(Cells.of(r, start - 1));
+                    if (c < cols) bounds.add(Cells.of(r, c));
+                    out.add(new int[][]{cells, bounds.stream().mapToInt(Integer::intValue).toArray()});
+                }
+            }
+        }
+        for (int c = 0; c < cols; c++) {
+            int r = 0;
+            while (r < rows) {
+                if (grid[r][c] == BLACK) {
+                    r++;
+                    continue;
+                }
+                int start = r;
+                while (r < rows && grid[r][c] != BLACK) r++;
+                if (r - start >= 2 && r - start < GROUPED_MIN_SLOT_LENGTH) {
+                    int[] cells = new int[r - start];
+                    for (int k = start; k < r; k++) cells[k - start] = Cells.of(k, c);
+                    List<Integer> bounds = new ArrayList<>();
+                    if (start - 1 >= 0) bounds.add(Cells.of(start - 1, c));
+                    if (r < rows) bounds.add(Cells.of(r, c));
+                    out.add(new int[][]{cells, bounds.stream().mapToInt(Integer::intValue).toArray()});
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
+     * The "grouped" pattern style's guard on an end-of-palier cleanup (mirrors _undo_short_run_changes): for each run
+     * of {@link #shortRuns}, each black/white change from {@code before} to {@code after} lying in it or bounding it
+     * is undone with its symmetry images the cleanup changed too, then, failing that, with the whole block of
+     * side-adjacent changed cells it belongs to (images included); as a last resort every change is undone. An undo is
+     * kept only if the grid then holds fewer such runs and does not turn structurally invalid (an output already
+     * invalid may stay so). A cell carrying a {@code confirmed} letter is never blackened back. Returns the new grid.
+     */
+    static char[][] undoShortRunChanges(char[][] before, char[][] after0, int rows, int cols,
+                                        Map<Integer, Character> confirmed, String symmetry) {
+        char[][] after = copy(after0);
+        java.util.TreeSet<Integer> changed = new java.util.TreeSet<>();
+        for (int r = 0; r < rows; r++) {
+            for (int c = 0; c < cols; c++) {
+                if ((before[r][c] == BLACK) != (after[r][c] == BLACK)
+                        && !(before[r][c] == BLACK && confirmed != null && confirmed.containsKey(Cells.of(r, c)))) {
+                    changed.add(Cells.of(r, c));
+                }
+            }
+        }
+        int[] count = {shortRuns(after, rows, cols).size()};
+        boolean[] valid = {isStructurallyValid(after, rows, cols, 1)};
+        java.util.function.Function<Set<Integer>, java.util.TreeSet<Integer>> withImages = cells -> {
+            java.util.TreeSet<Integer> out = new java.util.TreeSet<>(cells);
+            java.util.ArrayDeque<Integer> frontier = new java.util.ArrayDeque<>(cells);
+            while (!frontier.isEmpty()) {
+                int cell = frontier.pop();
+                for (int g : blackGroup(rows, cols, cell, symmetry)) {
+                    if (changed.contains(g) && out.add(g)) frontier.push(g);
+                }
+            }
+            return out;
+        };
+        java.util.function.Function<Integer, Set<Integer>> block = cell -> {
+            Set<Integer> out = new HashSet<>(List.of(cell));
+            java.util.ArrayDeque<Integer> frontier = new java.util.ArrayDeque<>(List.of(cell));
+            while (!frontier.isEmpty()) {
+                int cur = frontier.pop();
+                for (int[] d : SIDES) {
+                    int nr = Cells.r(cur) + d[0], nc = Cells.c(cur) + d[1];
+                    if (nr < 0 || nc < 0) continue;
+                    int n = Cells.of(nr, nc);
+                    if (changed.contains(n) && out.add(n)) frontier.push(n);
+                }
+            }
+            return out;
+        };
+        java.util.function.Predicate<Set<Integer>> tryUndo = cells -> {
+            if (cells.isEmpty()) return false;
+            Map<Integer, Character> saved = new HashMap<>();
+            for (int g : cells) {
+                saved.put(g, after[Cells.r(g)][Cells.c(g)]);
+                after[Cells.r(g)][Cells.c(g)] = before[Cells.r(g)][Cells.c(g)] == BLACK ? BLACK : WHITE;
+            }
+            int newCount = shortRuns(after, rows, cols).size();
+            boolean newValid = isStructurallyValid(after, rows, cols, 1);
+            if (newCount < count[0] && (newValid || !valid[0])) {
+                changed.removeAll(cells);
+                count[0] = newCount;
+                valid[0] = newValid;
+                return true;
+            }
+            saved.forEach((g, v) -> after[Cells.r(g)][Cells.c(g)] = v);
+            return false;
+        };
+        while (count[0] > 0) {
+            boolean progress = false;
+            for (int[][] run : shortRuns(after, rows, cols)) {
+                java.util.TreeSet<Integer> cand = new java.util.TreeSet<>();
+                for (int c : run[0]) if (changed.contains(c)) cand.add(c);
+                for (int c : run[1]) if (changed.contains(c)) cand.add(c);
+                for (int cell : cand) {
+                    if (tryUndo.test(withImages.apply(Set.of(cell)))
+                            || tryUndo.test(withImages.apply(block.apply(cell)))) {
+                        progress = true;
+                        break;
+                    }
+                }
+                if (progress) break;
+            }
+            if (!progress) {
+                tryUndo.test(new java.util.TreeSet<>(changed));
+                break;
+            }
+        }
+        return after;
+    }
+
     /** Shortest slot the "grouped" pattern style lets a black cell it places leave next to it: no 2-letter slot. */
     static final int GROUPED_MIN_SLOT_LENGTH = 3;
 
@@ -1472,7 +1608,7 @@ public final class Grids {
         double fillObjective = Math.max(blackRatio, blackEnrichmentFraction);
         if (available != null) {
             candidates = prefillUnfillableSlots(grid, rows, cols, rowBlack, colBlack, candidates, available, index,
-                    locked, rng, fillObjective, true, symmetry, grouped);
+                    locked, rng, fillObjective, !grouped, symmetry, grouped);
         }
         int placed = countBlack(grid);
         int target = (int) Math.max(placed, Math.max(Math.rint(rows * cols * blackRatio),
@@ -1531,7 +1667,7 @@ public final class Grids {
         candidates = kept;
         if (available != null && locked != null && !locked.isEmpty()) {
             prefillUnfillableSlots(grid, rows, cols, rowBlack, colBlack, candidates, available, index, locked, rng,
-                    fillObjective, true, symmetry, grouped);
+                    fillObjective, !grouped, symmetry, grouped);
         }
         return grid;
     }

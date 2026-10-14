@@ -499,7 +499,11 @@ valeurs `PATTERN_STYLES`) choisit le critère de pose des cases noires
     images), **aucun emplacement de 2 lettres** : chaque suite de cases
     non noires qui la touche, horizontale ou verticale, fait 1 case ou au
     moins `GROUPED_MIN_SLOT_LENGTH` (**3**) cases (`_leaves_short_run`) ;
-    le pré-remplissage applique la même règle ;
+    le pré-remplissage applique la même règle, et accepte en dernier
+    recours une case collée à une case noire — c'est ce qui lui permet de
+    couper un emplacement de 2 lettres hérité du nettoyage précédent
+    (aucun mot de 2 lettres, donc aucun candidat), dont chaque case touche
+    presque toujours la case noire qui le borne ;
   - une case du **bord** ayant une case noire voisine le long de ce même
     bord n'est prise que si, tous les segments étant retenus, aucune autre
     case n'est valide (`_extends_border_line`) ;
@@ -541,8 +545,17 @@ En style « Groupé/aligné », le dictionnaire de la grille ne contient
 **aucun mot de moins de `GROUPED_MIN_SLOT_LENGTH` (3) lettres**
 (`style_index`, appliqué par `generate_grid` et au lexique d'une session
 Interactive ; un « Mot Défi » de 2 lettres est ignoré). Un emplacement de
-2 lettres, quelle que soit l'étape qui le crée (réparations entre
-paliers, optimisations, réaménagements, édition à la main), n'a donc
+2 lettres ne peut pas non plus naître d'un nettoyage de fin de palier :
+toute modification de case noire faite par le nettoyage (case ajoutée ou
+rouverte, « reprise telle quelle » comme nettoyage complet) qui touche un
+emplacement de 2 lettres est annulée avec ses images de symétrie, puis,
+si cela ne suffit pas, avec tout le bloc de cases voisines modifiées, et
+en dernier recours toutes les modifications du nettoyage le sont ; une
+annulation n'est gardée que si elle diminue le nombre de ces emplacements
+sans rendre la grille invalide, et une case portant une lettre confirmée
+n'est jamais renoircie (`_undo_short_run_changes`, `_short_runs`).
+Un emplacement de 2 lettres, quelle que soit l'étape qui le crée
+(optimisations, réaménagements, édition à la main), n'a de toute façon
 aucun candidat : c'est un emplacement bloqué, que le pré-remplissage
 coupe, que le nettoyage répare comme tout autre, et qu'aucune grille
 réussie ne peut contenir — `minimize_black_squares` refuse lui aussi

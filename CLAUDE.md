@@ -554,7 +554,10 @@ own rng drawn from the parent's in candidate order:
    `PATTERN_STYLES` airy/grouped; Java `Grids.PATTERN_STYLES`,
    `Generator.Params.patternStyle`) a cell (with its images) is valid
    only if no white run touching it is 2 cells long
-   (`_leaves_short_run`, `GROUPED_MIN_SLOT_LENGTH` 3, pre-fill too; Java
+   (`_leaves_short_run`, `GROUPED_MIN_SLOT_LENGTH` 3, pre-fill too — which, under this style,
+   accepts an adjacent cell as a last resort (`forbid_adjacency=not
+   grouped`), so it can cut a 2-letter slot a cleanup left (each of its
+   cells touches its bounding black cell); Java
    `Grids.leavesShortRun`), a border cell with a black neighbour along
    that border is taken only once every run is selected with no other
    valid cell (`_extends_border_line`), only the cells forming a straight
@@ -579,7 +582,16 @@ own rng drawn from the parent's in candidate order:
    `generation_params.pattern_style` — an Interactive session stores
    `{"pattern_style"}` there, `InteractiveFromAttemptRequest.pattern_style`
    too), so a 2-letter slot, whatever step creates it, is an "emplacement
-   bloqué" and no successful grid holds one. Once the grouped draw reaches
+   bloqué" and no successful grid holds one. An end-of-palier cleanup may not
+   create one either: `_clean_continue_candidate(grouped=)` and
+   `_clean_retry_candidate_task` (Java `Cleanup.cleanContinueCandidate`,
+   `Generator.cleanCandidate`) pass their output pattern through
+   `_undo_short_run_changes` (Java `Grids.undoShortRunChanges`), which
+   undoes the cleanup's black/white changes lying in or bounding a run of
+   `_short_runs` — the cell with its changed images, else its whole block
+   of side-adjacent changed cells, else every change — keeping an undo only
+   if it lowers the number of such runs without turning the grid invalid,
+   never re-blackening a cell holding a confirmed letter. Once the grouped draw reaches
    its target (and after every short-slot redraw), `_declump_black_cells`
    (Java `Grids.declumpBlackCells`) takes off, in row-major order with
    their images, the drawn black cells with more than

@@ -1074,7 +1074,14 @@ the current defaults/behavior to know before touching this code.
   rather than a check in each black-cell mechanism (a 2-letter slot can
   still appear on an intermediate grid, shown blocked); a 2-letter "Mots
   Défi" word is ignored; an Interactive session's style is stored in its
-  `generation_params`. De-clumping — the user's rule: once the grouped
+  `generation_params`. The user's further rule: an end-of-palier cleanup
+  may not create a 2-letter slot (American style only). Choices made with
+  it, to revisit with the user: the cleanup's black/white changes touching
+  such a slot are undone afterwards (cell + images, then the block of
+  adjacent changes, then all of them) rather than refused one by one
+  inside each cleanup step; a cell holding a confirmed letter is never
+  blackened back; an undo is kept when it lowers the number of 2-letter
+  slots without making a valid grid invalid. De-clumping — the user's rule: once the grouped
   draw reaches its target, take off the black cells adjacent on 3 sides
   or more to other black cells (`GROUPED_MAX_BLACK_NEIGHBORS` 2), open any
   zone this closes by taking off more black cells, then redraw to the
@@ -1101,7 +1108,9 @@ the current defaults/behavior to know before touching this code.
   spread score, both without the aligned factor and without the edges'
   virtual ring (otherwise every border cell would rank first); grouped
   accepts adjacency from the first level of the ratio draw, while
-  pre-fill keeps its never-adjacent rule; leaving English does not reset
+  pre-fill accepts it as a last resort (the user's rule: forbid draws
+  leaving 2-letter slots — a 2-letter slot left by the previous cleanup can
+  only be cut next to its bounding black cell); leaving English does not reset
   the symmetry or the style; Populate keeps the airy default.
 - The ratio-based ("Taux noir") black-cell draw of `make_pattern` never
   blackens a cell of the 2x2 square at each corner (`_in_corner_square`,

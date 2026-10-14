@@ -1193,7 +1193,7 @@ public final class Cleanup {
                                                            Map<Integer, Character> permanentLocked,
                                                            Set<Integer> permanentBlack, Set<String> challenge) {
         return cleanContinueCandidate(candGrid, candDiag, rows, cols, index, rng, permanentLocked, permanentBlack,
-                challenge, null);
+                challenge, null, false);
     }
 
     /** symmetry: every black cell this cleanup added, freed or moved (a lengthened word's boundary, the move kept or
@@ -1203,7 +1203,7 @@ public final class Cleanup {
                                                            DualIndex index, Rng rng,
                                                            Map<Integer, Character> permanentLocked,
                                                            Set<Integer> permanentBlack, Set<String> challenge,
-                                                           String symmetry) {
+                                                           String symmetry, boolean grouped) {
         char[][] originalGrid = Grids.copy(candGrid);
         List<int[]> slots0 = Grids.extractSlots(candGrid, rows, cols);
         Zones z = shortenImpossibleZones(candGrid, rows, cols, slots0, candDiag.assignment, candDiag.impossibleSlots,
@@ -1238,6 +1238,15 @@ public final class Cleanup {
             @SuppressWarnings("unchecked")
             Map<Integer, Character> symConfirmed = (Map<Integer, Character>) sym[1];
             confirmed = symConfirmed;
+        }
+        if (grouped) {
+            // "Grouped" style: the cleanup may leave no 2-letter slot.
+            seed = Grids.undoShortRunChanges(originalGrid, seed, rows, cols, confirmed, symmetry);
+            Map<Integer, Character> kept = new LinkedHashMap<>();
+            for (Map.Entry<Integer, Character> e : confirmed.entrySet()) {
+                if (seed[Cells.r(e.getKey())][Cells.c(e.getKey())] != BLACK) kept.put(e.getKey(), e.getValue());
+            }
+            confirmed = kept;
         }
         if (!newBlack.isEmpty() || !reopened.isEmpty() || !Arrays.deepEquals(seed, z.grid())) {
             List<int[]> newSlots = Grids.extractSlots(seed, rows, cols);

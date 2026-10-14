@@ -1532,7 +1532,7 @@ public final class Generator {
                         final Rng taskRng = new Rng(rng.seed31());
                         cleaning.add(executor.submit(() -> Cleanup.cleanContinueCandidate((char[][]) o[0], (Diag) o[1],
                                 rows, cols, index, taskRng, permanentLocked, permanentBlack, challenge,
-                                ctx.blackSymmetry)));
+                                ctx.blackSymmetry, "grouped".equals(ctx.patternStyle))));
                     }
                     List<Cleanup.ContinueCandidate> cc = new ArrayList<>();
                     for (Future<Cleanup.ContinueCandidate> f : cleaning) cc.add(await(f));
@@ -1595,7 +1595,7 @@ public final class Generator {
                         final Rng taskRng = new Rng(rng.seed31());
                         ordinary.add(executor.submit(() -> cleanCandidate((char[][]) o[0], (Diag) o[1], rows, cols,
                                 fCarryLocked, fCarrySeedGrid, index, taskRng, permanentLocked, permanentBlack, false,
-                                ctx.blackSymmetry)));
+                                ctx.blackSymmetry, "grouped".equals(ctx.patternStyle))));
                     }
                     List<Object> keptOrDeep = new ArrayList<>();
                     for (int k = 0; k < optimized.size(); k++) {
@@ -1614,7 +1614,7 @@ public final class Generator {
                             final Rng taskRng = new Rng(rng.seed31());
                             keptOrDeep.add(executor.submit(() -> cleanCandidate((char[][]) o[0], (Diag) o[1], rows, cols,
                                     fCarryLocked, fCarrySeedGrid, index, taskRng, permanentLocked, permanentBlack, true,
-                                    ctx.blackSymmetry)));
+                                    ctx.blackSymmetry, "grouped".equals(ctx.patternStyle))));
                         } else {
                             keptOrDeep.add(cand);
                         }
@@ -1818,12 +1818,19 @@ public final class Generator {
 
     static Object[] cleanCandidate(char[][] cg, Diag cd, int rows, int cols, Map<Integer, Character> carryLocked,
                                    char[][] carrySeed, DualIndex index, Rng rng, Map<Integer, Character> permanentLocked,
-                                   Set<Integer> permanentBlack, boolean deep, String symmetry) {
+                                   Set<Integer> permanentBlack, boolean deep, String symmetry, boolean grouped) {
         List<int[]> slots = Grids.extractSlots(cg, rows, cols);
         Map<Integer, Character> locked = cd.lockedLetters != null ? Cleanup.diagLockedLetters(cd, cg) : carryLocked;
         Object[] seed = Cleanup.buildRetrySeed(cg, rows, cols, slots, cd.assignment, cd.impossibleSlots, locked, deep,
                 carrySeed, index, rng, permanentLocked, permanentBlack, deep, symmetry);
-        return new Object[]{seed[0], seed[1], slots, cd.processNumber};
+        char[][] seedGrid = (char[][]) seed[0];
+        if (grouped) {
+            // "Grouped" style: the cleanup may leave no 2-letter slot.
+            @SuppressWarnings("unchecked")
+            Map<Integer, Character> conf = (Map<Integer, Character>) seed[1];
+            seedGrid = Grids.undoShortRunChanges(cg, seedGrid, rows, cols, conf, symmetry);
+        }
+        return new Object[]{seedGrid, seed[1], slots, cd.processNumber};
     }
 
     static List<Object[]> sortCleaned(List<Object[]> cands, PW pw, Set<String> challenge, DualIndex index,
