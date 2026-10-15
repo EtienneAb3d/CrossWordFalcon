@@ -319,6 +319,21 @@ plusieurs signaux) :
   `Filler.scrabble_first`, `scrabble_word_cells` ; `backend/app.py`,
   `_annotate_scrabble_cells`.)
 
+- **Forme canonique** : lemme d'un mot, tel que donné par la colonne
+  CANONIQUE de sa ligne de dictionnaire (plusieurs lemmes possibles,
+  séparés par `;` ; à défaut, sa forme accentuée), comparé en minuscules :
+  EST (est;être), ETE (été;être) et ETAIT (être) partagent « être », ELM et
+  ELMS partagent « elm ». **Deux mots d'une même grille ne partagent jamais
+  de forme canonique** : un mot qui partage un lemme avec un mot déjà posé
+  est indisponible exactement comme un mot déjà posé ailleurs — exclu des
+  candidats, et un emplacement dont il ne reste que de tels mots est
+  bloqué. Une grille complète où deux mots partagent tout de même une forme
+  canonique (mot repris verrouillé d'un palier précédent) n'est pas une
+  réussite : ses mots en conflit sont signalés bloqués
+  (`_canonical_conflict_slot_indices`). Un mot hors du lexique (un mot Défi absent du dictionnaire) n'a
+  pas de forme canonique et ne bloque que lui-même. (`backend/
+  crossword_gen.py`, `_attach_lemmas`, `UsedWords`.)
+
 - **Score de tirage d'une case noire** : pour une case blanche, au tirage
   « Taux noir », somme des longueurs des mots (suites d'au moins 2 cases
   non noires, horizontales et verticales) qui croisent sa **croix** : elle-même et

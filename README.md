@@ -315,7 +315,9 @@ On the page:
    that score instead: Easy keeps the Scrabble words rated 3 and more (no
    proper nouns), Medium the words rated 2 and more (the Scrabble list,
    plus the most frequent everyday words missing from it), Hard every
-   word. A word you list this way never
+   word. A grid never holds two forms of the same word: once "est" is
+   placed, "été" or "était" (forms of "être") are left out, and "elms"
+   once "elm" is in. A word you list this way never
    shows up in the Library's own grid listing, since it's meant to stay a
    hidden answer to a spot you chose yourself.
 3. On the **"Generate the crossword:"** line, click **"Automatic"** (the

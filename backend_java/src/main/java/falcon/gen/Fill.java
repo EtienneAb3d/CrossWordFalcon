@@ -254,7 +254,7 @@ public final class Fill {
                                                Map<Integer, Character> locked) {
         if (locked == null || locked.isEmpty()) return new ArrayList<>();
         List<int[]> all = Grids.extractSlots(grid, rows, cols);
-        Set<String> used = new HashSet<>();
+        Set<String> used = new UsedWords(index);
         for (int[] slot : all) {
             String w = Grids.wordAt(slot, locked);
             if (w != null) used.add(w);
@@ -434,6 +434,27 @@ public final class Fill {
         public PW scrabbleWords;
     }
 
+    /** Indices of the slots whose word is the same as, or shares a canonical form with, another slot's word of
+     * {@code assignment} — a slot entirely covered by {@code permanentLocked} excepted: tryFill's last safety net
+     * (mirrors _canonical_conflict_slot_indices). */
+    static List<Integer> canonicalConflictSlotIndices(DualIndex index, List<int[]> slots, String[] assignment,
+                                                      Map<Integer, Character> permanentLocked) {
+        UsedWords lemmas = new UsedWords(index);
+        Map<Object, Set<Integer>> byKey = new HashMap<>();
+        for (int i = 0; i < assignment.length; i++) {
+            String word = assignment[i];
+            if (word == null) continue;
+            byKey.computeIfAbsent(word, k -> new HashSet<>()).add(i);
+            for (int lemma : lemmas.lemmasOf(word)) byKey.computeIfAbsent(lemma, k -> new HashSet<>()).add(i);
+        }
+        TreeSet<Integer> out = new TreeSet<>();
+        for (Set<Integer> members : byKey.values()) if (members.size() > 1) out.addAll(members);
+        if (permanentLocked != null && !permanentLocked.isEmpty()) {
+            out.removeIf(i -> Grids.allKnown(slots.get(i), permanentLocked));
+        }
+        return new ArrayList<>(out);
+    }
+
     static List<Integer> quotaOverflowSlotIndices(String[] assignment, Set<String> offending) {
         List<Integer> out = new ArrayList<>();
         if (offending.isEmpty()) return out;
@@ -592,7 +613,7 @@ public final class Fill {
         }
         if (a.preseedAssignment != null) {
             filler.assignment = a.preseedAssignment.clone();
-            filler.usedWords = Filler.usedOf(a.preseedAssignment);
+            filler.usedWords = filler.usedOf(a.preseedAssignment);
             filler.bestAssignment = a.preseedAssignment.clone();
             int n = 0;
             for (String w : a.preseedAssignment) if (w != null) n++;
@@ -631,9 +652,17 @@ public final class Fill {
             overNonGloss = n > a.maxNonGloss;
             if (overNonGloss) complete = false;
         }
+        // Same safety net for two words sharing a canonical form (or the same word twice), every one of them flagged
+        // impossible.
+        List<Integer> canonicalConflicts = List.of();
+        if (complete) {
+            canonicalConflicts = canonicalConflictSlotIndices(index, slots, filler.assignment, a.permanentLocked);
+            if (!canonicalConflicts.isEmpty()) complete = false;
+        }
         if (diag != null) {
             diag.checks = filler.checks;
             diag.reason = overProper ? "too_many_proper_nouns" : overNonGloss ? "too_many_non_gloss_words"
+                    : !canonicalConflicts.isEmpty() ? "shared_canonical_form"
                     : complete ? "solved" : filler.interruptedBySibling ? "interrupted_other_attempt_done"
                     : filler.abandoned ? "abandoned_too_unfillable" : filler.checks >= deadline ? "deadline_exceeded"
                     : solvedInternally ? "blocked_on_excluded_slot" : "search_exhausted";
@@ -667,6 +696,14 @@ public final class Fill {
                     diag.impossibleSlots = new ArrayList<>(is);
                     TreeSet<Integer> ic = new TreeSet<>(diag.impossibleCells);
                     for (int i : quota) for (int c : slots.get(i)) ic.add(c);
+                    diag.impossibleCells = new ArrayList<>(ic);
+                }
+                if (!canonicalConflicts.isEmpty()) {
+                    TreeSet<Integer> is = new TreeSet<>(diag.impossibleSlots);
+                    is.addAll(canonicalConflicts);
+                    diag.impossibleSlots = new ArrayList<>(is);
+                    TreeSet<Integer> ic = new TreeSet<>(diag.impossibleCells);
+                    for (int i : canonicalConflicts) for (int c : slots.get(i)) ic.add(c);
                     diag.impossibleCells = new ArrayList<>(ic);
                 }
                 diag.lockedCells = lockedCells.get();

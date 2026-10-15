@@ -313,7 +313,7 @@ public final class Filler {
     int ghostsInDescent;
     public String[] assignment;
     public Set<Integer> excludedSlots;
-    public Set<String> usedWords = new HashSet<>();
+    public Set<String> usedWords;
     public long checks;
     public RecentSlots impossibleThisAttempt = new RecentSlots(MAX_EXCLUDED_SLOTS);
     public String[] bestAssignment;
@@ -335,6 +335,7 @@ public final class Filler {
                   Map<Integer, Character> lockedLetters, PW priorityWords, Set<String> challengeWords,
                   Integer rows, Integer cols) {
         this.index = index;
+        this.usedWords = new UsedWords(index);
         this.rng = rng;
         int maxR = -1, maxC = -1;
         for (int[] cells : slots) {
@@ -1809,25 +1810,38 @@ public final class Filler {
             break;
         }
         Object key = isFresh ? i + "|" + knownLettersSignature(i) : (Object) i;
-        Set<String> nodeUsed = new HashSet<>(used);
-        if (placedWord != null) nodeUsed.remove(placedWord);
+        // A UsedWords also blocks the words sharing a canonical form with a placed word: the entry is keyed by the
+        // placed words, and the candidate's own share of the blocked set (exclusiveTo) is what it removes.
+        Set<String> placed = used instanceof UsedWords uw ? uw.placed : used;
+        Set<String> nodePlaced = new HashSet<>(placed);
+        List<String> removed = List.of();
+        if (placedWord != null && placed.contains(placedWord)) {
+            nodePlaced.remove(placedWord);
+            removed = used instanceof UsedWords uw ? uw.exclusiveTo(placedWord) : List.of(placedWord);
+        }
         OptionsEntry entry = cache.get(key);
-        if (entry == null || !entry.used.equals(nodeUsed)) {
-            entry = slotLetterCounts(i, nodeUsed);
+        if (entry == null || !entry.used.equals(nodePlaced)) {
+            entry = slotLetterCounts(i, used, removed.isEmpty() ? Set.of() : new HashSet<>(removed),
+                    Set.copyOf(nodePlaced));
             cache.put(key, entry);
         }
         BitSet[] letters = entry.letters;
         boolean copied = false;
-        if (placedWord != null && !nodeUsed.contains(placedWord) && entry.contains(placedWord)) {
+        List<String> inDomain = new ArrayList<>();
+        for (String w : removed) if (entry.contains(w)) inDomain.add(w);
+        if (!inDomain.isEmpty()) {
             boolean last = false;
-            for (int p = 0; p < placedWord.length() && p < entry.counts.length; p++) {
-                if (Tally.get(entry.counts[p], placedWord.charAt(p)) == 1) {
-                    last = true;
-                    break;
+            for (String w : inDomain) {
+                for (int p = 0; p < w.length() && p < entry.counts.length; p++) {
+                    if (Tally.get(entry.counts[p], w.charAt(p)) <= inDomain.size()) {
+                        last = true;
+                        break;
+                    }
                 }
+                if (last) break;
             }
             if (last) {
-                letters = lettersFromCounts(entry.counts, List.of(placedWord));
+                letters = lettersFromCounts(entry.counts, inDomain);
                 copied = true;
             }
         }
@@ -1854,7 +1868,9 @@ public final class Filler {
         return sb.toString();
     }
 
-    OptionsEntry slotLetterCounts(int i, Set<String> used) {
+    /** (counts, letters, domain) of slot {@code i} over its domain minus {@code used} except {@code except}, the
+     * entry keyed by {@code key} (mirrors _slot_letter_counts). */
+    OptionsEntry slotLetterCounts(int i, Set<String> used, Set<String> except, Set<String> key) {
         int[] cells = slots.get(i);
         Dom d = domain(i, true);
         LenIndex idx = index.forCells(cells).get(cells.length);
@@ -1865,7 +1881,7 @@ public final class Filler {
             counts = new int[base.length][];
             for (int p = 0; p < base.length; p++) counts[p] = base[p].clone();
             for (String u : used) {
-                if (u.length() == cells.length && idx.contains(u)) {
+                if (u.length() == cells.length && idx.contains(u) && !except.contains(u)) {
                     for (int p = 0; p < u.length(); p++) counts[p][Alpha.id(u.charAt(p))]--;
                 }
             }
@@ -1873,7 +1889,7 @@ public final class Filler {
         } else {
             counts = new int[cells.length][Alpha.size()];
             for (String w : d) {
-                if (used.contains(w)) continue;
+                if (used.contains(w) && !except.contains(w)) continue;
                 for (int p = 0; p < cells.length; p++) counts[p][Alpha.id(w.charAt(p))]++;
             }
         }
@@ -1883,7 +1899,7 @@ public final class Filler {
             for (int id = 0; id < counts[p].length; id++) if (counts[p][id] > 0) s.set(id);
             letters[p] = s;
         }
-        return new OptionsEntry(Set.copyOf(used), counts, letters, d, fullMembers);
+        return new OptionsEntry(key, counts, letters, d, fullMembers);
     }
 
     /** Returns {deadlocked slot indices, conflicting cells}. */
@@ -1913,10 +1929,9 @@ public final class Filler {
         return new Object[]{deadlocked, deadlockCells};
     }
 
-    static Set<String> usedOf(String[] asg) {
-        Set<String> out = new HashSet<>();
-        for (String w : asg) if (w != null) out.add(w);
-        return out;
+    /** The {@link UsedWords} of the words of {@code asg}. */
+    Set<String> usedOf(String[] asg) {
+        return new UsedWords(index, asg);
     }
 
     @SuppressWarnings("unchecked")

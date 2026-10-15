@@ -662,8 +662,9 @@ public final class Interactive {
         return out;
     }
 
-    static Set<String> usedExcept(List<int[]> slots, Map<Integer, Character> known, Set<Set<Integer>> exceptSets) {
-        Set<String> used = new HashSet<>();
+    static Set<String> usedExcept(List<int[]> slots, Map<Integer, Character> known, Set<Set<Integer>> exceptSets,
+                                  DualIndex index) {
+        Set<String> used = new UsedWords(index);
         for (int[] other : slots) {
             if (exceptSets.contains(Grids.cellSet(other))) continue;
             String w = Grids.wordAt(other, known);
@@ -688,7 +689,7 @@ public final class Interactive {
         char[][] pattern = Grids.patternOf(grid);
         List<int[]> slots = Grids.extractSlots(pattern, rows, cols);
         Map<Integer, Character> known = Grids.knownLetters(grid);
-        Set<String> used = usedExcept(slots, known, Set.of(Grids.cellSet(cells)));
+        Set<String> used = usedExcept(slots, known, Set.of(Grids.cellSet(cells)), index);
         Set<String> candidates = new LinkedHashSet<>(Words.slotCandidates(index, cells.length, cells, known).minus(used));
         Set<String> themed = new HashSet<>();
         if (pw != null && !pw.isEmpty()) for (String w : pw.forCells(cells)) if (candidates.contains(w)) themed.add(w);
@@ -731,7 +732,7 @@ public final class Interactive {
         char[][] pattern = Grids.patternOf(grid);
         List<int[]> slots = Grids.extractSlots(pattern, rows, cols);
         Map<Integer, Character> known = Grids.knownLetters(grid);
-        Set<String> used = usedExcept(slots, known, Set.of(Grids.cellSet(across), Grids.cellSet(down)));
+        Set<String> used = usedExcept(slots, known, Set.of(Grids.cellSet(across), Grids.cellSet(down)), index);
         List<String> aw = Words.slotCandidates(index, across.length, across, known).minus(used);
         List<String> dw = Words.slotCandidates(index, down.length, down, known).minus(used);
         int pa = 0, pd = 0;
@@ -762,7 +763,7 @@ public final class Interactive {
         char[][] pattern = Grids.patternOf(grid);
         List<int[]> slots = Grids.extractSlots(pattern, rows, cols);
         Map<Integer, Character> known = Grids.knownLetters(grid);
-        Set<String> used = usedExcept(slots, known, Set.of(Grids.cellSet(cells)));
+        Set<String> used = usedExcept(slots, known, Set.of(Grids.cellSet(cells)), index);
         int full = cells.length;
         List<Object> theme = new ArrayList<>(), other = new ArrayList<>();
         for (int length = 2; length <= full; length++) {

@@ -29,6 +29,10 @@ public final class LenIndex {
     /** Each word's usage score (0-5), {@link Words#USAGE_SCORE_UNKNOWN} for a word the usage-score file does not
      * rate; null when the language has none (index[length]["usage"]). */
     public final byte[] usage;
+    /** Each word's lemma ids, {@code lemmaIds[lemmaOff[i]..lemmaOff[i + 1])} (index[length]["lemma_off"]/["lemma_ids"]),
+     * and the inverse: sorted lemma ids -> ids of the words carrying them, {@code lemmaWords[lemmaKeyOff[k]..
+     * lemmaKeyOff[k + 1])} (["lemma_keys"]/["lemma_key_off"]/["lemma_words"]); null until {@link Words#attachLemmas}. */
+    public int[] lemmaOff, lemmaIds, lemmaKeys, lemmaKeyOff, lemmaWords;
     /** Lazily computed per-position letter counts over the whole list. */
     private volatile int[][] blankCounts;
 
@@ -94,6 +98,23 @@ public final class LenIndex {
         BitSet bs = pos[p][a];
         return bs == null || bs.isEmpty() ? null : bs;
     }
+
+    /** {@code w}'s lemma ids; empty when absent or when no lemma is attached. */
+    public int[] lemmasOf(String w) {
+        if (lemmaOff == null) return EMPTY;
+        Integer id = ids.get(w);
+        return id == null ? EMPTY : Arrays.copyOfRange(lemmaIds, lemmaOff[id], lemmaOff[id + 1]);
+    }
+
+    /** The words of this length carrying the lemma {@code lemmaId}, appended to {@code out}. */
+    public void wordsOfLemma(int lemmaId, List<String> out) {
+        if (lemmaKeys == null) return;
+        int k = Arrays.binarySearch(lemmaKeys, lemmaId);
+        if (k < 0) return;
+        for (int j = lemmaKeyOff[k]; j < lemmaKeyOff[k + 1]; j++) out.add(words[lemmaWords[j]]);
+    }
+
+    private static final int[] EMPTY = new int[0];
 
     public double dictFreqOf(String w) {
         Integer id = ids.get(w);

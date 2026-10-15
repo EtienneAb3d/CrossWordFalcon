@@ -54,7 +54,13 @@ public final class Cleanup {
     }
 
     static Set<String> usedFromKnown(List<int[]> slots, Map<Integer, Character> known) {
-        Set<String> used = new HashSet<>();
+        return usedFromKnown(slots, known, null);
+    }
+
+    /** The words fully spelled by {@code known} over {@code slots}: a {@link UsedWords} on {@code index}, a plain set
+     * when it is null. */
+    static Set<String> usedFromKnown(List<int[]> slots, Map<Integer, Character> known, DualIndex index) {
+        Set<String> used = index == null ? new HashSet<>() : new UsedWords(index);
         for (int[] cells : slots) {
             String w = Grids.wordAt(cells, known);
             if (w != null) used.add(w);
@@ -66,7 +72,7 @@ public final class Cleanup {
 
     public static Set<Integer> crossingDeadlockIndices(List<int[]> slots, DualIndex index, Map<Integer, Character> known,
                                                        Set<String> challenge) {
-        Set<String> used = usedFromKnown(slots, known);
+        Set<String> used = usedFromKnown(slots, known, index);
         Set<String> available = new LinkedHashSet<>();
         if (challenge != null) for (String w : challenge) if (!used.contains(w)) available.add(w);
         List<Integer> open = new ArrayList<>();
@@ -444,7 +450,7 @@ public final class Cleanup {
                 if (own < 0) continue;
                 int[] cells = cur.get(own);
                 Map<Integer, List<Integer>> c2s = Grids.cellToSlotIndices(cur);
-                Set<String> used = usedFromKnown(cur, known);
+                Set<String> used = usedFromKnown(cur, known, index);
                 Object[] res = findShorterWordForZone(newGrid, rows, cols, cells, cur, c2s, own, index, known, used, rng);
                 if (res == null) continue;
                 String word = (String) res[0];
@@ -483,7 +489,7 @@ public final class Cleanup {
                 if (own < 0) continue;
                 int[] cells = cur.get(own);
                 Map<Integer, List<Integer>> c2s = Grids.cellToSlotIndices(cur);
-                Set<String> used = usedFromKnown(cur, known);
+                Set<String> used = usedFromKnown(cur, known, index);
                 Set<Integer> prot = knownSlotBoundaryCells(newGrid, rows, cols, cur, known);
                 if (permanentBlack != null && !permanentBlack.isEmpty()) {
                     prot = new HashSet<>(prot);
@@ -812,16 +818,22 @@ public final class Cleanup {
         if (!Grids.isStructurallyValid(ng, rows, cols, 1)) return null;
         List<int[]> newSlots = Grids.extractSlots(ng, rows, cols);
         String[] na = new String[newSlots.size()];
+        // Every word of the new pattern is one the fill could have placed: never twice the same, never two sharing a
+        // canonical form (UsedWords).
+        UsedWords used = new UsedWords(index);
         for (int k = 0; k < newSlots.size(); k++) {
             int[] cells = newSlots.get(k);
             if (!Grids.allKnown(cells, known)) return null;
             if (permanentLocked != null && !permanentLocked.isEmpty() && Grids.allKnown(cells, permanentLocked)) {
                 na[k] = Grids.wordAt(cells, known);
+                used.add(na[k]);
                 continue;
             }
             Dom cands = Words.slotCandidates(index, cells.length, cells, known);
             if (cands.isEmpty()) return null;
             na[k] = cands.first();
+            if (used.contains(na[k])) return null;
+            used.add(na[k]);
         }
         return new Object[]{ng, newSlots, na};
     }

@@ -1765,6 +1765,27 @@ the current defaults/behavior to know before touching this code.
   validated so far). The run is long (~26 h for French at ~4.5 words/s on
   the shared local LLM, which also slows the public site's LLM calls
   while it runs) and resumable (`.partial`).
+- **No two words of a grid share a canonical form** — the user's rule:
+  "interdire la pose d'un mot ayant la même forme canonique qu'un mot déjà
+  présent dans la grille" (French EST/ETE/ETAIT, English ELM/ELMS). Each
+  loaded lexicon keeps its words' lemma ids (`_attach_lemmas`, Java
+  `Words.attachLemmas`) and every fill's `used_words` is a `UsedWords`
+  holding the words placed plus every word sharing a lemma with them, so
+  the existing "word already used" tests carry the rule. Choices made with
+  it, to revisit with the user: two words conflict when they share ANY
+  lemma of their CANONIQUE column (EST "est;être" and ETE "été;être" share
+  "être"), compared lowercased, accents kept; a word's lemmas come from the
+  row its reference points to (the freq row when it has one); the rule
+  applies wherever a used-word set is built — the search, the end-of-search
+  closure, the cross-palier repairs, the diagnostics/overlays, and
+  Interactive mode ("Suivant", candidate panels), which shares the engine;
+  a "Mots Défi" word in the lexicon is blocked like any word, one outside
+  it blocks only itself; a complete grid still holding two words of one
+  canonical form (a word carried fully locked from an earlier palier, or
+  sealed by its crossings) fails like a quota overflow, the conflicting
+  slots flagged impossible for the cleanup (`_canonical_conflict_slot_
+  indices`), the user's permanent letters exempt; the isolated-cell plug
+  refuses a pattern repeating a word or a canonical form.
 - **Usage scores steer word choice and grid scoring** — the user's rules:
   before the statistical ranking, keep only the 60 % (`USAGE_KEEP_PERCENT`)
   of a slot's candidates with the highest usage score, when it is known

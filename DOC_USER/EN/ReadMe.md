@@ -1785,7 +1785,11 @@ difficulty instead picks words by usage score: Easy keeps the Scrabble
 words rated 3 and more (likely proper nouns left out), Medium the
 Scrabble words rated 2 and more plus the everyday-vocabulary words
 missing from the Scrabble list that are rated 2 and more and among the
-80 % most frequent, Hard every word of both lists. Separately
+80 % most frequent, Hard every word of both lists. A word is never
+used twice in a grid, and neither are two words sharing a base form (their
+lemma in the dictionary): once EST ("is") is placed in French, ETE and ETAIT (other forms of "être") are
+no longer candidates anywhere, and once ELM is placed, ELMS is out
+(`backend/crossword_gen.py`, `UsedWords`). Separately
 again, before any of this even runs, any slot whose already-known letters
 leave exactly one real dictionary word possible has that word locked in
 directly, as a plain fact rather than a mere statistical guess. This

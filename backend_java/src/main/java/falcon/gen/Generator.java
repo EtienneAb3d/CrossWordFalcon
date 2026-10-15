@@ -199,6 +199,7 @@ public final class Generator {
             }
             Map<Integer, LenIndex> idx = Words.buildIndex(byLength, lex.frequencies(),
                     Words.loadDictionaryFrequencies(path), lex.refs(), sources, usageScores);
+            Words.attachLemmas(idx, lex.refs(), sources);
             // A Scrabble word is valid at every difficulty: never counted against either quota.
             proper.removeAll(scrabble);
             nonGloss.removeAll(scrabble);

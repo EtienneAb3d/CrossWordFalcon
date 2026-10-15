@@ -284,7 +284,12 @@ wordlist shifted left one bit, low bit 1 for the Scrabble wordlist —
 usage-score column (`usage`, `array('b')` behind `_WordColumn`, Java
 `LenIndex.usage` `byte[]`; `USAGE_SCORE_UNKNOWN` -1 for an unrated word,
 `None`/null when the language has no usage-score file — `load_usage_
-scores`, Java `Words.loadUsageScores`, transient), plus
+scores`, Java `Words.loadUsageScores`, transient), the lemma ids of each
+word and their inverse (`lemma_off`/`lemma_ids`, `lemma_keys`/
+`lemma_key_off`/`lemma_words`, `array('I')`, Java `LenIndex.lemmaOff`…
+`int[]`, set by `_attach_lemmas`/Java `Words.attachLemmas` from each
+word's own row: its CANONIQUE lemmas, lowercased, else its accented form,
+interned to ids unique per process so two languages never share one), plus
 the two wordlist paths (`sources`). The accented form and the lemmas are
 read back from that row only when a grid's words get their `accented`/
 `canonical` fields (`word_forms`, Java `Words.wordForms`). Besides the
@@ -693,7 +698,29 @@ own rng drawn from the parent's in candidate order:
    own plus pre-fill's), so only the shortfall is added; the same
    unscaled rate is pre-fill's curative-cleanup zone budget.
 2. **CSP fill** (`Filler`/`_backtrack`, via `try_fill`) — a standard
-   recursive backtracking solver. Slot selection (`_select_target_slot`,
+   recursive backtracking solver. No two words of a grid share a canonical
+   form (a lemma of their CANONIQUE column — EST/ETE/ETAIT share "être",
+   ELM/ELMS "elm"): every fill's `used_words` is a `UsedWords` (Java
+   `UsedWords`, a set subclass built on the grid's index —
+   `used_words_of`, Java `Filler.usedOf`/`Cleanup.usedFromKnown`/
+   `Interactive.usedExcept`), whose content is every word placed plus every
+   word sharing a lemma with one of them (`placed` holds the words placed;
+   `add`/`discard` keep per-lemma and per-word support counts), so every
+   "already used" test — domains, dry slots, `slot_is_blocked`,
+   `_close_implied_slots`, the cleanups' and Interactive mode's own used
+   sets — applies the rule; a word outside the lexicon blocks only itself.
+   `_letter_options_cached` keys its entries by the placed words and removes
+   the candidate's own share of the blocked set (`UsedWords.exclusive_to`,
+   answered from the last `add` while nothing else changed).
+   `_plug_isolated_cells` refuses a new pattern repeating a word or a
+   canonical form, and `try_fill` keeps a last safety net next to the
+   quotas: a complete grid where two words still share one (a word carried
+   fully locked from an earlier palier, a slot sealed by its crossings) is
+   not a success — `reason` `"shared_canonical_form"`, every conflicting
+   slot not entirely covered by `permanent_locked_letters` folded into
+   `impossible_slots`/`impossible_cells` (`_canonical_conflict_slot_
+   indices`, Java `Fill.canonicalConflictSlotIndices`).
+   Slot selection (`_select_target_slot`,
    also reused verbatim by `interactive_place_word`) is a fixed 9-level
    cascade: (1) optional, currently disabled
    (`ALTERNATE_DIRECTION_ENABLED=False`) — when enabled, draw across-vs-

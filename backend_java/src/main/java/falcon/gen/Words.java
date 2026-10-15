@@ -189,6 +189,87 @@ public final class Words {
         }
     }
 
+    /** Next free lemma id, process-wide, so the lexicons of two languages (a bilingual grid) never share an id. */
+    private static final java.util.concurrent.atomic.AtomicInteger LEMMA_ID_NEXT =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+    /** Comparison form of one CANONIQUE lemma: lowercased (mirrors _lemma_key). */
+    static String lemmaKey(String lemma) {
+        return lemma.toLowerCase(Locale.ROOT);
+    }
+
+    /** Adds to every length of {@code index} the lemma ids of its words, read from each word's own wordlist row
+     * ({@code refs}, the (freq, Scrabble) wordlist paths {@code sources}): a word's lemmas are its CANONIQUE column
+     * ({@link #rowForms}), else its accented form (mirrors _attach_lemmas). */
+    public static void attachLemmas(Map<Integer, LenIndex> index, Map<String, Integer> refs, String[] sources)
+            throws IOException {
+        Map<String, Integer> interned = new HashMap<>();
+        Map<String, int[]> perWord = new HashMap<>();
+        for (int flag = 0; flag < 2; flag++) {
+            String path = sources == null ? null : sources[flag];
+            if (path == null || !Files.exists(Path.of(path))) continue;
+            boolean scrabble = flag == 1;
+            int f = flag;
+            falcon.TextLines.forEachLine(Path.of(path), (offset, line) -> {
+                int tab = line.indexOf('\t');
+                if (tab <= 0) return;
+                String word = line.substring(0, tab);
+                Integer ref = refs.get(word);
+                if (ref == null || ref != (int) ((offset << 1) | f) || perWord.containsKey(word)) return;
+                LenIndex li = index.get(word.length());
+                if (li == null || !li.contains(word)) return;
+                @SuppressWarnings("unchecked")
+                List<String> lemmas = (List<String>) rowForms(line, word, scrabble)[1];
+                int[] ids = new int[lemmas.size()];
+                int n = 0;
+                for (String lemma : lemmas) {
+                    Integer local = interned.get(lemmaKey(lemma));
+                    if (local == null) {
+                        local = interned.size();
+                        interned.put(lemmaKey(lemma), local);
+                    }
+                    boolean seen = false;
+                    for (int k = 0; k < n; k++) if (ids[k] == local) seen = true;
+                    if (!seen) ids[n++] = local;
+                }
+                perWord.put(word, java.util.Arrays.copyOf(ids, n));
+            });
+        }
+        int base = LEMMA_ID_NEXT.getAndAdd(interned.size());
+        int[] none = new int[0];
+        for (LenIndex li : index.values()) {
+            int[] off = new int[li.words.length + 1];
+            int total = 0;
+            for (int i = 0; i < li.words.length; i++) {
+                total += perWord.getOrDefault(li.words[i], none).length;
+                off[i + 1] = total;
+            }
+            int[] flat = new int[total];
+            java.util.TreeMap<Integer, List<Integer>> inverse = new java.util.TreeMap<>();
+            for (int i = 0; i < li.words.length; i++) {
+                int[] ids = perWord.getOrDefault(li.words[i], none);
+                for (int k = 0; k < ids.length; k++) {
+                    flat[off[i] + k] = base + ids[k];
+                    inverse.computeIfAbsent(base + ids[k], x -> new ArrayList<>()).add(i);
+                }
+            }
+            int[] keys = new int[inverse.size()];
+            int[] keyOff = new int[inverse.size() + 1];
+            int[] words = new int[total];
+            int k = 0, w = 0;
+            for (Map.Entry<Integer, List<Integer>> e : inverse.entrySet()) {
+                keys[k] = e.getKey();
+                for (int id : e.getValue()) words[w++] = id;
+                keyOff[++k] = w;
+            }
+            li.lemmaOff = off;
+            li.lemmaIds = flat;
+            li.lemmaKeys = keys;
+            li.lemmaKeyOff = keyOff;
+            li.lemmaWords = words;
+        }
+    }
+
     public static Map<Integer, LenIndex> buildIndex(Map<Integer, List<String>> byLength, Map<String, Double> frequencies,
                                                     Map<String, Double> dictionaryFrequencies) {
         return buildIndex(byLength, frequencies, dictionaryFrequencies, null, null);

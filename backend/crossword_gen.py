@@ -54,6 +54,7 @@ Usage (from the project root):
 import argparse
 import bisect
 import concurrent.futures
+import gc
 import math
 import multiprocessing
 import os
@@ -3381,6 +3382,7 @@ def load_lexicon(wordlist_path, max_words, difficulty):
             by_length, frequencies, load_dictionary_frequencies(wordlist_path), refs, sources,
             usage_scores,
         )
+        _attach_lemmas(index, refs, sources)
         del refs, frequencies, usage_scores
         loaded = LoadedLexicon(
             index, frozenset(proper_nouns - scrabble), frozenset(non_gloss - scrabble), scrabble,
@@ -3410,6 +3412,248 @@ def word_forms(length_index, word):
     except OSError:
         return word, [word]
     return _row_forms(line, word, scrabble)
+
+
+# ---------- Canonical forms ----------
+#
+# No two words of a grid share a canonical form (a lemma of their
+# CANONIQUE column): EST (est;être), ETE (été;être) and ETAIT (être) never
+# sit in one grid, nor ELM and ELMS (elm). Each lexicon keeps, per word, the
+# integer ids of its lemmas (`_attach_lemmas`), and `UsedWords` — the
+# `used_words` set of every fill — holds every word sharing a lemma with a
+# word placed, so each "already used" test applies the rule.
+
+# Next free lemma id, process-wide, so the lexicons of two languages (a
+# bilingual grid) never share an id.
+_LEMMA_ID_NEXT = [0]
+_LEMMA_ID_LOCK = threading.Lock()
+
+
+def _lemma_key(lemma):
+    """Comparison form of one CANONIQUE lemma: lowercased."""
+    return lemma.lower()
+
+
+def _attach_lemmas(index, refs, sources):
+    """Adds to every length entry of `index` (`build_index`) the lemma ids
+    of its words, read from each word's own wordlist row (`refs`, the
+    `(freq, Scrabble)` wordlist paths `sources`): `lemma_off`/`lemma_ids`
+    (word id -> its lemma ids, `lemma_ids[lemma_off[i]:lemma_off[i + 1]]`)
+    and `lemma_keys`/`lemma_key_off`/`lemma_words` (sorted lemma ids ->
+    the ids of the words of that length carrying them), all `array('I')`.
+    A word's lemmas are its CANONIQUE column (`_row_forms`), else its
+    accented form."""
+    # Millions of small objects are allocated and kept: the cyclic garbage
+    # collector would rescan the whole heap many times over for nothing.
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        _attach_lemma_arrays(index, refs, sources)
+    finally:
+        if gc_was_enabled:
+            gc.enable()
+
+
+def _attach_lemma_arrays(index, refs, sources):
+    """`_attach_lemmas`'s work, the garbage collector off."""
+    interned = {}
+    per_word = {}
+    for path, flag in ((sources[0], 0), (sources[1], 1)):
+        if not path or not os.path.exists(path):
+            continue
+        for offset, line in iter_lines_with_offsets(path):
+            tab = line.find("\t")
+            if tab <= 0:
+                continue
+            word = line[:tab]
+            if refs.get(word) != ((offset << 1) | flag) or word in per_word:
+                continue
+            entry = index.get(len(word))
+            if entry is None or word not in entry["ids"]:
+                continue
+            _, lemmas = _row_forms(line, word, bool(flag))
+            ids = []
+            for lemma in lemmas:
+                local = interned.setdefault(_lemma_key(lemma), len(interned))
+                if local not in ids:
+                    ids.append(local)
+            per_word[word] = ids
+    with _LEMMA_ID_LOCK:
+        base = _LEMMA_ID_NEXT[0]
+        _LEMMA_ID_NEXT[0] += len(interned)
+    for entry in index.values():
+        offsets = array("I", [0])
+        flat = array("I")
+        inverse = defaultdict(list)
+        for i, w in enumerate(entry["words"]):
+            for local in per_word.get(w, ()):
+                flat.append(base + local)
+                inverse[base + local].append(i)
+            offsets.append(len(flat))
+        keys = array("I", sorted(inverse))
+        key_off = array("I", [0])
+        words = array("I")
+        for k in keys:
+            words.extend(inverse[k])
+            key_off.append(len(words))
+        entry["lemma_off"] = offsets
+        entry["lemma_ids"] = flat
+        entry["lemma_keys"] = keys
+        entry["lemma_key_off"] = key_off
+        entry["lemma_words"] = words
+
+
+def _index_sides(index):
+    """The distinct plain indices behind `index` (a `DualIndex` or one
+    plain index)."""
+    if isinstance(index, DualIndex):
+        return (index.across,) if index.down is index.across else (index.across, index.down)
+    return (index,)
+
+
+def _word_lemma_ids(index, word):
+    """Every lemma id `word` carries in `index` (both sides of a bilingual
+    `DualIndex`); empty for a word outside the lexicon."""
+    out = ()
+    for side in _index_sides(index):
+        entry = side.get(len(word))
+        if entry is None or "lemma_off" not in entry:
+            continue
+        i = entry["ids"].get(word)
+        if i is not None:
+            off = entry["lemma_off"]
+            out += tuple(entry["lemma_ids"][off[i]:off[i + 1]])
+    return out
+
+
+def _lemma_words(index, lemma_id):
+    """Every word of `index` (any length, both sides) carrying the lemma
+    `lemma_id`."""
+    out = []
+    for side in _index_sides(index):
+        for entry in side.values():
+            keys = entry.get("lemma_keys")
+            if not keys:
+                continue
+            k = bisect.bisect_left(keys, lemma_id)
+            if k < len(keys) and keys[k] == lemma_id:
+                words = entry["words"]
+                key_off = entry["lemma_key_off"]
+                out.extend(words[j] for j in entry["lemma_words"][key_off[k]:key_off[k + 1]])
+    return out
+
+
+class UsedWords(set):
+    """The words a fill may no longer place: every word placed (`placed`)
+    plus every word sharing a canonical form with one of them (`_word_
+    lemma_ids`). The set's own content IS that blocked set, so every
+    `w in used_words`, `domain - used_words`... test applies the rule;
+    only `add`/`discard` know about placed words. Two words supporting the
+    same blocked word are counted: discarding one keeps it blocked. A word
+    outside the lexicon (a "Mots Défi" word) blocks only itself."""
+
+    def __init__(self, index, words=()):
+        super().__init__()
+        self.index = index
+        self.placed = set()
+        self._lemma_count = Counter()
+        self._support = Counter()
+        self._lemmas = {}
+        self._siblings = {}
+        self._exclusive = {}
+        # (word, words its `add` raised from no support): `exclusive_to`'s
+        # answer for the last word added, while nothing else has changed.
+        self._last_added = None
+        for w in words:
+            if w is not None:
+                self.add(w)
+
+    def lemmas_of(self, word):
+        ids = self._lemmas.get(word)
+        if ids is None:
+            ids = self._lemmas[word] = _word_lemma_ids(self.index, word)
+        return ids
+
+    def _words_of(self, lemma_id):
+        words = self._siblings.get(lemma_id)
+        if words is None:
+            words = self._siblings[lemma_id] = _lemma_words(self.index, lemma_id)
+        return words
+
+    def _raise(self, word, raised=None):
+        self._support[word] += 1
+        if self._support[word] == 1:
+            set.add(self, word)
+            if raised is not None:
+                raised.append(word)
+
+    def _lower(self, word):
+        self._support[word] -= 1
+        if self._support[word] <= 0:
+            del self._support[word]
+            set.discard(self, word)
+
+    def add(self, word):
+        if word in self.placed:
+            return
+        self._exclusive.clear()
+        self.placed.add(word)
+        raised = []
+        self._raise(word, raised)
+        for lemma in self.lemmas_of(word):
+            self._lemma_count[lemma] += 1
+            if self._lemma_count[lemma] == 1:
+                for w in self._words_of(lemma):
+                    self._raise(w, raised)
+        self._last_added = (word, raised)
+
+    def discard(self, word):
+        if word not in self.placed:
+            return
+        self._exclusive.clear()
+        self._last_added = None
+        self.placed.discard(word)
+        self._lower(word)
+        for lemma in self.lemmas_of(word):
+            self._lemma_count[lemma] -= 1
+            if self._lemma_count[lemma] <= 0:
+                del self._lemma_count[lemma]
+                for w in self._words_of(lemma):
+                    self._lower(w)
+
+    def remove(self, word):
+        if word not in self.placed:
+            raise KeyError(word)
+        self.discard(word)
+
+    def exclusive_to(self, word):
+        """The words blocked only because `word` is placed — those
+        `discard(word)` would unblock (`word` itself included)."""
+        if word not in self.placed:
+            return ()
+        if self._last_added is not None and self._last_added[0] == word:
+            return self._last_added[1]
+        out = self._exclusive.get(word)
+        if out is not None:
+            return out
+        mine = set(self.lemmas_of(word))
+        sole = {lemma for lemma in mine if self._lemma_count[lemma] == 1}
+        out = [word] if self._support[word] == 1 + sum(1 for lemma in self.lemmas_of(word)
+                                                        if lemma in sole) else []
+        for lemma in sole:
+            for w in self._words_of(lemma):
+                if w == word or w in self.placed or w in out:
+                    continue
+                active = [x for x in self.lemmas_of(w) if self._lemma_count.get(x)]
+                if all(x in sole for x in active):
+                    out.append(w)
+        self._exclusive[word] = out
+        return out
+
+
+def used_words_of(index, words):
+    """`UsedWords` of the words placed `words` (`None` entries skipped)."""
+    return UsedWords(index, words)
 
 
 # ---------- CSP: backtracking fill ----------
@@ -4487,7 +4731,7 @@ class Filler:
         # already-impossible zone untouched. Empty for every other caller,
         # in which case this whole mechanism is a no-op.
         self.excluded_slots = excluded_slots if excluded_slots is not None else set()
-        self.used_words = set()
+        self.used_words = UsedWords(index)
         self.checks = 0
         # "Emplacements écartés" (see `DOC_ALGO/FR/Lexicon.md`): slots
         # found blocked at least once during THIS attempt. Set aside —
@@ -6249,7 +6493,7 @@ class Filler:
             self.pattern = pattern
             self._impossible_this_attempt = recent
         self.assignment = list(cleaned)
-        self.used_words = {w for w in self.assignment if w is not None}
+        self.used_words = UsedWords(self.index, self.assignment)
         if cleared:
             self.locked_letters = {
                 cell: ch for cell, ch in self.locked_letters.items() if cell not in cleared
@@ -6274,7 +6518,7 @@ class Filler:
         self._restart_pending = False
         self.adopt_best_structure()
         self.assignment = list(self.best_assignment)
-        self.used_words = {w for w in self.assignment if w is not None}
+        self.used_words = UsedWords(self.index, self.assignment)
         for i, w in enumerate(self.assignment):
             if w is not None:
                 self._refresh_letter_scores_around(i)
@@ -6408,16 +6652,30 @@ class Filler:
         if options_cache is None:
             return self._slot_letter_options(i, used_words, challenge_words)
         key = (i, self._known_letters_signature(i)) if i in fresh else i
-        node_used = used_words - {placed_word} if placed_word is not None else set(used_words)
+        # A `UsedWords` also blocks the words sharing a canonical form with
+        # a placed word: the entry is keyed by the placed words, and the
+        # candidate's own share of the blocked set (`exclusive_to`) is what
+        # it removes.
+        placed = used_words.placed if isinstance(used_words, UsedWords) else used_words
+        if placed_word is not None and placed_word in placed:
+            node_placed = placed - {placed_word}
+            if isinstance(used_words, UsedWords):
+                removed = used_words.exclusive_to(placed_word)
+            else:
+                removed = [placed_word]
+        else:
+            node_placed = set(placed)
+            removed = ()
         entry = options_cache.get(key)
-        if entry is None or entry[0] != node_used:
-            entry = (frozenset(node_used),) + self._slot_letter_counts(i, node_used)
+        if entry is None or entry[0] != node_placed:
+            entry = (frozenset(node_placed),) + self._slot_letter_counts(
+                i, used_words, frozenset(removed))
             options_cache[key] = entry
         _, counts, letters, domain = entry
-        if (placed_word is not None and placed_word not in node_used
-                and placed_word in domain
-                and any(counts[pos][ch] == 1 for pos, ch in enumerate(placed_word))):
-            letters = _letters_from_counts(counts, [placed_word])
+        removed = [w for w in removed if w in domain]
+        if removed and any(counts[pos][ch] <= len(removed)
+                           for w in removed for pos, ch in enumerate(w)):
+            letters = _letters_from_counts(counts, removed)
         elif challenge_words:
             letters = [set(s) for s in letters]
         else:
@@ -6443,9 +6701,10 @@ class Filler:
             sig.append(letter)
         return tuple(sig)
 
-    def _slot_letter_counts(self, i, used_words):
+    def _slot_letter_counts(self, i, used_words, except_words=frozenset()):
         """`(counts, letters, domain)` for slot `i`: per-position letter
-        counts over its dictionary domain minus `used_words`, the letters
+        counts over its dictionary domain minus `used_words` (except the
+        words of `except_words`, counted as available), the letters
         with a non-zero count, and the domain as a set (for membership
         tests). Challenge words are not included — see `_letter_options_
         cached`."""
@@ -6456,14 +6715,14 @@ class Filler:
             base, members = _blank_letter_counts(idx, len(cells))
             counts = [dict(c) for c in base]
             for u in used_words:
-                if len(u) == len(cells) and u in members:
+                if len(u) == len(cells) and u in members and u not in except_words:
                     for pos, ch in enumerate(u):
                         counts[pos][ch] -= 1
             domain = members
         else:
             counts = [{} for _ in cells]
             for w in domain:
-                if w in used_words:
+                if w in used_words and w not in except_words:
                     continue
                 for pos, ch in enumerate(w):
                     c = counts[pos]
@@ -6587,7 +6846,7 @@ class Filler:
         case."""
         saved = self.assignment
         self.assignment = self.best_assignment
-        used_at_best = {w for w in self.best_assignment if w is not None}
+        used_at_best = UsedWords(self.index, self.best_assignment)
         # A slot whose real dictionary domain is entirely used elsewhere
         # is still not a genuine dead end as long as an unused, still-
         # active "Mots Défi" word could legally go there instead (see
@@ -6641,7 +6900,7 @@ class Filler:
         genuine dead end for as long as that attempt kept heartbeating."""
         saved = self.assignment
         self.assignment = assignment
-        used = {w for w in assignment if w is not None}
+        used = UsedWords(self.index, assignment)
         active_challenge_words = self._active_challenge_words()
         cells = set()
         for i, word in enumerate(assignment):
@@ -6763,7 +7022,7 @@ class Filler:
         this narrower set more prominently than the rest of the same
         impossible slot(s) (`_interactive_fill_diagnostics`'s own third
         return value)."""
-        used_at_best = {w for w in self.best_assignment if w is not None}
+        used_at_best = UsedWords(self.index, self.best_assignment)
         active_challenge_words = self._active_challenge_words()
         saved = self.assignment
         self.assignment = self.best_assignment
@@ -6856,7 +7115,7 @@ class Filler:
             if assignment[i] is None:
                 cells.update(self.slots[i])
         if include_deadlock:
-            used_words = {w for w in assignment if w is not None}
+            used_words = UsedWords(self.index, assignment)
             active_challenge_words = self._active_challenge_words()
             saved_assignment = self.assignment
             self.assignment = assignment
@@ -8537,6 +8796,29 @@ def _quota_overflow_slot_indices(assignment, offending_words):
     return [i for i, word in enumerate(assignment) if word in offending_words]
 
 
+def _canonical_conflict_slot_indices(index, slots, assignment, permanent_locked_letters=None):
+    """Indices of the slots whose word is the same as, or shares a canonical
+    form with (`_word_lemma_ids`), another slot's word of `assignment` — a
+    slot entirely covered by `permanent_locked_letters` excepted. `try_fill`'s
+    last safety net: a word can reach a grid without going through
+    `used_words` (a fully locked slot carried from an earlier palier, a slot
+    sealed by its crossing words), and such a grid is not a success."""
+    by_key = defaultdict(set)
+    for i, word in enumerate(assignment):
+        if word is None:
+            continue
+        by_key[word].add(i)
+        for lemma in _word_lemma_ids(index, word):
+            by_key[lemma].add(i)
+    out = set()
+    for members in by_key.values():
+        if len(members) > 1:
+            out |= members
+    if permanent_locked_letters:
+        out = {i for i in out if not all(cell in permanent_locked_letters for cell in slots[i])}
+    return sorted(out)
+
+
 def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=None,
              forced_letters=None, letter_scores=None, preseed_assignment=None,
              excluded_slots=None, cancel_event=None, batch_abandoned_event=None,
@@ -8972,7 +9254,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
         filler.on_live_state = _publish_live_state
     if preseed_assignment is not None:
         filler.assignment = list(preseed_assignment)
-        filler.used_words = {w for w in preseed_assignment if w is not None}
+        filler.used_words = UsedWords(index, preseed_assignment)
         filler.best_assignment = list(preseed_assignment)
         filler.best_assigned_count = sum(1 for w in preseed_assignment if w is not None)
     filler.mark_immediately_impossible_slots()
@@ -9045,11 +9327,21 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
         over_non_gloss_budget = non_gloss_count > max_non_gloss
         if over_non_gloss_budget:
             truly_complete = False
+    # Same safety net for two words sharing a canonical form (or the same
+    # word twice), every one of them flagged impossible.
+    canonical_conflict_slots = []
+    if truly_complete:
+        canonical_conflict_slots = _canonical_conflict_slot_indices(
+            index, slots, filler.assignment, permanent_locked_letters,
+        )
+        if canonical_conflict_slots:
+            truly_complete = False
     if diagnostics is not None:
         diagnostics["checks"] = filler.checks
         diagnostics["reason"] = (
             "too_many_proper_nouns" if over_proper_noun_budget
             else "too_many_non_gloss_words" if over_non_gloss_budget
+            else "shared_canonical_form" if canonical_conflict_slots
             else "solved" if truly_complete
             else "interrupted_other_attempt_done" if filler.interrupted_by_sibling
             else "abandoned_too_unfillable" if filler.abandoned
@@ -9095,6 +9387,14 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                 diagnostics["impossible_slots"] = sorted(set(diagnostics["impossible_slots"]) | set(quota_slots))
                 diagnostics["impossible_cells"] = sorted(
                     set(diagnostics["impossible_cells"]) | {cell for i in quota_slots for cell in slots[i]}
+                )
+            if canonical_conflict_slots:
+                diagnostics["impossible_slots"] = sorted(
+                    set(diagnostics["impossible_slots"]) | set(canonical_conflict_slots)
+                )
+                diagnostics["impossible_cells"] = sorted(
+                    set(diagnostics["impossible_cells"])
+                    | {cell for i in canonical_conflict_slots for cell in slots[i]}
                 )
             diagnostics["locked_cells"] = _locked_cells()
             # The letters themselves, as `[row, col, letter]` triples: a
@@ -10582,11 +10882,11 @@ def interactive_slot_candidates(grid, rows, cols, index, cells, priority_words=N
         if grid[r][c] not in (BLACK, WHITE)
     }
     own_cells = set(cells)
-    used_words = {
+    used_words = used_words_of(index, (
         "".join(known[cell] for cell in other_cells)
         for other_cells in slots
         if set(other_cells) != own_cells and all(cell in known for cell in other_cells)
-    }
+    ))
     candidates = set(_slot_candidates(index, len(cells), cells, known)) - used_words
     themed = _priority_words_for(priority_words, cells) & candidates
     other = candidates - themed
@@ -10677,12 +10977,12 @@ def interactive_crossing_words(grid, rows, cols, index, cell, challenge_words=No
     }
     across_set = set(across_cells)
     down_set = set(down_cells)
-    used_words = {
+    used_words = used_words_of(index, (
         "".join(known[c2] for c2 in other_cells)
         for other_cells in slots
         if set(other_cells) != across_set and set(other_cells) != down_set
         and all(c2 in known for c2 in other_cells)
-    }
+    ))
     across_words = set(_slot_candidates(index, len(across_cells), across_cells, known)) - used_words
     down_words = set(_slot_candidates(index, len(down_cells), down_cells, known)) - used_words
     pos_across = across_cells.index(cell)
@@ -10766,11 +11066,11 @@ def interactive_boundary_candidates(grid, rows, cols, index, cells, side, priori
         if grid[r][c] not in (BLACK, WHITE)
     }
     own_cells = set(cells)
-    used_words = {
+    used_words = used_words_of(index, (
         "".join(known[cell] for cell in other_cells)
         for other_cells in slots
         if set(other_cells) != own_cells and all(cell in known for cell in other_cells)
-    }
+    ))
     full_length = len(cells)
     theme_words = []
     other_words = []
@@ -11352,11 +11652,11 @@ def _noise_slot_cells(grid, rows, cols, index, locked_letters):
     if not locked_letters:
         return []
     all_slots = extract_slots(grid, rows, cols)
-    used_words = {
+    used_words = used_words_of(index, (
         "".join(locked_letters[cell] for cell in slot)
         for slot in all_slots
         if all(cell in locked_letters for cell in slot)
-    }
+    ))
     # Playable words per partially locked slot (None for every other
     # slot — fully locked or fully blank — out of scope for this
     # function, see the docstring).
@@ -11748,11 +12048,11 @@ def _crossing_deadlock_indices(slots_list, index, known, challenge_words=None):
     when it can no longer actually be placed — the live red highlight
     (backed by the Filler-based check) would then show a deadlock
     "Nettoyer" (backed by this one) didn't see at all."""
-    used = {
+    used = used_words_of(index, (
         "".join(known[c] for c in cells)
         for cells in slots_list
         if all(c in known for c in cells)
-    }
+    ))
     available_challenge_words = (set(challenge_words) - used) if challenge_words else set()
     open_indices = [
         j for j, cells in enumerate(slots_list) if not all(c in known for c in cells)
@@ -12777,10 +13077,10 @@ def _shorten_impossible_zones(grid, rows, cols, slots, assignment, impossible_sl
             for i, s in enumerate(cur_slots):
                 for c in s:
                     cell_to_slots[c].append(i)
-            used_words = {
+            used_words = used_words_of(index, (
                 "".join(known[c] for c in s) for s in cur_slots
                 if all(c in known for c in s)
-            }
+            ))
             result = _find_shorter_word_for_zone(
                 new_grid, rows, cols, cells, cur_slots, cell_to_slots, own_idx,
                 index, known, used_words, rng,
@@ -12943,10 +13243,10 @@ def _lengthen_impossible_zones(grid, rows, cols, slots, assignment, impossible_s
             for i, s in enumerate(cur_slots):
                 for c in s:
                     cell_to_slots[c].append(i)
-            used_words = {
+            used_words = used_words_of(index, (
                 "".join(known[c] for c in s) for s in cur_slots
                 if all(c in known for c in s)
-            }
+            ))
             protected = _known_slot_boundary_cells(new_grid, rows, cols, cur_slots, known)
             if permanent_black_cells:
                 protected = protected | permanent_black_cells
@@ -13642,6 +13942,9 @@ def _plug_isolated_cells(grid, rows, cols, slots, assignment, index, permanent_l
         return None
     new_slots = extract_slots(new_grid, rows, cols)
     new_assignment = []
+    # Every word of the new pattern is one the fill could have placed: never
+    # twice the same, never two sharing a canonical form (`UsedWords`).
+    used = UsedWords(index)
     for cells in new_slots:
         if any(cell not in known for cell in cells):
             return None
@@ -13651,12 +13954,18 @@ def _plug_isolated_cells(grid, rows, cols, slots, assignment, index, permanent_l
         # and must be treated as correct, whatever word they spell
         # (probably a proper noun).
         if permanent_locked_letters and all(cell in permanent_locked_letters for cell in cells):
-            new_assignment.append("".join(known[cell] for cell in cells))
+            word = "".join(known[cell] for cell in cells)
+            new_assignment.append(word)
+            used.add(word)
             continue
         candidates = _slot_candidates(index, len(cells), cells, known)
         if not candidates:
             return None
-        new_assignment.append(next(iter(candidates)))
+        word = next(iter(candidates))
+        if word in used:
+            return None
+        new_assignment.append(word)
+        used.add(word)
     return new_grid, new_slots, new_assignment
 
 

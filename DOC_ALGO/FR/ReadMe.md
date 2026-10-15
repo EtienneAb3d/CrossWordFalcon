@@ -156,10 +156,13 @@ n'est alors jamais restreint aux formes fléchies connues
 La construction de la grille n'utilise que la forme nue des mots (26
 lettres sans accent). Le lexique chargé ne garde donc en mémoire, par
 longueur, que les mots, leur index (position, lettre), leurs deux
-fréquences en flottant 32 bits et, pour chaque mot, la position de sa
-ligne dans son fichier (`build_index`). La forme accentuée et les lemmes
-ne sont relus sur le disque qu'au moment de préparer les définitions
-(`word_forms`). Ce lexique est chargé une seule fois par langue et niveau
+fréquences en flottant 32 bits, pour chaque mot la position de sa
+ligne dans son fichier (`build_index`), et les identifiants entiers de ses
+formes canoniques avec leur index inverse (lemme → mots qui le portent),
+qui servent à interdire deux mots de même forme canonique
+(`_attach_lemmas`, lu au chargement depuis la colonne CANONIQUE de chaque
+ligne). La forme accentuée et le texte des lemmes ne sont relus sur le
+disque qu'au moment de préparer les définitions (`word_forms`). Ce lexique est chargé une seule fois par langue et niveau
 de difficulté, puis partagé par toutes les générations et toutes les
 sessions Interactif (`load_lexicon`, appelé par `generate_grid` et par
 `backend/app.py`, `_load_interactive_index`).
@@ -842,7 +845,12 @@ autre.
 
 Deux règles absolues :
 
-- **un mot n'apparaît qu'une fois dans la grille** (`Filler.used_words`) ;
+- **un mot n'apparaît qu'une fois dans la grille, et deux mots de la
+  grille ne partagent jamais de forme canonique** (un lemme de leur
+  colonne CANONIQUE : EST, ETE et ETAIT partagent « être », ELM et ELMS
+  « elm ») : `Filler.used_words` (`UsedWords`) contient chaque mot posé et
+  chaque mot partageant un lemme avec l'un d'eux, et tout mot qu'il
+  contient est indisponible ;
 - **aucun mot n'est posé s'il laisse un emplacement bloqué parmi ceux
   qu'il croise.** Un candidat est jugé sur l'**état qu'il laisse** :
   - s'il **rend bloqué** un emplacement croisé qui ne l'était pas : refusé,
@@ -931,8 +939,8 @@ La recherche est une fonction récursive, un emplacement à la fois
    (`Filler._domain`) : le dictionnaire, indexé par longueur/position/
    lettre (`build_index`), donne instantanément les mots compatibles avec
    les lettres connues — d'un mot croisé posé, d'une lettre verrouillée,
-   ou, en dernier recours, d'une graine. Un mot de `used_words` ne compte
-   jamais.
+   ou, en dernier recours, d'une graine. Un mot de `used_words` (mot posé,
+   ou partageant une forme canonique avec un mot posé) ne compte jamais.
 2. **Un emplacement sans aucun candidat** est marqué **écarté** et **le
    nœud échoue aussitôt** : une pose antérieure en est responsable. Font
    exception les emplacements de `Filler._tolerated_dry`, seulement omis
@@ -1543,6 +1551,16 @@ impossibles — mêmes cases rouges, même entrée pour le nettoyage
 (`_quota_overflow_slot_indices`) — plutôt que de laisser la tentative
 paraître « propre » tout en étant marquée échouée.
 
+**Deux mots de même forme canonique** (génération automatique) : de même,
+une grille entièrement remplie est refusée si deux de ses mots sont
+identiques ou partagent une forme canonique — cas d'un mot arrivé sans
+passer par `used_words` (emplacement entièrement verrouillé repris d'un
+palier précédent, emplacement scellé par ses croisements). Tous les mots
+en conflit sont signalés impossibles, sauf ceux entièrement couverts par
+des lettres permanentes (mode « Finir la grille ») ; la raison d'échec est
+`shared_canonical_form` (`_canonical_conflict_slot_indices`, appelée par
+`try_fill`).
+
 #### Rouge, jaune : deux signaux distincts
 
 `Filler.impossible_zone_cells()` (rouge) ne traite jamais un emplacement
@@ -1648,8 +1666,8 @@ confirmée.
 
 - Contrairement aux « emplacements à une seule possibilité » (avant la
   recherche, sur les seules lettres verrouillées), il tient compte des
-  mots placés pendant la tentative : un mot déjà utilisé ailleurs n'est
-  jamais confirmé une seconde fois.
+  mots placés pendant la tentative : un mot déjà utilisé ailleurs, ou de
+  même forme canonique qu'un mot posé, n'est jamais confirmé.
 - La confirmation peut écrire de vraies lettres : elle est **refusée** si
   elle laisserait bloqué un emplacement croisé ouvert. Y renoncer ne coûte
   rien (la grille n'était complétable dans aucun des deux cas) et laisse
@@ -2057,8 +2075,9 @@ touche alors pas du tout.
 
 Si le résultat reste une grille valide (pas de case blanche orpheline créée
 ailleurs, grille blanche toujours connexe) **et** que chaque emplacement du
-nouveau motif est entièrement rempli d'un vrai mot du dictionnaire, la
-tentative devient une **réussite** ordinaire, exactement comme un
+nouveau motif est entièrement rempli d'un vrai mot du dictionnaire — sans
+jamais deux fois le même mot, ni deux mots de même forme canonique
+(`UsedWords`) —, la tentative devient une **réussite** ordinaire, exactement comme un
 remplissage abouti : elle compte pour le minimum de réussites
 (`MIN_SUCCESSFUL_ATTEMPTS`), puis est optimisée et comparée aux autres
 réussites — jamais acceptée seule. Sinon, rien n'est modifié et la
