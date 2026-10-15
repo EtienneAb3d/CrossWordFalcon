@@ -4793,3 +4793,6 @@ end through the real running API (interactive start/step/save,
   dividers like `.qdrant-admin-table`. No new token. **Visually
   confirmed** with Playwright/Chromium at 1400×1000: icon button between
   Dictionnaire and Paraphraseur, table rendered under the form.
+- `.tool-icon-btn[hidden] { display: none }` is mandatory: `.tool-icon-btn`'s
+  own `display: inline-flex` otherwise beats the browser's `[hidden]` rule
+  and shows the localhost-only `#usage-stats-btn` on every origin.

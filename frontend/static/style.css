@@ -467,6 +467,13 @@ form {
   align-self: stretch;
 }
 
+/* The class's own `display` beats the browser's [hidden] rule (same
+   specificity, author stylesheet wins): without this, the localhost-only
+   #usage-stats-btn shows on every origin. */
+.tool-icon-btn[hidden] {
+  display: none;
+}
+
 /* "Préconfigurations" row: its own first line of #generate-form
    (flex-basis 100%), the label then a custom drop-down — a native <select>
    cannot render the bold preset name. The list opens below the button,
