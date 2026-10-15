@@ -176,6 +176,8 @@ def _extract_from_iframe_src(html, pattern):
 # 18 French-language sources below to avoid touching them unnecessarily;
 # explicit ("en"/"de"/"it"/"es"/"pt") on non-French sources, or a list of
 # codes for a multilingual source (e.g. WordsCroisés, "en"+"fr").
+# "headers" (optional): extra request headers for that source, merged over
+# _REQUEST_HEADERS.
 # "extract" (optional): (function, pattern, title_template) for sources
 # whose real, current grid number can be automatically recovered — see
 # the module docstring for how each one was confirmed live.
@@ -193,6 +195,17 @@ SOURCES = {
     },
     "isbooth": {"name": "Isbooth", "url": "https://isbooth.com/mots-croises-du-jour"},
     "lacroix": {"name": "La Croix", "url": "https://www.la-croix.com/mots-croises"},
+    "langueauchat": {
+        "name": "Langue au chat", "url": "https://www.langue-au-chat.fr/jeux/mots-croises/",
+        # An archive page listing the recent grids newest first ("Mots
+        # croisés – Grille du Jeudi 15 octobre 2026"); a single-digit day
+        # is preceded by two spaces, hence one group per date part.
+        "extract": (
+            _extract_from_visible_text,
+            r"Mots croisés\s*–\s*Grille du\s+(\w+)\s+(\d{1,2})\s+(\w+)\s+(\d{4})",
+            "Langue au chat – Grille du {} {} {} {}",
+        ),
+    },
     "lanouvellerepublique": {"name": "La Nouvelle République", "url": "https://www.lanouvellerepublique.fr/loisirs/jeux/mots-croises"},
     "larousse": {"name": "Larousse", "url": "https://jeux.larousse.fr/mots-croises-mini"},
     "canadafrancais": {"name": "Le Canada Français", "url": "https://www.canadafrancais.com/mots-croises/"},
@@ -236,11 +249,9 @@ SOURCES = {
     # to the RSS feeds") — the RSS feeds already in place
     # (fetch_rss_feeds.py) are blogs *about* crosswords (Rex Parker, Diary
     # of a Crossword Fiend), never a direct link to a playable grid; these
-    # 4 sources fill that gap, verified live with the same method as for
+    # 5 sources fill that gap, verified live with the same method as for
     # French (see the module docstring). Two serious candidates were
-    # rejected along the way: Washington Post (no connection at all
-    # possible from this machine — HTTP 000/403 depending on the tool, a
-    # genuine network failure, not assumed) and USA Today
+    # rejected along the way: USA Today
     # (games.usatoday.com really does redirect to
     # "eu.usatoday.com/unsupported-eu/", a geographic block against
     # European visitors — exactly the same failure class as Franceinfo
@@ -251,6 +262,18 @@ SOURCES = {
         # class='date'>Saturday, September 5th</h3>" — confirmed live
         # (real visible text, genuinely matching today's date).
         "extract": (_extract_from_visible_text, r'((?:Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday), \w+ \d{1,2}(?:st|nd|rd|th)?)', "Fox News – {}"),
+    },
+    "washingtonpost": {
+        # Its bot protection leaves a request with only the common headers
+        # hanging until the timeout; adding the browser's Sec-Fetch-*
+        # navigation headers gets a normal 200. The grid itself is rendered
+        # client-side: neither a date nor a grid number appears in the page.
+        "name": "The Washington Post", "url": "https://www.washingtonpost.com/games/crossword/", "language": "en",
+        "headers": {
+            "Accept-Language": "en-US,en;q=0.9",
+            "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none", "Sec-Fetch-User": "?1",
+        },
     },
     "guardian": {
         "name": "The Guardian – Cryptic", "url": "https://www.theguardian.com/crosswords/series/cryptic",
@@ -432,7 +455,7 @@ def fetch_all():
     with httpx.Client(timeout=20, follow_redirects=True, headers=_REQUEST_HEADERS) as client:
         for key, source in SOURCES.items():
             try:
-                resp = client.get(source["url"])
+                resp = client.get(source["url"], headers=source.get("headers"))
                 resp.raise_for_status()
             except httpx.HTTPError as e:
                 print(f"[fetch_grid_links] {key}: echec de verification ({e})")
