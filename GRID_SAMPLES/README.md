@@ -26,7 +26,7 @@
 
 ![Solution](20261006-045520-486606_la_ou_les_vents_soufflent_3578_SOLUTION.png)
 
-# Cappuccino (15x15 grid, 18% black, grouped/aligned-American/NYT pattern style)
+# Cappuccino (15x15 grid, 25% black, grouped/aligned-American/NYT pattern style)
 
 [Download PDF](20261015-054619-296132_the_silent_tether_0642.pdf)
 
@@ -40,7 +40,7 @@
 
 ![Solution](20261015-054619-296132_the_silent_tether_0642_SOLUTION.png)
 
-# Latte (21x21 grid, 18% black, grouped/aligned-American/NYT pattern style)
+# Latte (21x21 grid, 23% black, grouped/aligned-American/NYT pattern style)
 
 [Download PDF](20261015-061909-893546_code_of_silence_7664.pdf)
 
