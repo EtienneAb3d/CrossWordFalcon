@@ -12,6 +12,9 @@ from pathlib import Path
 
 _DIR = Path(__file__).resolve().parent.parent / "data"
 
+# Lowest usage score counted by the per-length table of `usage_score_counts`.
+LENGTH_STATS_MIN_SCORE = 3
+
 _cache = {}  # language -> {MOT: score} | None
 _lock = threading.Lock()
 
@@ -47,18 +50,29 @@ def usage_score_counts(languages):
     """Number of rated words per usage score, for the localhost-only
     "Statistiques" panel (`GET /api/usage_stats`), over both files of each
     language: `{"scores": [every score found, ascending], "languages":
-    [{"language", "counts": [one count per score of "scores"], "total"}]}`,
-    `counts`/`total` `None` for a language with neither file."""
+    [{"language", "counts": [one count per score of "scores"], "total",
+    "length_counts"}], "lengths": [...]}`; `lengths` lists, longest first,
+    every word length found among the words rated at least
+    `LENGTH_STATS_MIN_SCORE`, and each `length_counts` holds that language's
+    number of such words per length of `lengths`. `counts`/`total`/
+    `length_counts` `None` for a language with neither file."""
     per_language = {language: _load(language) for language in languages}
     scores = sorted({s for m in per_language.values() if m for s in m.values()})
+    lengths = sorted({len(w) for m in per_language.values() if m
+                      for w, s in m.items() if s >= LENGTH_STATS_MIN_SCORE}, reverse=True)
     rows = []
     for language, m in per_language.items():
         if m is None:
-            rows.append({"language": language, "counts": None, "total": None})
+            rows.append({"language": language, "counts": None, "total": None,
+                         "length_counts": None})
             continue
         tally = {}
-        for s in m.values():
+        by_length = {}
+        for w, s in m.items():
             tally[s] = tally.get(s, 0) + 1
+            if s >= LENGTH_STATS_MIN_SCORE:
+                by_length[len(w)] = by_length.get(len(w), 0) + 1
         rows.append({"language": language, "counts": [tally.get(s, 0) for s in scores],
-                     "total": len(m)})
-    return {"scores": scores, "languages": rows}
+                     "total": len(m),
+                     "length_counts": [by_length.get(n, 0) for n in lengths]})
+    return {"scores": scores, "languages": rows, "lengths": lengths}

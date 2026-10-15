@@ -445,9 +445,12 @@ json`. Holds all server-side state in plain module dicts/lists:
 - *Usage-score statistics* (localhost-only, gated by `frontend/server.py`):
   `GET /api/usage_stats` (`usage_scores.usage_score_counts`, Java
   `UsageScores.usageScoreCounts`: `{scores, languages: [{language, counts,
-  total}]}`, every score found in ascending order, one count per score,
-  both usage-score files of each language counted; `counts`/`total` null
-  for a language with neither file).
+  total, length_counts}], lengths}`, every score found in ascending order,
+  one count per score, both usage-score files of each language counted;
+  `lengths` every word length of the words rated at least
+  `LENGTH_STATS_MIN_SCORE` (3), longest first, `length_counts` one count of
+  such words per length; `counts`/`total`/`length_counts` null for a
+  language with neither file).
 
 **Key request models** (Pydantic, all in `app.py`): `GenerateRequest`
 (`language`, `bilingual_language`, `width`/`height` [5-50], `difficulty`
@@ -2990,7 +2993,7 @@ state, unlike the backend).
   "Dictionnaire", the localhost-only bar-chart icon button
   `#usage-stats-btn` toggles the `#usage-stats` panel (`loadUsageStats`/
   `renderUsageStats`: one row per language, one column per usage score,
-  then the words rated 3 or more (`USAGE_STATS_MIN_SCORE`), then the total, from `GET /api/usage_stats`); `#mode` lists only the budget modes (flash … gridzilla),
+  then the words rated 3 or more (`USAGE_STATS_MIN_SCORE`), then the total, from `GET /api/usage_stats`; below it `renderUsageLengthStats`: the words rated 3 or more per word length, one row per length, longest first, one column per language); `#mode` lists only the budget modes (flash … gridzilla),
   also read by "Finir la grille"/"Finir la zone".
   While a playable grid is on screen (`displayFinalGrid`), the creation
   form is folded (`#generate-form.play-collapsed`, `setGenerateFormCollapsed`

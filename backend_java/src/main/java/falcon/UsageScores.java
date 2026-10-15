@@ -24,6 +24,9 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class UsageScores {
     private UsageScores() {}
 
+    /** Lowest usage score counted by the per-length table of usageScoreCounts. */
+    public static final int LENGTH_STATS_MIN_SCORE = 3;
+
     private static final Path DIR = Env.path("data");
     private static final Map<String, Optional<Map<String, Integer>>> CACHE = new ConcurrentHashMap<>();
 
@@ -59,7 +62,8 @@ public final class UsageScores {
 
     /**
      * Number of rated words per usage score, for the localhost-only "Statistiques" panel
-     * (GET /api/usage_stats), over both files of each language (mirrors
+     * (GET /api/usage_stats), over both files of each language, plus the number of words
+     * rated at least LENGTH_STATS_MIN_SCORE per word length, longest first (mirrors
      * usage_scores.usage_score_counts).
      */
     public static Map<String, Object> usageScoreCounts(List<String> languages) {
@@ -68,19 +72,36 @@ public final class UsageScores {
         TreeSet<Integer> scoreSet = new TreeSet<>();
         for (Optional<Map<String, Integer>> m : perLanguage.values()) m.ifPresent(x -> scoreSet.addAll(x.values()));
         List<Integer> scores = new ArrayList<>(scoreSet);
+        TreeSet<Integer> lengthSet = new TreeSet<>(java.util.Comparator.reverseOrder());
+        for (Optional<Map<String, Integer>> m : perLanguage.values()) {
+            m.ifPresent(x -> x.forEach((w, s) -> {
+                if (s >= LENGTH_STATS_MIN_SCORE) lengthSet.add(w.codePointCount(0, w.length()));
+            }));
+        }
+        List<Integer> lengths = new ArrayList<>(lengthSet);
         List<Object> rows = new ArrayList<>();
         for (Map.Entry<String, Optional<Map<String, Integer>>> e : perLanguage.entrySet()) {
             if (e.getValue().isEmpty()) {
-                rows.add(Json.obj("language", e.getKey(), "counts", null, "total", null));
+                rows.add(Json.obj("language", e.getKey(), "counts", null, "total", null,
+                        "length_counts", null));
                 continue;
             }
             Map<String, Integer> m = e.getValue().get();
             Map<Integer, Integer> tally = new HashMap<>();
-            for (int s : m.values()) tally.merge(s, 1, Integer::sum);
+            Map<Integer, Integer> byLength = new HashMap<>();
+            for (Map.Entry<String, Integer> w : m.entrySet()) {
+                tally.merge(w.getValue(), 1, Integer::sum);
+                if (w.getValue() >= LENGTH_STATS_MIN_SCORE) {
+                    byLength.merge(w.getKey().codePointCount(0, w.getKey().length()), 1, Integer::sum);
+                }
+            }
             List<Object> counts = new ArrayList<>();
             for (int s : scores) counts.add(tally.getOrDefault(s, 0));
-            rows.add(Json.obj("language", e.getKey(), "counts", counts, "total", m.size()));
+            List<Object> lengthCounts = new ArrayList<>();
+            for (int n : lengths) lengthCounts.add(byLength.getOrDefault(n, 0));
+            rows.add(Json.obj("language", e.getKey(), "counts", counts, "total", m.size(),
+                    "length_counts", lengthCounts));
         }
-        return Json.obj("scores", scores, "languages", rows);
+        return Json.obj("scores", scores, "languages", rows, "lengths", lengths);
     }
 }

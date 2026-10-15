@@ -618,11 +618,14 @@ A bar-chart icon button (`#usage-stats-btn`, tooltip "Statistiques des
 scores d'usage" / "Usage-score statistics") sits right after
 "Dictionnaire", **only when the page is opened on the machine that runs
 the app itself** (localhost). It opens or closes a panel (`#usage-stats`)
-holding one table: one row per language, one column per usage score found
+holding two tables. The first has one row per language, one column per usage score found
 (0 practically unknown … 5 everyday), then the words rated 3 or more
 ("Total ≥ 3", the ones an Easy grid can use), then the total — the number of
 words each language's dictionaries rate with that score, both rated word
 lists counted (the Scrabble words and the corpus words absent from them).
+A second table below it ("Words rated ≥ 3 by length") splits the words
+rated 3 or more by word length: one row per length, longest first, one
+column per language (`renderUsageLengthStats`).
 A language with no usage scores yet shows "—" (`frontend/static/
 script.js`, `renderUsageStats`; `GET /api/usage_stats`, gated to loopback
 requests by `frontend/server.py`, `_require_localhost`). **✕**

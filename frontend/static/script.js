@@ -6350,7 +6350,8 @@ qdrantAdminCloseBtn.addEventListener("click", hideQdrantAdminPanel);
 // Usage-score statistics panel — localhost only, like "Qdrant (admin)":
 // the number of words per usage score (both usage-score files of each
 // language), one row per language, one column per score found, then the
-// total (GET /api/usage_stats).
+// total, followed by the words rated 3 or more per word length
+// (GET /api/usage_stats).
 // ---------------------------------------------------------------------------
 (function showUsageStatsOnLocalhost() {
   if (isLocalhostOrigin()) usageStatsBtn.hidden = false;
@@ -6398,7 +6399,48 @@ function renderUsageStats(data) {
     }
     body.appendChild(tr);
   }
-  usageStatsBody.replaceChildren(table);
+  usageStatsBody.replaceChildren(table, renderUsageLengthStats(data, fmt));
+}
+
+// Words rated at least USAGE_STATS_MIN_SCORE per word length (the backend's
+// LENGTH_STATS_MIN_SCORE): one row per length, longest first, one column per
+// language.
+function renderUsageLengthStats(data, fmt) {
+  const t = I18N[uiLanguage];
+  const wrap = document.createElement("div");
+  wrap.className = "usage-stats-section";
+  const title = document.createElement("p");
+  title.className = "usage-stats-subtitle";
+  title.textContent = t.usageStatsLengthTitle(USAGE_STATS_MIN_SCORE);
+  const table = document.createElement("table");
+  table.className = "usage-stats-table usage-stats-lengths";
+  const headRow = document.createElement("tr");
+  const corner = document.createElement("th");
+  corner.textContent = t.usageStatsColLength;
+  headRow.appendChild(corner);
+  for (const row of data.languages) {
+    const th = document.createElement("th");
+    th.textContent = languageSelect.querySelector(`option[value="${row.language}"]`)?.textContent
+      || row.language;
+    headRow.appendChild(th);
+  }
+  table.createTHead().appendChild(headRow);
+  const body = table.createTBody();
+  (data.lengths || []).forEach((length, i) => {
+    const tr = document.createElement("tr");
+    const th = document.createElement("th");
+    th.scope = "row";
+    th.textContent = String(length);
+    tr.appendChild(th);
+    for (const row of data.languages) {
+      const td = document.createElement("td");
+      td.textContent = fmt(row.length_counts ? row.length_counts[i] : null);
+      tr.appendChild(td);
+    }
+    body.appendChild(tr);
+  });
+  wrap.append(title, table);
+  return wrap;
 }
 
 async function loadUsageStats() {

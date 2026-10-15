@@ -2370,7 +2370,7 @@ button:disabled {
 
 /* Usage-score statistics panel (#usage-stats-btn, script.js's
    renderUsageStats) — localhost only. Same bordered card as #qdrant-admin;
-   counts right-aligned, one row per language. */
+   counts right-aligned, one row per language, then a per-length table. */
 #usage-stats {
   margin: 0.75rem 0;
   padding: 0.75rem 1rem;
@@ -2427,8 +2427,19 @@ button:disabled {
   text-align: left;
 }
 
-.usage-stats-table td:nth-last-child(-n+2),
-.usage-stats-table thead th:nth-last-child(-n+2) {
+.usage-stats-table:not(.usage-stats-lengths) td:nth-last-child(-n+2),
+.usage-stats-table:not(.usage-stats-lengths) thead th:nth-last-child(-n+2) {
+  font-weight: 600;
+}
+
+/* Per-length table (script.js's renderUsageLengthStats), under the
+   per-score one. */
+.usage-stats-section {
+  margin-top: 1rem;
+}
+
+.usage-stats-subtitle {
+  margin: 0 0 0.4rem;
   font-weight: 600;
 }
 
