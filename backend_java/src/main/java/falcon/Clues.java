@@ -993,20 +993,23 @@ public final class Clues {
         gridNorm.removeAll(hollow);
         String system = buildTitleSystemPrompt(TITLE_COUNT, languageName, themeDescription);
         int sampleSize = Math.max(1, (int) Math.rint(words.size() / 3.0));
-        for (int attempt = 0; attempt < TITLE_RETRIES; attempt++) {
+        // When every sampled attempt fails, as many again show the model every grid word, so it can avoid them all.
+        int totalAttempts = 2 * TITLE_RETRIES;
+        for (int attempt = 0; attempt < totalAttempts; attempt++) {
             if (cancelEvent != null && cancelEvent.get()) throw new GenerationCancelled();
-            List<String> shown = sampleSorted(words, sampleSize);
-            String user = "Some words from the grid: " + String.join(", ", shown) + "\n" + TITLE_COUNT
-                    + " titles, one per line:";
+            String wordsLine = attempt < TITLE_RETRIES
+                    ? "Some words from the grid: " + String.join(", ", sampleSorted(words, sampleSize))
+                    : "Every word of the grid: " + String.join(", ", words);
+            String user = wordsLine + "\n" + TITLE_COUNT + " titles, one per line:";
             String content;
             try {
                 content = chat(system, user, 0.9, REASONING_TOKEN_BUDGET + 60, timeout, "TITLE", "Grid title call");
             } catch (IOException e) {
-                Log.warning("title generation attempt %d/%d failed (%s, model=%s): %s", attempt + 1, TITLE_RETRIES,
+                Log.warning("title generation attempt %d/%d failed (%s, model=%s): %s", attempt + 1, totalAttempts,
                         baseUrl, Log.repr(model), e.getMessage());
                 continue;
             }
-            Log.info("title generation attempt %d/%d: raw LLM response: %s", attempt + 1, TITLE_RETRIES, Log.repr(content));
+            Log.info("title generation attempt %d/%d: raw LLM response: %s", attempt + 1, totalAttempts, Log.repr(content));
             List<String> candidates = cleanTitles(stripReasoning(content));
             List<String> kept = new ArrayList<>();
             for (String t : candidates) if (detectWrongLanguage(t, language) == null) kept.add(t);
@@ -1019,32 +1022,32 @@ public final class Clues {
             for (String t : kept) {
                 if (titleTooLong(t)) {
                     Log.info("title generation attempt %d/%d: rejecting %s (more than %d words)", attempt + 1,
-                            TITLE_RETRIES, Log.repr(t), MAX_TITLE_WORDS_ACCEPTED);
+                            totalAttempts, Log.repr(t), MAX_TITLE_WORDS_ACCEPTED);
                     continue;
                 }
                 if (titleHasBadPunctuation(t)) {
                     Log.info("title generation attempt %d/%d: rejecting %s (punctuation other than space/comma)",
-                            attempt + 1, TITLE_RETRIES, Log.repr(t));
+                            attempt + 1, totalAttempts, Log.repr(t));
                     continue;
                 }
                 Set<String> reused = titleGridWordReuse(t, gridNorm, hollow);
                 if (!reused.isEmpty()) {
                     Log.info("title generation attempt %d/%d: rejecting %s (reuses grid word(s): %s)", attempt + 1,
-                            TITLE_RETRIES, Log.repr(t), String.join(", ", reused));
+                            totalAttempts, Log.repr(t), String.join(", ", reused));
                 } else {
                     clean.add(t);
                 }
             }
             if (!clean.isEmpty()) {
                 String title = clean.get(ThreadLocalRandom.current().nextInt(clean.size()));
-                Log.info("title generation attempt %d/%d: candidates=%s chosen=%s", attempt + 1, TITLE_RETRIES, clean,
+                Log.info("title generation attempt %d/%d: candidates=%s chosen=%s", attempt + 1, totalAttempts, clean,
                         Log.repr(title));
                 return title;
             }
             Log.info("title generation attempt %d/%d: no usable candidate (empty / wrong-language / too long / bad "
-                    + "punctuation / all reuse a grid word), retrying", attempt + 1, TITLE_RETRIES);
+                    + "punctuation / all reuse a grid word), retrying", attempt + 1, totalAttempts);
         }
-        Log.info("title generation: no usable candidate after %d attempts, returning no title", TITLE_RETRIES);
+        Log.info("title generation: no usable candidate after %d attempts, returning no title", totalAttempts);
         return "";
     }
 

@@ -1797,9 +1797,11 @@ class LLMClueGenerator:
         generate() takes; only each word's accented spelling is used here
         (the model is shown the real, natural spelling, the same reasoning
         as generate()'s own accented/inflected choice), deduplicated. Each
-        attempt shows the model only a random ~1/3 slice of the words
-        (re-drawn per attempt, at the user's request) — the full grid is
-        still what the grid-word-reuse filter checks against.
+        of the first _TITLE_RETRIES attempts shows the model only a random
+        ~1/3 slice of the words (re-drawn per attempt, at the user's
+        request) — the full grid is still what the grid-word-reuse filter
+        checks against; when all of them fail, _TITLE_RETRIES more attempts
+        show it every word of the grid.
 
         `theme_description`, when given (a themed generation's own
         ~50-word LLM sentence, see `describe_theme`/backend/app.py's
@@ -1838,19 +1840,22 @@ class LLMClueGenerator:
         # so a title reusing a word that happened to be hidden this
         # attempt is still rejected and re-asked.
         sample_size = max(1, round(len(words) / 3))
+        # When every sampled attempt fails, as many again show the model
+        # every grid word, so it can avoid them all.
+        total_attempts = 2 * _TITLE_RETRIES
         # Retry only when a whole response is unusable — an empty reply,
         # only header/lead-in lines, every candidate wrong-language, every
         # candidate reusing a grid word, or the HTTP call itself failing.
         # At the user's explicit request ("Si le titre est vide, demander
         # une nouvelle génération").
-        for attempt in range(_TITLE_RETRIES):
+        for attempt in range(total_attempts):
             if cancel_event is not None and cancel_event.is_set():
                 raise GenerationCancelled()
-            shown = sorted(random.sample(words, sample_size))
-            user_message = (
-                "Some words from the grid: " + ", ".join(shown)
-                + f"\n{_TITLE_COUNT} titles, one per line:"
-            )
+            if attempt < _TITLE_RETRIES:
+                words_line = "Some words from the grid: " + ", ".join(sorted(random.sample(words, sample_size)))
+            else:
+                words_line = "Every word of the grid: " + ", ".join(words)
+            user_message = words_line + f"\n{_TITLE_COUNT} titles, one per line:"
             try:
                 # Higher than the shared TEMPERATURE (0.4, tuned for clue
                 # accuracy): a title is creative, and the small local model
@@ -1862,12 +1867,12 @@ class LLMClueGenerator:
             except httpx.HTTPError as e:
                 logger.warning(
                     "title generation attempt %d/%d failed (%s, model=%r): %s",
-                    attempt + 1, _TITLE_RETRIES, self.base_url, self.model, e,
+                    attempt + 1, total_attempts, self.base_url, self.model, e,
                 )
                 continue
             logger.info(
                 "title generation attempt %d/%d: raw LLM response: %r",
-                attempt + 1, _TITLE_RETRIES, content,
+                attempt + 1, total_attempts, content,
             )
             candidates = _clean_titles(_strip_reasoning(content))
             # A title is short, so _detect_wrong_language is only a weak
@@ -1892,14 +1897,14 @@ class LLMClueGenerator:
                     logger.info(
                         "title generation attempt %d/%d: rejecting %r "
                         "(more than %d words)",
-                        attempt + 1, _TITLE_RETRIES, t, MAX_TITLE_WORDS_ACCEPTED,
+                        attempt + 1, total_attempts, t, MAX_TITLE_WORDS_ACCEPTED,
                     )
                     continue
                 if _title_has_bad_punctuation(t):
                     logger.info(
                         "title generation attempt %d/%d: rejecting %r "
                         "(punctuation other than space/comma)",
-                        attempt + 1, _TITLE_RETRIES, t,
+                        attempt + 1, total_attempts, t,
                     )
                     continue
                 reused = _title_grid_word_reuse(t, grid_norm, hollow)
@@ -1907,7 +1912,7 @@ class LLMClueGenerator:
                     logger.info(
                         "title generation attempt %d/%d: rejecting %r "
                         "(reuses grid word(s): %s)",
-                        attempt + 1, _TITLE_RETRIES, t, ", ".join(sorted(reused)),
+                        attempt + 1, total_attempts, t, ", ".join(sorted(reused)),
                     )
                 else:
                     clean.append(t)
@@ -1917,17 +1922,17 @@ class LLMClueGenerator:
                 title = random.choice(clean)
                 logger.info(
                     "title generation attempt %d/%d: candidates=%r chosen=%r",
-                    attempt + 1, _TITLE_RETRIES, clean, title,
+                    attempt + 1, total_attempts, clean, title,
                 )
                 return title
             logger.info(
                 "title generation attempt %d/%d: no usable candidate "
                 "(empty / wrong-language / too long / bad punctuation / all reuse a grid word), retrying",
-                attempt + 1, _TITLE_RETRIES,
+                attempt + 1, total_attempts,
             )
         logger.info(
             "title generation: no usable candidate after %d attempts, returning no title",
-            _TITLE_RETRIES,
+            total_attempts,
         )
         return ""
 

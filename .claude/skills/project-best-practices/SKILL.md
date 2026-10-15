@@ -2578,6 +2578,13 @@ the current defaults/behavior to know before touching this code.
   endpoint fails (usage limit reached or any other error), the local LLM
   takes over for 5 minutes (`CLUE_LLM_BACKUP_SECONDS`, one window shared
   by clues and "Définir"), then that endpoint is tried again.
+- **A grid title gets a second round with every grid word** — the
+  user's rule: "Si 3 tentatives échouent avec une partie seulement des
+  mots, donner tous les mots pour 3 nouvelles tentatives"
+  (`generate_title`, Java `Clues.generateTitle`): the first
+  `_TITLE_RETRIES` attempts show a random third of the words, the next as
+  many show them all, so the model can avoid every word the reuse filter
+  rejects.
 - **Every LLM-written definition goes through one code path** — the
   user's rule: "Toutes les générations de définitions doivent passer par
   le même code […] Il ne doit pas y avoir plusieurs codes pour faire la

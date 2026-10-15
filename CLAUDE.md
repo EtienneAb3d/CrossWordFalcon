@@ -2492,7 +2492,10 @@ concrete per-language worked examples live in `data/<lang>_prompt_
 config.json`.
 
 Also on this class: `generate_title`/`generate_titles` (LLM grid-title
-proposals, filtered against reusing a grid word), `describe_theme`
+proposals, filtered against reusing a grid word; `generate_title` shows
+the model a random third of the grid words for `_TITLE_RETRIES` (3)
+attempts, then, when none gave a usable title, every grid word for as
+many more, before returning no title), `describe_theme`
 (expands a typed theme into a short keyword list for the Qdrant
 pre-search — see "Themed generation" above), `generate_random_theme`
 (invents an original theme phrase from scratch, given only a language and
