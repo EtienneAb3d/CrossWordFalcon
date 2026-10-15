@@ -442,6 +442,12 @@ json`. Holds all server-side state in plain module dicts/lists:
 - *Qdrant admin* (localhost-only, gated by `frontend/server.py`): `GET
   /api/qdrant/admin`, `POST /api/qdrant/admin/recreate`, `POST /api/
   qdrant/admin/delete-tenant`.
+- *Usage-score statistics* (localhost-only, gated by `frontend/server.py`):
+  `GET /api/usage_stats` (`usage_scores.usage_score_counts`, Java
+  `UsageScores.usageScoreCounts`: `{scores, languages: [{language, counts,
+  total}]}`, every score found in ascending order, one count per score,
+  both usage-score files of each language counted; `counts`/`total` null
+  for a language with neither file).
 
 **Key request models** (Pydantic, all in `app.py`): `GenerateRequest`
 (`language`, `bilingual_language`, `width`/`height` [5-50], `difficulty`
@@ -2871,7 +2877,9 @@ point ids make it resumable/idempotent.
 `usage_scores.py` (`usage_score(mot, language)`: a word's usage score for
 the Dictionnaire panel, the language's file read once and cached; `None`
 when unknown — `dictionary_lookup.search` adds it to every row as `usage`,
-from the row's form folded to its grid form; Java `UsageScores`),
+from the row's form folded to its grid form; `usage_score_counts`: the
+number of words per score of every language, for `GET /api/usage_stats`;
+Java `UsageScores`),
 `text_lines.py` (byte-offset line access: `iter_lines_with_offsets`,
 `read_line_at`), `gloss_lookup.py` (Wiktionary gloss by canonical form, plus `has_gloss_
 dictionary`/`has_any_gloss` used by the difficulty filters), `inflection_
@@ -2978,7 +2986,11 @@ state, unlike the backend).
   The form ends with the "Générer les mots croisés :" row (`#generate-row`):
   "Interactif" starts an Interactive session, "Automatique" an automatic
   generation, then the tool buttons (`#tool-buttons`: Bibliothèque …
-  Qdrant (admin)) flush right, wrapping right-aligned; `#mode` lists only the budget modes (flash … gridzilla),
+  Qdrant (admin)) flush right, wrapping right-aligned — right after
+  "Dictionnaire", the localhost-only bar-chart icon button
+  `#usage-stats-btn` toggles the `#usage-stats` panel (`loadUsageStats`/
+  `renderUsageStats`: one row per language, one column per usage score,
+  then the words rated 3 or more (`USAGE_STATS_MIN_SCORE`), then the total, from `GET /api/usage_stats`); `#mode` lists only the budget modes (flash … gridzilla),
   also read by "Finir la grille"/"Finir la zone".
   While a playable grid is on screen (`displayFinalGrid`), the creation
   form is folded (`#generate-form.play-collapsed`, `setGenerateFormCollapsed`

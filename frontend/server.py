@@ -643,6 +643,20 @@ async def proxy_qdrant_admin_delete_tenant(request: Request):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+# --- Usage-score statistics (localhost only) -----------------------------
+# Same gate as the Qdrant admin panel: the "Statistiques" icon button next
+# to "Dictionnaire" is a localhost-only maintenance view.
+@app.get("/api/usage_stats")
+async def proxy_usage_stats(request: Request):
+    _require_localhost(request)
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/usage_stats")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 # --- Library archiving (localhost only) ---------------------------------
 # Same gate as the Qdrant admin panel: the Library's "Archiver" button and
 # its version selector are a localhost-only maintenance tool.

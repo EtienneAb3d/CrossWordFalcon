@@ -5,10 +5,14 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -51,5 +55,32 @@ public final class UsageScores {
     /** The usage score of the grid form {@code mot}, null when unknown. */
     public static Integer usageScore(String mot, String language) {
         return load(language).map(m -> m.get(mot.toUpperCase(Locale.ROOT))).orElse(null);
+    }
+
+    /**
+     * Number of rated words per usage score, for the localhost-only "Statistiques" panel
+     * (GET /api/usage_stats), over both files of each language (mirrors
+     * usage_scores.usage_score_counts).
+     */
+    public static Map<String, Object> usageScoreCounts(List<String> languages) {
+        Map<String, Optional<Map<String, Integer>>> perLanguage = new LinkedHashMap<>();
+        for (String language : languages) perLanguage.put(language, load(language));
+        TreeSet<Integer> scoreSet = new TreeSet<>();
+        for (Optional<Map<String, Integer>> m : perLanguage.values()) m.ifPresent(x -> scoreSet.addAll(x.values()));
+        List<Integer> scores = new ArrayList<>(scoreSet);
+        List<Object> rows = new ArrayList<>();
+        for (Map.Entry<String, Optional<Map<String, Integer>>> e : perLanguage.entrySet()) {
+            if (e.getValue().isEmpty()) {
+                rows.add(Json.obj("language", e.getKey(), "counts", null, "total", null));
+                continue;
+            }
+            Map<String, Integer> m = e.getValue().get();
+            Map<Integer, Integer> tally = new HashMap<>();
+            for (int s : m.values()) tally.merge(s, 1, Integer::sum);
+            List<Object> counts = new ArrayList<>();
+            for (int s : scores) counts.add(tally.getOrDefault(s, 0));
+            rows.add(Json.obj("language", e.getKey(), "counts", counts, "total", m.size()));
+        }
+        return Json.obj("scores", scores, "languages", rows);
     }
 }

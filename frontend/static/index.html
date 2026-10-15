@@ -307,6 +307,17 @@
         <div id="tool-buttons">
           <button type="button" id="library-btn" data-i18n="libraryBtn">Bibliothèque</button>
           <button type="button" id="dictionary-btn" data-i18n="dictionaryBtn">Dictionnaire</button>
+          <!-- Usage-score statistics: localhost only, like "Qdrant (admin)"
+               (script.js, showUsageStatsOnLocalhost; frontend/server.py,
+               _require_localhost on /api/usage_stats). -->
+          <button type="button" id="usage-stats-btn" class="tool-icon-btn"
+                  data-i18n-title="usageStatsBtn" data-i18n-aria="usageStatsBtn" hidden>
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false" fill="currentColor">
+              <rect x="3" y="12" width="4" height="9"/>
+              <rect x="10" y="4" width="4" height="17"/>
+              <rect x="17" y="8" width="4" height="13"/>
+            </svg>
+          </button>
           <!-- "Paraphraseur": asks the LLM for 5 rewordings of the typed
                text (see backend/clues.py, LLMClueGenerator.generate_paraphrases) —
                at the user's explicit request, placed right next to
@@ -793,6 +804,17 @@
                 data-i18n-aria="qdrantAdminCloseBtn">✕</button>
       </div>
       <div id="qdrant-admin-body"></div>
+    </section>
+
+    <!-- Usage-score statistics (localhost only): words per usage score,
+         one row per language (script.js, renderUsageStats). -->
+    <section id="usage-stats" hidden>
+      <div id="usage-stats-header">
+        <p id="usage-stats-label" data-i18n="usageStatsTitle">Scores d'usage — statistiques</p>
+        <button type="button" id="usage-stats-close-btn" class="nav-btn"
+                data-i18n-aria="usageStatsCloseBtn">✕</button>
+      </div>
+      <div id="usage-stats-body"></div>
     </section>
 
     <section id="attempt-preview" hidden>

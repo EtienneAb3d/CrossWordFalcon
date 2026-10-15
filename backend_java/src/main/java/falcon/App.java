@@ -1830,6 +1830,8 @@ public final class App {
                     seenIds, b.str("language_filter", "all"), b.str("difficulty_filter", "all"), b.str("pseudo", null),
                     b.bool("archived", false));
         });
+        // Localhost-only (gated by frontend/server.py): the "Statistiques" panel's usage-score counts.
+        w.get("/api/usage_stats", r -> UsageScores.usageScoreCounts(new ArrayList<>(WORDLISTS.keySet())));
         // Localhost-only (gated by frontend/server.py): the Library's "Archiver" button and version selector.
         w.get("/api/library_archive/versions", r -> GridStore.libraryVersions());
         w.post("/api/library_archive", r -> {

@@ -77,6 +77,7 @@ from .svg_export import (
     svg_to_pdf_bytes,
 )
 from .system_info import get_system_info, sample_resource_usage
+from .usage_scores import usage_score_counts
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("crosswordfalcon")
@@ -2117,6 +2118,14 @@ def _library_page(preferred_language, page, seen_filter, seen_ids,
         # "Voir les grilles archivées" mention.
         "has_archived": has_archived_grids(),
     }
+
+
+@app.get("/api/usage_stats")
+def usage_stats():
+    """Localhost-only (frontend/server.py): the number of words per usage
+    score of each language, both usage-score files counted, for the
+    "Statistiques" panel."""
+    return usage_score_counts(list(WORDLISTS))
 
 
 @app.get("/api/library_archive/versions")

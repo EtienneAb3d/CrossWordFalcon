@@ -305,7 +305,8 @@ full again whenever a new generation or an Interactive session starts.
   mode" below); **Automatique / Automatic** (`#generate-auto-btn`, also
   triggered by pressing Enter in a field) starts an automatic generation
   with the settings above. The tool buttons (Bibliothèque, Dictionnaire,
-  Paraphraseur, Créations, and Qdrant (admin) on the local machine) sit at
+  Paraphraseur, Créations, and the usage-statistics icon and Qdrant
+  (admin) on the local machine) sit at
   the right end of this same line (`#tool-buttons`); when the window is
   too narrow for all of them, the extra ones go onto a further line, still
   aligned to the right. While a generation is running, this and every
@@ -420,7 +421,8 @@ when relevant.
   — always visible next to it; each opens or closes its own panel (see
   "Dictionary", "Paraphraser" and "Créations" below). **Qdrant (admin)**
   (`#qdrant-admin-btn`) only appears on the machine running the app (see
-  "Qdrant (admin)" below).
+  "Qdrant (admin)" below), and so does the bar-chart icon right after
+  "Dictionnaire" (`#usage-stats-btn`, see "Usage-score statistics" below).
 
 ## Cross Talk news panel
 
@@ -609,6 +611,22 @@ by itself when the page loads if you have at least one draft
   Library from it is not affected.
 - **↻** (`#interactive-work-refresh-btn`) reloads the list; **✕**
   (`#interactive-work-close-btn`) closes the panel.
+
+## Usage-score statistics
+
+A bar-chart icon button (`#usage-stats-btn`, tooltip "Statistiques des
+scores d'usage" / "Usage-score statistics") sits right after
+"Dictionnaire", **only when the page is opened on the machine that runs
+the app itself** (localhost). It opens or closes a panel (`#usage-stats`)
+holding one table: one row per language, one column per usage score found
+(0 practically unknown … 5 everyday), then the words rated 3 or more
+("Total ≥ 3", the ones an Easy grid can use), then the total — the number of
+words each language's dictionaries rate with that score, both rated word
+lists counted (the Scrabble words and the corpus words absent from them).
+A language with no usage scores yet shows "—" (`frontend/static/
+script.js`, `renderUsageStats`; `GET /api/usage_stats`, gated to loopback
+requests by `frontend/server.py`, `_require_localhost`). **✕**
+(`#usage-stats-close-btn`) closes the panel.
 
 ## Qdrant (admin)
 

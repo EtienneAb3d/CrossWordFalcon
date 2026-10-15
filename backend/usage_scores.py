@@ -41,3 +41,24 @@ def usage_score(mot, language):
     column), `None` when unknown."""
     scores = _load(language)
     return None if scores is None else scores.get(mot.upper())
+
+
+def usage_score_counts(languages):
+    """Number of rated words per usage score, for the localhost-only
+    "Statistiques" panel (`GET /api/usage_stats`), over both files of each
+    language: `{"scores": [every score found, ascending], "languages":
+    [{"language", "counts": [one count per score of "scores"], "total"}]}`,
+    `counts`/`total` `None` for a language with neither file."""
+    per_language = {language: _load(language) for language in languages}
+    scores = sorted({s for m in per_language.values() if m for s in m.values()})
+    rows = []
+    for language, m in per_language.items():
+        if m is None:
+            rows.append({"language": language, "counts": None, "total": None})
+            continue
+        tally = {}
+        for s in m.values():
+            tally[s] = tally.get(s, 0) + 1
+        rows.append({"language": language, "counts": [tally.get(s, 0) for s in scores],
+                     "total": len(m)})
+    return {"scores": scores, "languages": rows}

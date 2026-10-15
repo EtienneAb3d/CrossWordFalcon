@@ -257,6 +257,10 @@ const paraphraseResults = document.getElementById("paraphrase-results");
 const paraphraseClearBtn = document.getElementById("paraphrase-clear-btn");
 const paraphraseCloseBtn = document.getElementById("paraphrase-close-btn");
 const paraphraseLanguage = document.getElementById("paraphrase-language");
+const usageStatsBtn = document.getElementById("usage-stats-btn");
+const usageStatsPanel = document.getElementById("usage-stats");
+const usageStatsBody = document.getElementById("usage-stats-body");
+const usageStatsCloseBtn = document.getElementById("usage-stats-close-btn");
 const qdrantAdminBtn = document.getElementById("qdrant-admin-btn");
 const qdrantAdminPanel = document.getElementById("qdrant-admin");
 const qdrantAdminBody = document.getElementById("qdrant-admin-body");
@@ -749,7 +753,7 @@ let interactiveMode = false;
 function syncRssPanelVisibility() {
   rssPanel.hidden = generationInProgress || interactiveMode
     || !(libraryPanel.hidden && dictionaryPanel.hidden && paraphrasePanel.hidden
-         && qdrantAdminPanel.hidden
+         && qdrantAdminPanel.hidden && usageStatsPanel.hidden
          && interactiveWorkPanel.hidden && attemptPreview.hidden && result.hidden);
 }
 // Explicit initial state rather than relying on a mere coincidence
@@ -3454,6 +3458,7 @@ function setUiLanguage(lang) {
   // The Qdrant admin panel (localhost): its labels are set at build time,
   // so it's re-rendered if it's open.
   if (!qdrantAdminPanel.hidden) loadQdrantAdmin();
+  if (!usageStatsPanel.hidden) loadUsageStats();
 }
 
 languageSelect.addEventListener("change", () => setUiLanguage(languageSelect.value));
@@ -6340,6 +6345,90 @@ qdrantAdminBtn.addEventListener("click", () => {
 });
 qdrantAdminRefreshBtn.addEventListener("click", loadQdrantAdmin);
 qdrantAdminCloseBtn.addEventListener("click", hideQdrantAdminPanel);
+
+// ---------------------------------------------------------------------------
+// Usage-score statistics panel — localhost only, like "Qdrant (admin)":
+// the number of words per usage score (both usage-score files of each
+// language), one row per language, one column per score found, then the
+// total (GET /api/usage_stats).
+// ---------------------------------------------------------------------------
+(function showUsageStatsOnLocalhost() {
+  if (isLocalhostOrigin()) usageStatsBtn.hidden = false;
+})();
+
+function hideUsageStatsPanel() {
+  usageStatsPanel.hidden = true;
+  syncRssPanelVisibility();
+}
+
+// Lowest score counted by the panel's "≥ 3" total column.
+const USAGE_STATS_MIN_SCORE = 3;
+
+function renderUsageStats(data) {
+  const t = I18N[uiLanguage];
+  const fmt = (n) => (n == null ? "—" : Number(n).toLocaleString(uiLanguage));
+  const table = document.createElement("table");
+  table.className = "usage-stats-table";
+  const headRow = document.createElement("tr");
+  for (const label of [t.usageStatsColLang, ...data.scores.map(String),
+    t.usageStatsColTotalMin(USAGE_STATS_MIN_SCORE), t.usageStatsColTotal]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    headRow.appendChild(th);
+  }
+  table.createTHead().appendChild(headRow);
+  const body = table.createTBody();
+  for (const row of data.languages) {
+    const tr = document.createElement("tr");
+    const name = document.createElement("th");
+    name.scope = "row";
+    // Each language's own name, as the form's language selector shows it.
+    name.textContent = languageSelect.querySelector(`option[value="${row.language}"]`)?.textContent
+      || row.language;
+    tr.appendChild(name);
+    const cells = row.counts ? row.counts : data.scores.map(() => null);
+    // Words rated USAGE_STATS_MIN_SCORE or more (the easy-difficulty lexicon).
+    const atLeastMin = row.counts
+      ? row.counts.reduce((sum, n, i) => sum + (data.scores[i] >= USAGE_STATS_MIN_SCORE ? n : 0), 0)
+      : null;
+    for (const n of [...cells, atLeastMin, row.total]) {
+      const td = document.createElement("td");
+      td.textContent = fmt(n);
+      tr.appendChild(td);
+    }
+    body.appendChild(tr);
+  }
+  usageStatsBody.replaceChildren(table);
+}
+
+async function loadUsageStats() {
+  const t = I18N[uiLanguage];
+  const para = (text) => {
+    const p = document.createElement("p");
+    p.className = "usage-stats-empty";
+    p.textContent = text;
+    return p;
+  };
+  usageStatsBody.replaceChildren(para(t.usageStatsLoading));
+  try {
+    const response = await fetchWithTimeout("/api/usage_stats", {}, FETCH_TIMEOUT_MS);
+    if (!response.ok) throw new Error();
+    renderUsageStats(await response.json());
+  } catch (err) {
+    usageStatsBody.replaceChildren(para(t.usageStatsError));
+  }
+}
+
+usageStatsBtn.addEventListener("click", () => {
+  if (usageStatsPanel.hidden) {
+    usageStatsPanel.hidden = false;
+    syncRssPanelVisibility();
+    loadUsageStats();
+  } else {
+    hideUsageStatsPanel();
+  }
+});
+usageStatsCloseBtn.addEventListener("click", hideUsageStatsPanel);
 
 // "David FALCON" chat widget, at the user's explicit request: "Bottom
 // right of the interface, add a ChatBot (open by default) with the

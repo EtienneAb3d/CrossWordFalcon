@@ -4775,3 +4775,21 @@ end through the real running API (interactive start/step/save,
   changes. No visual change otherwise. **Visually confirmed** with
   Playwright/Chromium: the eight options read "… 18 % noir", picking
   Mocha sets 21/21/18, and switching back to Aéré restores 0/10/12/15 %.
+
+- **Usage-score statistics** (`#usage-stats-btn`, `#usage-stats`), at the
+  user's explicit request: a localhost-only icon button right after
+  "Dictionnaire" in `#tool-buttons` — the shared accent-blue button
+  holding the same white bar-chart SVG as `#grid-stats-btn` (16px,
+  `fill="currentColor"`), `.tool-icon-btn` centering it and stretching to
+  its text neighbours' height; tooltip/aria-label `usageStatsBtn`. It
+  toggles `#usage-stats`, the same transparent bordered card as
+  `#qdrant-admin` (header label + `.nav-btn` ✕), in the central toggling
+  group (`syncRssPanelVisibility`). Its `.usage-stats-table`: one row per
+  language (its own name, from `#language`'s options, left-aligned grey
+  bold row header), one column per usage score, then "Total ≥ 3" and
+  "Total" (both bold),
+  counts right-aligned in tabular digits with locale thousands
+  separators, "—" for a language without scores; thin `--border` row
+  dividers like `.qdrant-admin-table`. No new token. **Visually
+  confirmed** with Playwright/Chromium at 1400×1000: icon button between
+  Dictionnaire and Paraphraseur, table rendered under the form.
