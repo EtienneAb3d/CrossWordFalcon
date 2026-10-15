@@ -40,6 +40,24 @@
 
 ![Solution](20261015-054619-296132_the_silent_tether_0642_SOLUTION.png)
 
+# Latte (21x21 grid, 18% black, grouped/aligned-American/NYT pattern style)
+
+[Download PDF](20261015-061909-893546_code_of_silence_7664.pdf)
+
+[Play online](https://falcon.cubaix.com/?grid=20261015-061909-893546_code_of_silence_7664)
+
+## Grid
+
+![Grid](20261015-061909-893546_code_of_silence_7664_GRID.png)
+
+## Clues
+
+![Clues](20261015-061909-893546_code_of_silence_7664_CLUES.png)
+
+## Solution
+
+![Solution](20261015-061909-893546_code_of_silence_7664_SOLUTION.png)
+
 # Frappucino (30x30 grid, 15% black, sparse-French pattern style)
 
 [Download PDF](20261005-205514-798175_l_ombre_des_reves_futurs_1919.pdf)
