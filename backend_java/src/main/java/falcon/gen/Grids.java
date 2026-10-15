@@ -363,15 +363,27 @@ public final class Grids {
      * ranking criterion ({@link #placeBlackCells}).
      */
     /**
-     * True for a cell of the grid's border with a black neighbour along that same border — the "grouped" pattern
-     * style's last-resort cells ({@link #placeBlackCells}).
+     * The "grouped" pattern style never places two side-by-side black cells parallel to a border within this many
+     * cells of it ({@link #nearBorderParallelPair}): across in the top and bottom rows, down in the left and right
+     * columns.
      */
-    static boolean extendsBorderLine(char[][] grid, int rows, int cols, int r, int c) {
-        if (r == 0 || r == rows - 1) {
-            if ((c > 0 && grid[r][c - 1] == BLACK) || (c < cols - 1 && grid[r][c + 1] == BLACK)) return true;
-        }
-        if (c == 0 || c == cols - 1) {
-            return (r > 0 && grid[r - 1][c] == BLACK) || (r < rows - 1 && grid[r + 1][c] == BLACK);
+    static final int BORDER_PARALLEL_MIN_DISTANCE = 3;
+
+    /**
+     * True when one of {@code cells} — black in {@code grid} — has a black neighbour along a direction parallel to a
+     * border it lies less than {@link #BORDER_PARALLEL_MIN_DISTANCE} cells from: across within the first or last rows,
+     * down within the first or last columns.
+     */
+    static boolean nearBorderParallelPair(char[][] grid, int rows, int cols, List<Integer> cells) {
+        int d = BORDER_PARALLEL_MIN_DISTANCE;
+        for (int cell : cells) {
+            int r = Cells.r(cell), c = Cells.c(cell);
+            if (r < d || r >= rows - d) {
+                if ((c > 0 && grid[r][c - 1] == BLACK) || (c < cols - 1 && grid[r][c + 1] == BLACK)) return true;
+            }
+            if (c < d || c >= cols - d) {
+                if ((r > 0 && grid[r - 1][c] == BLACK) || (r < rows - 1 && grid[r + 1][c] == BLACK)) return true;
+            }
         }
         return false;
     }
@@ -1027,12 +1039,11 @@ public final class Grids {
      * "none" = none) the drawn cell is placed with its images ({@link #symmetryCells}), the hard constraints holding
      * for the whole group: every image still white is a candidate satisfying them on its own, no cell of the group
      * touches a black cell nor another cell of the group, and the grid with the whole group blackened stays
-     * structurally valid. {@code grouped} (the "grouped" {@link #PATTERN_STYLES}) takes a border cell with a black neighbour
-     * along that same border ({@link #extendsBorderLine}) only once every run is selected and no other cell is valid,
-     * keeps, before the crossing-length window, only the valid cells building a straight run of adjacent black cells ({@link #blackLineLength} at least 2), when
+     * structurally valid. {@code grouped} (the "grouped" {@link #PATTERN_STYLES}) keeps, before the crossing-length window, only the valid cells building a straight run of adjacent black cells ({@link #blackLineLength} at least 2), when
      * some do, accepts a cell (with its images) only if it leaves no slot shorter than
      * {@link #GROUPED_MIN_SLOT_LENGTH} next to it ({@link #leavesShortRun}) and builds no line of black cells longer
-     * than {@link #GROUPED_MAX_BLACK_LINE} ({@link #makesLongBlackLine}), and inverts the last ranking: closest first, by increasing plain Euclidean distance to the closest black cell ({@link NearestBlacks#closest}), then
+     * than {@link #GROUPED_MAX_BLACK_LINE} ({@link #makesLongBlackLine}) nor puts a black cell side by side with another
+     * along a border less than {@link #BORDER_PARALLEL_MIN_DISTANCE} cells away ({@link #nearBorderParallelPair}), and inverts the last ranking: closest first, by increasing plain Euclidean distance to the closest black cell ({@link NearestBlacks#closest}), then
      * by increasing spread score, both without the aligned factor and without the virtual ring of the grid's edges,
      * ties keeping the shuffled order; adjacency is accepted from the first level on ({@code forbidAdjacency}
      * ignored). {@code candidates} is updated in place. Returns the cells still unplaced.
@@ -1188,7 +1199,8 @@ public final class Grids {
         }
         for (int cell : group) grid[Cells.r(cell)][Cells.c(cell)] = BLACK;
         try {
-            if (grouped && (leavesShortRun(grid, rows, cols, group) || makesLongBlackLine(grid, rows, cols, group))) {
+            if (grouped && (leavesShortRun(grid, rows, cols, group) || makesLongBlackLine(grid, rows, cols, group)
+                    || nearBorderParallelPair(grid, rows, cols, group))) {
                 return false;
             }
             if (group.size() == 1) return true;
@@ -1226,16 +1238,6 @@ public final class Grids {
                     checked.put(i, ok);
                 }
                 if (ok) valid.add(i);
-            }
-            if (groupedNearest != null) {
-                // A border cell extending a black cell along the same border is taken only once every run is
-                // selected without another valid cell.
-                List<Integer> edge = new ArrayList<>(), inner = new ArrayList<>();
-                for (int i : valid) {
-                    int cell = remaining.get(i);
-                    (extendsBorderLine(grid, rows, cols, Cells.r(cell), Cells.c(cell)) ? edge : inner).add(i);
-                }
-                valid = !inner.isEmpty() || runCount < runOrder.size() ? inner : edge;
             }
             if (!valid.isEmpty()) {
                 if (groupedNearest != null) {
@@ -1496,8 +1498,10 @@ public final class Grids {
      * With a {@code symmetry} ({@link #BLACK_SYMMETRIES}), a cell is placed together with its images
      * ({@link #blackGroup}), each image still white being a candidate itself ({@link #prefillGroupAllowed}).
      * {@code grouped} (the "grouped" {@link #PATTERN_STYLES}): a cell (with its images) is placed only if it leaves no
-     * slot shorter than {@link #GROUPED_MIN_SLOT_LENGTH} next to it ({@link #leavesShortRun}) and builds no line of
-     * black cells longer than {@link #GROUPED_MAX_BLACK_LINE} ({@link #makesLongBlackLine}).
+     * slot shorter than {@link #GROUPED_MIN_SLOT_LENGTH} next to it ({@link #leavesShortRun}), builds no line of
+     * black cells longer than {@link #GROUPED_MAX_BLACK_LINE} ({@link #makesLongBlackLine}) and puts no black cell
+     * side by side with another along a border less than {@link #BORDER_PARALLEL_MIN_DISTANCE} cells away
+     * ({@link #nearBorderParallelPair}).
      */
     static List<Integer> prefillUnfillableSlots(char[][] grid, int rows, int cols, int[] rowBlack, int[] colBlack,
                                                 List<Integer> candidates, LengthSets available, DualIndex index,
@@ -1562,7 +1566,8 @@ public final class Grids {
                         continue;
                     }
                     for (int g : group) grid[Cells.r(g)][Cells.c(g)] = BLACK;
-                    if (!(grouped && (leavesShortRun(grid, rows, cols, group) || makesLongBlackLine(grid, rows, cols, group)))
+                    if (!(grouped && (leavesShortRun(grid, rows, cols, group) || makesLongBlackLine(grid, rows, cols, group)
+                            || nearBorderParallelPair(grid, rows, cols, group)))
                             && isStructurallyValid(grid, rows, cols, 1)) {
                         for (int g : group) {
                             rowBlack[Cells.r(g)]++;

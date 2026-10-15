@@ -938,16 +938,26 @@ def _black_line_length(grid, rows, cols, r, c):
     return best
 
 
-def _extends_border_line(grid, rows, cols, r, c):
-    """True for a cell of the grid's border with a black neighbour along
-    that same border — the "grouped" pattern style's last-resort cells
-    (`_place_black_cells`)."""
-    if r in (0, rows - 1):
-        if (c > 0 and grid[r][c - 1] == BLACK) or (c < cols - 1 and grid[r][c + 1] == BLACK):
-            return True
-    if c in (0, cols - 1):
-        if (r > 0 and grid[r - 1][c] == BLACK) or (r < rows - 1 and grid[r + 1][c] == BLACK):
-            return True
+# The "grouped" pattern style never places two side-by-side black cells
+# parallel to a border within this many cells of it
+# (`_near_border_parallel_pair`): across in the top and bottom rows, down in
+# the left and right columns.
+BORDER_PARALLEL_MIN_DISTANCE = 3
+
+
+def _near_border_parallel_pair(grid, rows, cols, cells):
+    """True when one of `cells` — black in `grid` — has a black neighbour
+    along a direction parallel to a border it lies less than
+    `BORDER_PARALLEL_MIN_DISTANCE` cells from: across within the first or
+    last rows, down within the first or last columns."""
+    d = BORDER_PARALLEL_MIN_DISTANCE
+    for r, c in cells:
+        if r < d or r >= rows - d:
+            if (c > 0 and grid[r][c - 1] == BLACK) or (c < cols - 1 and grid[r][c + 1] == BLACK):
+                return True
+        if c < d or c >= cols - d:
+            if (r > 0 and grid[r - 1][c] == BLACK) or (r < rows - 1 and grid[r + 1][c] == BLACK):
+                return True
     return False
 
 
@@ -1616,10 +1626,7 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     black cell nor another cell of the group, and the grid with the whole
     group blackened must stay structurally valid.
 
-    `grouped` (the "grouped" `PATTERN_STYLES`, "Style de motif"): a border
-    cell with a black neighbour along that same border
-    (`_extends_border_line`) is a valid cell only once every run is
-    selected and no other cell is valid; before the
+    `grouped` (the "grouped" `PATTERN_STYLES`, "Style de motif"): before the
     `_crossing_length_score` window, only the valid cells building a
     straight run of adjacent black cells, across or down, are kept when
     some do (`_black_line_length` at least 2); the last ranking is inverted — the cells
@@ -1631,8 +1638,10 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     `candidates`' shuffled order; adjacency is accepted from the first
     level on (`forbid_adjacency` ignored); a cell (with its images) is
     valid only if it leaves no slot shorter than `GROUPED_MIN_SLOT_LENGTH`
-    next to it (`_leaves_short_run`) and builds no line of black cells
-    longer than `GROUPED_MAX_BLACK_LINE` (`_makes_long_black_line`).
+    next to it (`_leaves_short_run`), builds no line of black cells
+    longer than `GROUPED_MAX_BLACK_LINE` (`_makes_long_black_line`) and
+    puts no black cell side by side with another along a border less than
+    `BORDER_PARALLEL_MIN_DISTANCE` cells away (`_near_border_parallel_pair`).
 
     `candidates` is updated in place (placed cells removed). Returns
     (placed, unplaced cells)."""
@@ -1667,7 +1676,8 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
             grid[cr][cc] = BLACK
         try:
             if grouped and (_leaves_short_run(grid, rows, cols, group)
-                            or _makes_long_black_line(grid, rows, cols, group)):
+                            or _makes_long_black_line(grid, rows, cols, group)
+                            or _near_border_parallel_pair(grid, rows, cols, group)):
                 return False
             if len(group) == 1:
                 return True
@@ -1695,15 +1705,6 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
                     checked[i] = _valid(*remaining[i], structure, allow_adjacency, position)
                 if checked[i]:
                     valid.append(i)
-            if grouped:
-                # A border cell extending a black cell along the same border
-                # is taken only once every run is selected without another
-                # valid cell.
-                edge = [i for i in valid if _extends_border_line(grid, rows, cols, *remaining[i])]
-                if edge:
-                    valid = [i for i in valid if i not in set(edge)]
-                    if not valid and run_count == len(run_order):
-                        valid = edge
             if valid:
                 if grouped:
                     aligned = [i for i in valid
@@ -2307,8 +2308,10 @@ def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates
 
     `grouped` (the "grouped" `PATTERN_STYLES`): a cell (with its images) is
     placed only if it leaves no slot shorter than `GROUPED_MIN_SLOT_LENGTH`
-    next to it (`_leaves_short_run`) and builds no line of black cells
-    longer than `GROUPED_MAX_BLACK_LINE` (`_makes_long_black_line`)."""
+    next to it (`_leaves_short_run`), builds no line of black cells
+    longer than `GROUPED_MAX_BLACK_LINE` (`_makes_long_black_line`) and
+    puts no black cell side by side with another along a border less than
+    `BORDER_PARALLEL_MIN_DISTANCE` cells away (`_near_border_parallel_pair`)."""
     count = 0
     unfixable = set()
     zone_footprints = []  # [cases_d_origine (set), cases_noires_ajoutées (int)]
@@ -2385,7 +2388,8 @@ def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates
                 for gr, gc in group:
                     grid[gr][gc] = BLACK
                 if (not (grouped and (_leaves_short_run(grid, rows, cols, group)
-                                      or _makes_long_black_line(grid, rows, cols, group)))
+                                      or _makes_long_black_line(grid, rows, cols, group)
+                                      or _near_border_parallel_pair(grid, rows, cols, group)))
                         and is_structurally_valid(grid, rows, cols, min_interior_free=1)):
                     for gr, gc in group:
                         row_black[gr] += 1

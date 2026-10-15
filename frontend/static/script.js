@@ -9,6 +9,15 @@ let uiLanguage = "fr";
 // setUiLanguage() runs at load before that code is reached.
 let gridPresetsReady = false;
 
+// Compact form of a budget: 1000 -> "1K", 5000000 -> "5M", 2500 -> "2.5K".
+function compactBudget(value) {
+  const units = [[1e9, "G"], [1e6, "M"], [1e3, "K"]];
+  for (const [size, suffix] of units) {
+    if (value >= size) return `${Number((value / size).toFixed(1))}${suffix}`;
+  }
+  return String(value);
+}
+
 function applyTranslations() {
   const t = I18N[uiLanguage];
   document.documentElement.lang = uiLanguage;
@@ -16,6 +25,12 @@ function applyTranslations() {
   document.querySelectorAll("[data-i18n]").forEach((el) => {
     const key = el.getAttribute("data-i18n");
     if (t[key]) el.textContent = t[key];
+  });
+  // "Effort" options: the translated name followed by the per-attempt
+  // budget (backend/app.py's BUDGET_MODES, mirrored in data-budget).
+  document.querySelectorAll("#mode option[data-budget]").forEach((opt) => {
+    const budget = compactBudget(Number(opt.dataset.budget));
+    opt.textContent = `${opt.textContent} ${t.modeBudgetSuffix.replace("{budget}", budget)}`;
   });
   document.querySelectorAll("[data-i18n-aria]").forEach((el) => {
     const key = el.getAttribute("data-i18n-aria");
@@ -3707,19 +3722,18 @@ const REMOTE_MAX_DIMENSION = 21;
   }
 })();
 
-// "Ultra", "Megatron" and "GridZilla" modes (5,000,000, 20,000,000 and
+// "Effort" options, by increasing budget: flash, turbo, fast, medium,
+// strong ("Fort"), ultra, megatron, gridzilla; a size change selects one
+// of them (`applySizeEffort`). "Ultra", "Megatron" and "GridZilla" modes (5,000,000, 20,000,000 and
 // 100,000,000 checks per attempt — see backend/app.py's BUDGET_MODES) are only offered on
 // localhost: off it, their <option>s are disabled — greyed out and
 // non-selectable by the browser's own native rendering, no extra CSS
 // needed — and a leftover value of any of them falls back to "medium".
 // With the Java back end (GET /api/system_info's `backend: "java"`),
-// "Ultra" is offered everywhere and selected by default
-// (`applyBackendModeDefaults`, unless the player already picked a mode).
+// "Ultra" is offered everywhere (`applyBackendModeDefaults`).
 const LOCALHOST_ONLY_MODES = ["ultra", "megatron", "gridzilla"];
-const JAVA_BACKEND_DEFAULT_MODE = "ultra";
+const JAVA_BACKEND_UNLOCKED_MODE = "ultra";
 const modeSelect = document.getElementById("mode");
-let modeChosenByUser = false;
-modeSelect.addEventListener("change", () => { modeChosenByUser = true; });
 (function restrictHeavyModesToLocalhost() {
   if (isLocalhostOrigin()) return;
   for (const mode of LOCALHOST_ONLY_MODES) {
@@ -3731,10 +3745,8 @@ modeSelect.addEventListener("change", () => { modeChosenByUser = true; });
 
 function applyBackendModeDefaults(info) {
   if (!info || info.backend !== "java") return;
-  const option = modeSelect.querySelector(`option[value="${JAVA_BACKEND_DEFAULT_MODE}"]`);
-  if (!option) return;
-  option.disabled = false;
-  if (!modeChosenByUser) modeSelect.value = JAVA_BACKEND_DEFAULT_MODE;
+  const option = modeSelect.querySelector(`option[value="${JAVA_BACKEND_UNLOCKED_MODE}"]`);
+  if (option) option.disabled = false;
 }
 
 // "Préconfigurations" drop-down (#preset-select): one click fills
@@ -3824,6 +3836,7 @@ function applyGridPreset(preset) {
   heightInput.value = String(preset.height);
   blackEnrichmentInput.value = String(presetBlack(preset));
   syncGridPresetSelection();
+  applySizeEffort();
   closeGridPresetList();
   presetSelectBtn.focus();
 }
@@ -3862,6 +3875,24 @@ for (const input of [widthInput, heightInput, blackEnrichmentInput]) {
   input.addEventListener("input", syncGridPresetSelection);
   input.addEventListener("change", syncGridPresetSelection);
 }
+
+// Choosing a grid size selects the "Effort" fitting it, by its larger
+// side: up to 10 "fast", up to 15 "medium", above "strong".
+const SIZE_EFFORT_STEPS = [[10, "fast"], [15, "medium"], [Infinity, "strong"]];
+
+function applySizeEffort() {
+  const side = Math.max(Number(widthInput.value) || 0, Number(heightInput.value) || 0);
+  if (side < MIN_DIMENSION) return;
+  const [, mode] = SIZE_EFFORT_STEPS.find(([limit]) => side <= limit);
+  modeSelect.value = mode;
+}
+
+for (const input of [widthInput, heightInput]) {
+  input.addEventListener("input", applySizeEffort);
+  input.addEventListener("change", applySizeEffort);
+}
+// The initial Effort follows the initial size too (15x15 -> "medium").
+applySizeEffort();
 renderGridPresets();
 gridPresetsReady = true;
 
@@ -8505,7 +8536,6 @@ function enterInteractiveMode(state) {
     const gp = state.generation_params;
     if (gp.mode && modeSelect.querySelector(`option[value="${gp.mode}"]`)) {
       modeSelect.value = gp.mode;
-      modeChosenByUser = true;
     }
     if (gp.black_enrichment_percent !== undefined && gp.black_enrichment_percent !== null) {
       blackEnrichmentInput.value = gp.black_enrichment_percent;

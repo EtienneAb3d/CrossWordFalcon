@@ -268,15 +268,16 @@
         </label>
 
         <label for="mode">
-          <span data-i18n="modeLabel">Mode</span>
+          <span data-i18n="modeLabel">Effort</span>
           <select id="mode" name="mode">
-            <option value="flash" data-i18n="modeFlash">Flash</option>
-            <option value="turbo" data-i18n="modeTurbo">Turbo</option>
-            <option value="fast" data-i18n="modeFast">Rapide</option>
-            <option value="medium" selected data-i18n="modeMedium">Moyen</option>
-            <option value="ultra" data-i18n="modeUltra">Ultra</option>
-            <option value="megatron" data-i18n="modeMegatron">Megatron</option>
-            <option value="gridzilla" data-i18n="modeGridzilla">GridZilla</option>
+            <option value="flash" data-budget="1000" data-i18n="modeFlash">Flash</option>
+            <option value="turbo" data-budget="10000" data-i18n="modeTurbo">Turbo</option>
+            <option value="fast" data-budget="100000" data-i18n="modeFast">Rapide</option>
+            <option value="medium" data-budget="500000" selected data-i18n="modeMedium">Moyen</option>
+            <option value="strong" data-budget="2000000" data-i18n="modeStrong">Fort</option>
+            <option value="ultra" data-budget="5000000" data-i18n="modeUltra">Ultra</option>
+            <option value="megatron" data-budget="20000000" data-i18n="modeMegatron">Megatron</option>
+            <option value="gridzilla" data-budget="100000000" data-i18n="modeGridzilla">GridZilla</option>
           </select>
         </label>
         <button type="button" id="attempt-preview-reveal-btn" class="toggle-btn"

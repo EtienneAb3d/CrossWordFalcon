@@ -92,7 +92,7 @@ et tout le moteur décrit ici.
 ### Mode tout automatique
 
 1. Configurer la grille (langue, taille, difficulté, taux noir, etc.).
-2. Choisir un **Mode** parmi Flash/Turbo/Rapide/Moyen/Ultra/Megatron/GridZilla
+2. Choisir un **Effort** parmi Flash/Turbo/Rapide/Moyen/Fort/Ultra/Megatron/GridZilla
    (Ultra, Megatron et GridZilla seulement quand la page est ouverte en local) — ce choix ne
    fixe qu'un budget de recherche par tentative (« Limites de la
    recherche », chapitre 4), pas la qualité du résultat.
@@ -188,7 +188,7 @@ s'ouvre aussi dans l'interface par le bouton **?** à gauche de **Mots**.
 - **Définitions** génère les définitions manquantes ; **Proposer une
   définition** et **Proposer un titre** font plusieurs propositions.
 - **Finir la grille** (ou **Finir la zone**, si une zone est sélectionnée)
-  confie les cases vides à la génération automatique (avec le **Mode** du
+  confie les cases vides à la génération automatique (avec l'**Effort** du
   formulaire), sans écrire de
   définition (le bouton **Définitions** les écrit ensuite) ; on peut
   corriger et relancer autant de fois que nécessaire.
@@ -508,9 +508,13 @@ valeurs `PATTERN_STYLES`) choisit le critère de pose des cases noires
     **aucune ligne de plus de `GROUPED_MAX_BLACK_LINE` (4) cases noires**
     côte à côte, horizontale ou verticale (`backend/crossword_gen.py`,
     `_makes_long_black_line`) ; le pré-remplissage applique la même règle ;
-  - une case du **bord** ayant une case noire voisine le long de ce même
-    bord n'est prise que si, tous les segments étant retenus, aucune autre
-    case n'est valide (`_extends_border_line`) ;
+  - une case n'est valide que si ni elle ni l'une de ses images n'a de
+    case noire voisine **parallèlement à un bord** dont elle est à moins
+    de `BORDER_PARALLEL_MIN_DISTANCE` (**3**) cases : horizontalement dans
+    les 3 premières et les 3 dernières lignes, verticalement dans les 3
+    premières et les 3 dernières colonnes (`backend/crossword_gen.py`,
+    `_near_border_parallel_pair`) ; le pré-remplissage applique la même
+    règle ;
   - avant la fenêtre de score de longueurs cumulées, seules les cases qui
     forment un **alignement** de cases noires collées (une suite
     horizontale ou verticale d'au moins 2 cases noires une fois la case
@@ -1566,8 +1570,8 @@ sur tout ce qui est publié ensuite (début de cycle suivant, optimisation).
 
 Par défaut **largeur × hauteur × 2000** vérifications (300 000 en 15×10 ;
 `try_fill`), une vérification étant une tentative de poser un mot. Depuis
-l'interface, le **Mode** fixe ce budget par tentative, de 1 000 à
-20 000 000 (`backend/app.py`, `BUDGET_MODES`). **Flash** (1 000) est le
+l'interface, l'**Effort** fixe ce budget par tentative, de 1 000 à
+100 000 000 (`backend/app.py`, `BUDGET_MODES`). **Flash** (1 000) est le
 plus fragile : le budget peut s'épuiser avant qu'une recherche
 remplissable n'aboutisse — compromis assumé.
 

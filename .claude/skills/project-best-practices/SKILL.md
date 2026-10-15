@@ -1063,8 +1063,13 @@ the current defaults/behavior to know before touching this code.
   `_makes_long_black_line`; choice made with that rule, to revisit with
   the user: the ratio draw and pre-fill both apply it, the later
   cross-palier repairs and reshapes do not);
-  a border cell extending a black cell along the same border only when no
-  other candidate is possible (`_extends_border_line`). Choices made with
+  no two side-by-side black cells parallel to a border less than 3 letters
+  from it — across in the first/last 3 rows, down in the first/last 3
+  columns (`BORDER_PARALLEL_MIN_DISTANCE`, `_near_border_parallel_pair`;
+  the user's rule, American style only; choice made with it, to revisit
+  with the user: "less than 3 letters" means rows/columns 0-2 from each
+  border, and like the 4-cell line rule it binds the ratio draw and
+  pre-fill, not the later repairs and reshapes). Choices made with
   these rules, to revisit with the user: a bar is preferred whatever its
   length (keeping only the longest gave walls of 6-7 cells), applied
   before the crossing-length window (applied after it, it almost never
@@ -1106,8 +1111,7 @@ the current defaults/behavior to know before touching this code.
   style from its `generation_params` (also on an automatic generation's
   and an Interactive session's result). Choice made with it, to revisit
   with the user: a grid with no recorded style (older records,
-  "Recalculer" previews) keeps the half-size square. The border cell is the last resort within one structural
-  level of the draw; only the drawn cell is checked for the border rule.
+  "Recalculer" previews) keeps the half-size square.
   The run and crossing-length windows stay; "closest" is the
   plain Euclidean distance to the closest black cell, ties broken by the
   spread score, both without the aligned factor and without the edges'
@@ -1404,10 +1408,12 @@ the current defaults/behavior to know before touching this code.
 - `try_fill`'s `deadline_checks` default is `rows * cols * 2000` (see
   above) only when the caller passes `None` — the web UI's "Mode"
   selector (`backend/app.py`'s `BUDGET_MODES`: flash=1,000, turbo=10,000,
-  fast=100,000, medium=500,000 [default], ultra=5,000,000,
+  fast=100,000, medium=500,000 [default], strong=2,000,000, ultra=5,000,000,
   megatron=20,000,000, gridzilla=100,000,000 — Ultra, Megatron and
   GridZilla offered by the UI on localhost only, except Ultra with the
-  Java back end, offered everywhere and selected by default there) instead sends
+  Java back end, offered everywhere there; the form selects the effort
+  from the grid size — up to 10 "fast", up to 15 "medium", above
+  "strong" — at page load and on every size change, the user's rule) instead sends
   an explicit value, threaded through `generate_grid(deadline_checks=...)`
   → `_pattern_attempt`/`_pattern_continue` → `try_fill`, overriding the
   grid-size formula entirely for that request. The CLI and any other

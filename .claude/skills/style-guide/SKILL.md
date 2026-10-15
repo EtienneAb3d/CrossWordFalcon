@@ -4743,7 +4743,7 @@ end through the real running API (interactive start/step/save,
   (américain/NYT)"); "Précision thématique" (`#theme-precision`) is the
   first item of `#form-actions`, left of "Thématique", its plain
   label-above-input shape top-aligned with Thématique's label by the row's
-  `align-items: flex-start`; "Difficulté", "Mots par pose", "Mode" and the
+  `align-items: flex-start`; "Difficulté", "Mots par pose", "Effort" and the
   "Voir les mots (spoiler)" toggle sit on a line of their own,
   `#generate-options-row` (`flex-basis: 100%`, `gap: 1rem`,
   `align-items: end` like the option row, so the toggle lines up with the

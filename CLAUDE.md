@@ -459,14 +459,19 @@ automatic completion to a selected region instead of the whole grid,
 `ChatRequest`/`ChatMessage`.
 
 `BUDGET_MODES = {flash: 1000, turbo: 10000, fast: 100000, medium: 500000,
-ultra: 5000000, megatron: 20000000, gridzilla: 100000000}` sets the CSP search-check budget per
-attempt for the "Mode" selector; the web UI disables its Ultra,
+strong: 2000000, ultra: 5000000, megatron: 20000000, gridzilla: 100000000}` sets the CSP search-check budget per
+attempt for the "Effort" selector (`#mode`, each option labelled with its
+budget, "(1K mots / cycle)" … "(100M mots / cycle)" — `data-budget` +
+`script.js`'s `compactBudget`, i18n `modeBudgetSuffix`; the page's
+initial size, changing `#width`/`#height` or picking a preset selects the effort fitting the
+grid's larger side, `applySizeEffort`/`SIZE_EFFORT_STEPS`: up to 10
+"fast", up to 15 "medium", above "strong"); the web UI disables its Ultra,
 Megatron and GridZilla options off localhost (`script.js`'s `LOCALHOST_ONLY_MODES`/
 `restrictHeavyModesToLocalhost`, frontend-only — the API accepts them all),
 except Ultra with the Java back end: `GET /api/system_info` carries
 `backend` (`"python"`/`"java"`), and on `"java"` `applyBackendModeDefaults`
-enables Ultra everywhere and selects it (`JAVA_BACKEND_DEFAULT_MODE`)
-unless the player already picked a mode (`modeChosenByUser`).
+enables Ultra everywhere (`JAVA_BACKEND_UNLOCKED_MODE`) without selecting
+it.
 Off localhost, the form caps width/height at `REMOTE_MAX_DIMENSION` (21).
 The UI no longer offers "Graines" (`force_letters_percent`, left at its
 default 0); `Automation/Populate.py` sends `black_enrichment_percent` 15
@@ -566,9 +571,11 @@ own rng drawn from the parent's in candidate order:
    `Grids.leavesShortRun`) and if it builds no straight line of more than
    `GROUPED_MAX_BLACK_LINE` (4) adjacent black cells, across or down
    (`_makes_long_black_line`, pre-fill too; Java `Grids.makesLongBlackLine`),
-   a border cell with a black neighbour along
-   that border is taken only once every run is selected with no other
-   valid cell (`_extends_border_line`), only the cells forming a straight
+   and if no black cell of it has a black neighbour along a border it
+   lies less than `BORDER_PARALLEL_MIN_DISTANCE` (3) cells from — across
+   in the first/last 3 rows, down in the first/last 3 columns
+   (`_near_border_parallel_pair`, pre-fill too; Java
+   `Grids.nearBorderParallelPair`), only the cells forming a straight
    bar of at least 2 adjacent black cells are kept before the
    crossing-length window when some do (`_black_line_length`), and the
    last ranking is inverted:
@@ -3020,7 +3027,7 @@ state, unlike the backend).
   `GenerateRequest.challenge_words` by either button of the form's
   "Générer les mots croisés :" row (`#generate-row`): "Automatique"
   (`#generate-auto-btn`, the form's submit button, Enter in a field) for
-  an ordinary automatic generation with the "Mode" selector's budget, or
+  an ordinary automatic generation with the "Effort" selector's budget, or
   "Interactif" (`#generate-interactive-btn`, submitting the form with
   `pendingInteractiveSubmit` set) for `POST /api/interactive/start`
   (`mode: "interactive"` in its body), which reuses the

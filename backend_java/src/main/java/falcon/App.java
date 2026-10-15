@@ -65,7 +65,7 @@ public final class App {
     }
 
     static final Map<String, Long> BUDGET_MODES = new TreeMap<>(Map.of("flash", 1000L, "turbo", 10000L, "fast", 100000L,
-            "medium", 500000L, "ultra", 5000000L, "megatron", 20000000L,
+            "medium", 500000L, "strong", 2000000L, "ultra", 5000000L, "megatron", 20000000L,
             "gridzilla", 100000000L));
     /** Upper bound of the "Mots par pose" field (GenReq.wordsPerNode). */
     static final int MAX_WORDS_PER_NODE = 50;
@@ -367,7 +367,7 @@ public final class App {
             throw http(400, "difficulté inconnue : " + Log.repr(req.difficulty) + " (attendu : ['easy', 'hard', 'medium'])");
         }
         if (!BUDGET_MODES.containsKey(req.mode)) {
-            throw http(400, "mode inconnu : " + Log.repr(req.mode) + " (attendu : ['fast', 'flash', 'gridzilla', 'medium', 'megatron', 'turbo', 'ultra'])");
+            throw http(400, "mode inconnu : " + Log.repr(req.mode) + " (attendu : ['fast', 'flash', 'gridzilla', 'medium', 'megatron', 'strong', 'turbo', 'ultra'])");
         }
         validateSymmetry(req.symmetry);
         validatePatternStyle(req.patternStyle);

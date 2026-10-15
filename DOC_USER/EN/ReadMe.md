@@ -177,8 +177,8 @@ full again whenever a new generation or an Interactive session starts.
   other as possible and never side by side; **Groupé/aligné (américain/NYT)
   / Grouped/aligned (American/NYT)** places them as close as possible to
   the black cells already there, preferably extending a straight bar of
-  black cells, and along a border only as a last resort, as in an
-  American crossword — once the black rate is reached, a black cell
+  black cells, never placing two black cells side by side parallel to a
+  border within its first 3 rows or columns, as in an American crossword — once the black rate is reached, a black cell
   touching black cells or the grid border on three sides or more is taken off (opening any
   area this closes) and the draw tops the rate back up; a grid in this style never holds a 2-letter word
   (its dictionary has none: such a slot is repaired like any blocked
@@ -200,17 +200,25 @@ full again whenever a new generation or an Interactive session starts.
   the start but commits to more words at once (`frontend/static/
   script.js`, `wordsPerNodeInput`; `backend/crossword_gen.py`,
   `Filler._group_size`, `Filler._descend_group`).
-- **Mode** (`#mode`) — how much computing effort one attempt is allowed
-  before giving up and trying again: Flash (fastest, least thorough),
-  Turbo, Rapide/Fast, Moyen/Medium (the default), Ultra, Megatron
+- **Effort** (`#mode`) — how much computing effort one attempt is allowed
+  before giving up and trying again; each option shows its budget as
+  "(X words / cycle)", X in compact form (K = thousand, M = million),
+  i.e. how many candidate words one attempt may try (`frontend/static/
+  script.js`, `applyTranslations`, `compactBudget`): Flash (fastest, least thorough),
+  Turbo, Rapide/Fast, Moyen/Medium (the default), Fort/Strong, Ultra, Megatron
   (four times Ultra's effort), GridZilla (slowest, most thorough — five
   times Megatron's effort). A harder grid (a larger size, a stricter black rate) may
-  need a slower mode to succeed at all. **Ultra**, **Megatron** and **GridZilla** are only
+  need a slower mode to succeed at all. The effort shown when the page opens
+  follows its default size (15×15: Moyen/Medium); changing
+  **Largeur**/**Hauteur** or picking a **Préconfigurations** entry selects the effort fitting the
+  grid's larger side: Rapide/Fast up to 10, Moyen/Medium up to 15,
+  Fort/Strong above (`frontend/static/script.js`, `applySizeEffort`); the
+  player may then pick another one. **Ultra**, **Megatron** and **GridZilla** are only
   selectable when the page is opened on the local machine; from another
   machine on the network their options are greyed out and unavailable
   (`frontend/static/script.js`, `restrictHeavyModesToLocalhost`), except
   **Ultra** when the server runs the Java back end: it is then selectable
-  from any machine and selected by default (`frontend/static/script.js`,
+  from any machine (`frontend/static/script.js`,
   `applyBackendModeDefaults`). The
   same mode is used by **Finir la grille / Finish the grid** and **Finir
   la zone / Finish the zone** in Interactive mode.
@@ -1876,7 +1884,7 @@ combined with whatever letters were already fixed coming in, has no valid
 solution whatsoever. To keep a single hard grid from searching forever,
 every single candidate word actually tried (whether or not it leads
 anywhere) counts against a budget of "checks" (300,000 by default on a
-15×10 grid, or a fixed value chosen directly through the "Mode" selector
+15×10 grid, or a fixed value chosen directly through the "Effort" selector
 in the interface) — once that budget runs out, the current attempt is
 abandoned and the generator moves on rather than grinding away
 indefinitely on a hopeless case. This budget stretches, though, whenever

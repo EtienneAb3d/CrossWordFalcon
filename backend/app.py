@@ -408,6 +408,7 @@ BUDGET_MODES = {
     "turbo": 10_000,
     "fast": 100_000,
     "medium": 500_000,
+    "strong": 2_000_000,
     "ultra": 5_000_000,
     # Like "ultra", only offered by the web UI on localhost
     # (script.js's LOCALHOST_ONLY_MODES).
@@ -893,7 +894,7 @@ class GenerateRequest(BaseModel):
         default="airy",
         description=f"Black-cell pattern style: {list(PATTERN_STYLES)}",
     )
-    # "Mode" selector (see BUDGET_MODES above), at the user's explicit
+    # "Effort" selector (see BUDGET_MODES above), at the user's explicit
     # request — directly sets the search budget per
     # attempt, replacing for this request the default formula of
     # `crossword_gen.try_fill` (width × height × 2000). "medium" by

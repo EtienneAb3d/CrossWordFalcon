@@ -29,8 +29,9 @@ the grid for you.
 - Symmetric black-cell layouts: horizontal, vertical, diagonal, both ways,
   or rotation — with black cells kept apart (French style) or grouped
   (American/NYT style).
-- Seven levels of computing effort for filling the grid automatically,
-  from the quick "Flash" to the exhaustive "GridZilla".
+- Seven levels of computing effort ("Effort") for filling the grid
+  automatically, from the quick "Flash" to the exhaustive "GridZilla",
+  each showing how many words one attempt may try.
 - Themed grids: vocabulary and clues steered toward a subject you choose.
 - "Challenge Words": force your own words into the grid.
 
