@@ -329,6 +329,11 @@
                autosaved to GRID_WORK/ (see further below and backend/
                grid_store.py) — at the user's explicit request. -->
           <button type="button" id="interactive-work-btn" data-i18n="interactiveWorkBtn">Créations</button>
+          <!-- "StopDumps": lists the STOP_DUMP records (generations
+               interrupted by "Stop") and shows again what the player had
+               on screen — localhost only (script.js; frontend/server.py's
+               _require_localhost gates /api/stop_dumps*). -->
+          <button type="button" id="stop-dumps-btn" data-i18n="stopDumpsBtn" hidden>StopDumps</button>
           <!-- Qdrant admin panel: only rendered visible when the page is
                opened on localhost (script.js,
                showQdrantAdminOnLocalhost); the proxy (frontend/server.py,
@@ -539,6 +544,39 @@
         </table>
       </div>
       <p id="interactive-work-empty" data-i18n="interactiveWorkEmpty" hidden></p>
+    </section>
+
+    <!-- "StopDumps" panel (localhost only): one row per STOP_DUMP record,
+         most recently stopped first; a click reloads the generation form
+         and the attempt previews as they were when "Stop" was clicked
+         (script.js, loadStopDump). Same toggling group as
+         #interactive-work. -->
+    <section id="stop-dumps" hidden>
+      <div id="stop-dumps-header">
+        <p id="stop-dumps-label" data-i18n="stopDumpsLabel"></p>
+        <button type="button" id="stop-dumps-refresh-btn" class="nav-btn"
+                data-i18n-aria="stopDumpsRefreshBtn">↻</button>
+        <button type="button" id="stop-dumps-close-btn" class="nav-btn"
+                data-i18n-aria="stopDumpsCloseBtn">✕</button>
+      </div>
+      <div class="table-scroll">
+        <table id="stop-dumps-table">
+          <thead>
+            <tr>
+              <th data-i18n="libraryColDate"></th>
+              <th data-i18n="libraryColAuthor"></th>
+              <th data-i18n="libraryColLanguage"></th>
+              <th data-i18n="libraryColSize"></th>
+              <th data-i18n="libraryColDifficulty"></th>
+              <th data-i18n="modeLabel"></th>
+              <th data-i18n="libraryColTheme"></th>
+              <th data-i18n="stopDumpsColStep"></th>
+            </tr>
+          </thead>
+          <tbody id="stop-dumps-tbody"></tbody>
+        </table>
+      </div>
+      <p id="stop-dumps-empty" data-i18n="stopDumpsEmpty" hidden></p>
     </section>
 
     <!-- "Dictionnaire" panel: accent/case-insensitive search in

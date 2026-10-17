@@ -521,7 +521,8 @@ public final class GridStore {
     // ------------------------------------------------------------------ STOP_DUMP
 
     public static String saveStopDump(String jobId, String pseudo, Object request, Object step, Object livePreview,
-                                      Object examplesHistory, Object resumeState) throws IOException {
+                                      Object examplesHistory, Object resumeState, Object successCount)
+            throws IOException {
         String dumpId = timestamp() + "_" + slugifyPseudo(pseudo) + "_" + jobId;
         Map<String, Object> record = new LinkedHashMap<>();
         record.put("id", dumpId);
@@ -533,7 +534,49 @@ public final class GridStore {
         record.put("live_preview", livePreview);
         record.put("examples_history", examplesHistory);
         record.put("resume_state", resumeState);
+        record.put("success_count", successCount);
         write(STOP_DUMP_DIR.resolve(dumpId + ".json"), record);
         return dumpId;
+    }
+
+    /** The request fields the "StopDumps" panel lists (grid_store._STOP_DUMP_REQUEST_FIELDS). */
+    private static final List<String> STOP_DUMP_REQUEST_FIELDS = List.of("language", "bilingual_language", "width",
+            "height", "difficulty", "mode", "theme", "pattern_style");
+
+    /** Every STOP_DUMP record's compact metadata, most recently stopped first (grid_store.list_stop_dumps). */
+    public static List<Map<String, Object>> listStopDumps() {
+        List<Map<String, Object>> entries = new ArrayList<>();
+        for (Path path : glob(STOP_DUMP_DIR, "*.json")) {
+            Map<String, Object> r = readRecord(path);
+            if (r == null) continue;
+            Map<String, Object> request = Json.mapOrEmpty(r.get("request"));
+            Map<String, Object> e = new LinkedHashMap<>();
+            e.put("id", r.getOrDefault("id", stem(path)));
+            e.put("pseudo", r.get("pseudo"));
+            e.put("stopped_at", r.get("stopped_at"));
+            for (String k : STOP_DUMP_REQUEST_FIELDS) e.put(k, request.get(k));
+            Object step = r.get("step");
+            Map<String, Object> stepOut = null;
+            if (step instanceof Map<?, ?> m) {
+                stepOut = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> en : m.entrySet()) {
+                    if (!"examples".equals(en.getKey())) stepOut.put(String.valueOf(en.getKey()), en.getValue());
+                }
+            }
+            e.put("step", stepOut);
+            e.put("tile_count", Json.listOrEmpty(r.get("live_preview")).size());
+            e.put("history_count", Json.listOrEmpty(r.get("examples_history")).size());
+            entries.add(e);
+        }
+        entries.sort(Comparator.comparing((Map<String, Object> e) -> Json.str(e, "stopped_at", "")).reversed());
+        return entries;
+    }
+
+    /** One full STOP_DUMP record, or null (grid_store.get_stop_dump). */
+    public static Map<String, Object> getStopDump(String dumpId) {
+        if (dumpId == null || !WORK_ID_RE.matcher(dumpId).matches()) return null;
+        Path path = STOP_DUMP_DIR.resolve(dumpId + ".json");
+        if (!Files.isRegularFile(path)) return null;
+        return readRecord(path);
     }
 }

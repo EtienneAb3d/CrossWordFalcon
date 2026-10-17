@@ -234,6 +234,12 @@ const interactiveWorkRefreshBtn = document.getElementById("interactive-work-refr
 const interactiveWorkCloseBtn = document.getElementById("interactive-work-close-btn");
 const interactiveWorkTbody = document.getElementById("interactive-work-tbody");
 const interactiveWorkEmpty = document.getElementById("interactive-work-empty");
+const stopDumpsBtn = document.getElementById("stop-dumps-btn");
+const stopDumpsPanel = document.getElementById("stop-dumps");
+const stopDumpsRefreshBtn = document.getElementById("stop-dumps-refresh-btn");
+const stopDumpsCloseBtn = document.getElementById("stop-dumps-close-btn");
+const stopDumpsTbody = document.getElementById("stop-dumps-tbody");
+const stopDumpsEmpty = document.getElementById("stop-dumps-empty");
 const dictionaryBtn = document.getElementById("dictionary-btn");
 const dictionaryPanel = document.getElementById("dictionary");
 const dictionaryForm = document.getElementById("dictionary-form");
@@ -754,7 +760,8 @@ function syncRssPanelVisibility() {
   rssPanel.hidden = generationInProgress || interactiveMode
     || !(libraryPanel.hidden && dictionaryPanel.hidden && paraphrasePanel.hidden
          && qdrantAdminPanel.hidden && usageStatsPanel.hidden
-         && interactiveWorkPanel.hidden && attemptPreview.hidden && result.hidden);
+         && interactiveWorkPanel.hidden && stopDumpsPanel.hidden
+         && attemptPreview.hidden && result.hidden);
 }
 // Explicit initial state rather than relying on a mere coincidence
 // between index.html's own default `hidden` state and this rule.
@@ -9144,6 +9151,168 @@ interactiveWorkCloseBtn.addEventListener("click", hideInteractiveWorkPanel);
 interactiveWorkRefreshBtn.addEventListener("click", () => {
   renderInteractiveWorkList();
 });
+
+// ---------------------------------------------------------------------------
+// "StopDumps" panel — localhost only, like "Qdrant (admin)": every
+// STOP_DUMP record (a generation interrupted by "Stop", backend/
+// grid_store.py's save_stop_dump), most recently stopped first
+// (GET /api/stop_dumps). A click on a row (loadStopDump) reloads the
+// generation form with the job's request and the attempt-preview panel
+// with what the player had on screen at that moment: the recorded key
+// steps (`examples_history`), then the live tiles (`live_preview`), shown
+// first.
+// ---------------------------------------------------------------------------
+(function showStopDumpsOnLocalhost() {
+  if (isLocalhostOrigin()) stopDumpsBtn.hidden = false;
+})();
+
+function hideStopDumpsPanel() {
+  stopDumpsPanel.hidden = true;
+  syncRssPanelVisibility();
+}
+
+async function renderStopDumpsList() {
+  const t = I18N[uiLanguage];
+  stopDumpsTbody.innerHTML = "";
+  let items = [];
+  try {
+    const resp = await fetchWithTimeout("/api/stop_dumps", {}, FETCH_TIMEOUT_MS);
+    const data = await resp.json();
+    items = (resp.ok && data.items) || [];
+  } catch (err) {
+    items = [];
+  }
+  stopDumpsEmpty.hidden = items.length > 0;
+  const difficultyKeys = { easy: "difficultyEasy", medium: "difficultyMedium", hard: "difficultyHard" };
+  for (const item of items) {
+    const tr = document.createElement("tr");
+    tr.tabIndex = 0;
+    const load = () => loadStopDump(item.id);
+    tr.addEventListener("click", load);
+    tr.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        load();
+      }
+    });
+    const languageOption = languageSelect.querySelector(`option[value="${item.language}"]`);
+    const bilingualOption = item.bilingual_language && item.bilingual_language !== item.language
+      ? languageSelect.querySelector(`option[value="${item.bilingual_language}"]`) : null;
+    const modeOption = modeSelect.querySelector(`option[value="${item.mode}"]`);
+    const diffKey = difficultyKeys[item.difficulty];
+    const cells = [
+      item.stopped_at ? new Date(item.stopped_at).toLocaleString(uiLanguage) : "",
+      item.pseudo || "",
+      (languageOption ? languageOption.textContent : (item.language || ""))
+        + (bilingualOption ? ` / ${bilingualOption.textContent}` : ""),
+      item.width && item.height ? `${item.width}×${item.height}` : "",
+      diffKey ? t[diffKey] : (item.difficulty || ""),
+      modeOption ? modeOption.textContent : (item.mode || ""),
+      item.theme || "",
+      item.step ? describeStep(t, item.step) : "",
+    ];
+    for (const text of cells) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      tr.appendChild(td);
+    }
+    stopDumpsTbody.appendChild(tr);
+  }
+}
+
+// Puts a STOP_DUMP's own request back into the generation form — the
+// same fields the "Automatique" submit handler reads.
+function applyStopDumpRequest(req) {
+  if (!req) return;
+  if (req.language) {
+    languageSelect.value = req.language;
+    bilingualLanguageSelect.value = req.bilingual_language || req.language;
+  }
+  if (req.width) widthInput.value = String(req.width);
+  if (req.height) heightInput.value = String(req.height);
+  if (req.difficulty) document.getElementById("difficulty").value = req.difficulty;
+  if (req.mode && modeSelect.querySelector(`option[value="${req.mode}"]`)) modeSelect.value = req.mode;
+  if (req.black_enrichment_percent != null) blackEnrichmentInput.value = req.black_enrichment_percent;
+  if (req.words_per_node != null) wordsPerNodeInput.value = req.words_per_node;
+  if (req.symmetry) symmetrySelect.value = req.symmetry;
+  if (req.pattern_style) {
+    patternStyleSelect.value = req.pattern_style;
+    if (gridPresetsReady) renderGridPresets();
+  }
+  syncGridPresetSelection();
+  if (req.theme_precision != null) document.getElementById("theme-precision").value = req.theme_precision;
+  setThemeWords(req.theme || "");
+  syncChallengeWordLists(req.challenge_words || []);
+}
+
+async function loadStopDump(dumpId) {
+  const t = I18N[uiLanguage];
+  if (generationInProgress) {
+    setStatus(t.stopDumpsBusy, true);
+    return;
+  }
+  let record;
+  try {
+    const resp = await fetchWithTimeout(`/api/stop_dumps/${encodeURIComponent(dumpId)}`, {}, FETCH_TIMEOUT_MS);
+    record = await resp.json();
+    if (!resp.ok) throw new Error();
+  } catch (err) {
+    setStatus(t.stopDumpsLoadFailed, true);
+    return;
+  }
+  hideStopDumpsPanel();
+  if (interactiveMode) hideInteractivePanel();
+  setGenerateFormCollapsed(false);
+  result.hidden = true;
+  hideLeaderboard();
+  solutionBtn.hidden = true;
+  checkBtn.hidden = true;
+  definitionsBtn.hidden = true;
+  recomputeBtn.hidden = true;
+  continueBtn.hidden = true;
+  applyStopDumpRequest(record.request);
+
+  hideAttemptPreview();
+  finishLockedCells = null;
+  attemptPreviewGrids.classList.toggle(
+    "full-black", (record.request || {}).pattern_style === "grouped");
+  const entries = (record.examples_history || []).slice();
+  const tiles = (record.live_preview || []).map((tile) => {
+    const { previous, ...rest } = tile || {};
+    return rest;
+  });
+  if (tiles.length) {
+    const step = record.step ? { ...record.step } : null;
+    if (step) delete step.examples;
+    const entry = { step, examples: tiles };
+    const lastCount = entries.length ? entries[entries.length - 1].success_count : undefined;
+    const successCount = typeof record.success_count === "number" ? record.success_count : lastCount;
+    if (typeof successCount === "number") entry.success_count = successCount;
+    entries.push(entry);
+  }
+  previewHistory = entries;
+  previewHistoryIndex = entries.length - 1;
+  if (entries.length) {
+    attemptPreview.hidden = false;
+    showPreviewEntry(entries[previewHistoryIndex]);
+  }
+  updatePreviewNavButtons();
+  syncRssPanelVisibility();
+  const date = record.stopped_at ? new Date(record.stopped_at).toLocaleString(uiLanguage) : "";
+  setStatus(t.stopDumpsLoaded(date, record.pseudo || ""), false);
+}
+
+stopDumpsBtn.addEventListener("click", () => {
+  if (stopDumpsPanel.hidden) {
+    stopDumpsPanel.hidden = false;
+    syncRssPanelVisibility();
+    renderStopDumpsList();
+  } else {
+    hideStopDumpsPanel();
+  }
+});
+stopDumpsCloseBtn.addEventListener("click", hideStopDumpsPanel);
+stopDumpsRefreshBtn.addEventListener("click", renderStopDumpsList);
 
 // "When a user opens the interface (or reloads it), if they have grids
 // saved in GRID_WORK, show a panel with the list," at the user's

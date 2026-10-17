@@ -68,7 +68,7 @@ from .grid_store import (
     has_archived_grids, library_versions, archive_grids,
     save_grid_work, list_grid_work, get_grid_work, delete_grid_work,
     save_grid_game, get_grid_game, grid_game_leaderboard, grid_game_player_count,
-    save_stop_dump,
+    save_stop_dump, list_stop_dumps, get_stop_dump,
 )
 from .svg_export import (
     render_puzzle_pages,
@@ -2126,6 +2126,26 @@ def usage_stats():
     score of each language, both usage-score files counted, for the
     "Statistiques" panel."""
     return usage_score_counts(list(WORDLISTS))
+
+
+@app.get("/api/stop_dumps")
+async def stop_dumps_list():
+    """Localhost-only (frontend/server.py): every STOP_DUMP record's
+    compact metadata, most recently stopped first, for the "StopDumps"
+    panel — see grid_store.list_stop_dumps."""
+    items = await asyncio.to_thread(list_stop_dumps)
+    return {"items": items}
+
+
+@app.get("/api/stop_dumps/{dump_id}")
+async def stop_dumps_get(dump_id: str):
+    """Localhost-only (frontend/server.py): one full STOP_DUMP record, so
+    the web UI can show again what the player had on screen when they
+    stopped the generation."""
+    record = await asyncio.to_thread(get_stop_dump, dump_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="enregistrement STOP_DUMP introuvable")
+    return record
 
 
 @app.get("/api/library_archive/versions")
@@ -4729,6 +4749,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                 save_stop_dump, job_id, req.pseudo, job.get("request"),
                 job.get("step"), job.get("live_preview"),
                 job.get("examples_history"), job.get("resume_state"),
+                job.get("success_count"),
             )
             logger.info("[%s] stop dump saved: %s", short_id, dump_id)
         except Exception as e:

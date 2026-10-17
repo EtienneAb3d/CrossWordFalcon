@@ -2060,8 +2060,9 @@ button:disabled {
 /* "Créations" panel (#interactive-work-btn's click handler, script.js),
    at the user's explicit request — same transparent/bordered card as
    #library just above, a member of the same central toggling-panel
-   group. */
-#interactive-work {
+   group. The "StopDumps" panel (#stop-dumps) shares every rule. */
+#interactive-work,
+#stop-dumps {
   margin: 0.75rem 0;
   padding: 0.75rem 1rem;
   border: 1px solid var(--border);
@@ -2069,35 +2070,41 @@ button:disabled {
   background: transparent;
 }
 
-#interactive-work-header {
+#interactive-work-header,
+#stop-dumps-header {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   margin: 0 0 0.5rem;
 }
 
-#interactive-work-label {
+#interactive-work-label,
+#stop-dumps-label {
   margin: 0;
   margin-right: auto;
   font-size: 0.9rem;
   font-weight: 600;
 }
 
-#interactive-work-table {
+#interactive-work-table,
+#stop-dumps-table {
   border-collapse: collapse;
   font-size: 0.85rem;
   width: 100%;
 }
 
 #interactive-work-table th,
-#interactive-work-table td {
+#interactive-work-table td,
+#stop-dumps-table th,
+#stop-dumps-table td {
   padding: 0.3rem 0.7rem;
   border-bottom: 1px solid var(--border);
   text-align: left;
   white-space: nowrap;
 }
 
-#interactive-work-table th {
+#interactive-work-table th,
+#stop-dumps-table th {
   color: #777;
   font-weight: 600;
 }
@@ -2105,12 +2112,15 @@ button:disabled {
 /* Every row (except its own delete-icon cell — see below) resumes that
    session on click, at the user's explicit request — styled to read as
    clickable the same way #library-table's own rows already do. */
-#interactive-work-table tbody tr {
+#interactive-work-table tbody tr,
+#stop-dumps-table tbody tr {
   cursor: pointer;
 }
 
 #interactive-work-table tbody tr:hover,
-#interactive-work-table tbody tr:focus-visible {
+#interactive-work-table tbody tr:focus-visible,
+#stop-dumps-table tbody tr:hover,
+#stop-dumps-table tbody tr:focus-visible {
   background: var(--selected);
   outline: none;
 }
@@ -2127,7 +2137,8 @@ button:disabled {
   outline: none;
 }
 
-#interactive-work-empty {
+#interactive-work-empty,
+#stop-dumps-empty {
   margin: 0;
   font-size: 0.85rem;
   color: #777;

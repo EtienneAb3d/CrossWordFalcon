@@ -657,6 +657,31 @@ async def proxy_usage_stats(request: Request):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+# --- STOP_DUMP records (localhost only) ---------------------------------
+# Same gate as the Qdrant admin panel: the "StopDumps" button next to
+# "Créations" is a localhost-only diagnostic view.
+@app.get("/api/stop_dumps")
+async def proxy_stop_dumps_list(request: Request):
+    _require_localhost(request)
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/stop_dumps")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.get("/api/stop_dumps/{dump_id}")
+async def proxy_stop_dumps_get(dump_id: str, request: Request):
+    _require_localhost(request)
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/stop_dumps/{dump_id}")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 # --- Library archiving (localhost only) ---------------------------------
 # Same gate as the Qdrant admin panel: the Library's "Archiver" button and
 # its version selector are a localhost-only maintenance tool.

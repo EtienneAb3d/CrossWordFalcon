@@ -1218,7 +1218,8 @@ public final class App {
             Log.info("[%s] cancelled by user", shortId);
             try {
                 String dumpId = GridStore.saveStopDump(jobId, req.pseudo, job.copyOf("request"), job.copyOf("step"),
-                        job.copyOf("live_preview"), job.copyOf("examples_history"), job.copyOf("resume_state"));
+                        job.copyOf("live_preview"), job.copyOf("examples_history"), job.copyOf("resume_state"),
+                        job.copyOf("success_count"));
                 Log.info("[%s] stop dump saved: %s", shortId, dumpId);
             } catch (Exception ex) {
                 Log.warning("[%s] failed to save stop dump: %s", shortId, ex.getMessage());
@@ -1832,6 +1833,12 @@ public final class App {
         });
         // Localhost-only (gated by frontend/server.py): the "Statistiques" panel's usage-score counts.
         w.get("/api/usage_stats", r -> UsageScores.usageScoreCounts(new ArrayList<>(WORDLISTS.keySet())));
+        w.get("/api/stop_dumps", r -> Json.obj("items", GridStore.listStopDumps()));
+        w.get("/api/stop_dumps/{dump_id}", r -> {
+            Map<String, Object> record = GridStore.getStopDump(r.pathParams.get("dump_id"));
+            if (record == null) throw http(404, "enregistrement STOP_DUMP introuvable");
+            return record;
+        });
         // Localhost-only (gated by frontend/server.py): the Library's "Archiver" button and version selector.
         w.get("/api/library_archive/versions", r -> GridStore.libraryVersions());
         w.post("/api/library_archive", r -> {

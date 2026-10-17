@@ -451,6 +451,13 @@ json`. Holds all server-side state in plain module dicts/lists:
   `LENGTH_STATS_MIN_SCORE` (3), longest first, `length_counts` one count of
   such words per length; `counts`/`total`/`length_counts` null for a
   language with neither file).
+- *STOP_DUMP records* (localhost-only, gated by `frontend/server.py`):
+  `GET /api/stop_dumps` (`{items}`, `grid_store.list_stop_dumps`, Java
+  `GridStore.listStopDumps`: per record its id, pseudo, `stopped_at`, the
+  request's language/bilingual_language/width/height/difficulty/mode/
+  theme/pattern_style, its `step` without `examples`, `tile_count` and
+  `history_count`, most recently stopped first), `GET /api/stop_dumps/
+  {dump_id}` (the whole record, `get_stop_dump`, 404 when unknown).
 
 **Key request models** (Pydantic, all in `app.py`): `GenerateRequest`
 (`language`, `bilingual_language`, `width`/`height` [5-50], `difficulty`
@@ -2771,7 +2778,8 @@ Four independent filesystem stores, one JSON file shape shared with the
   one step only and `None` for a process's own first tile, the same
   convention `GRID_WORK/` already uses), `examples_history` (every
   completed palier so far, same shape, for context), plus `step`/
-  `request`/`resume_state` and the job id/pseudo/timestamp. Best-effort: a
+  `request`/`resume_state`/`success_count` and the job id/pseudo/timestamp
+  (`stopped_at`). Best-effort: a
   write failure is logged and never turns a clean Stop into an error.
   Both states of a tile name the channel that published them (`reason`:
   a new record, a heartbeat, a cycle start, a just-finished attempt) and
@@ -2991,6 +2999,16 @@ state, unlike the backend).
   generation, then the tool buttons (`#tool-buttons`: Bibliothèque …
   Qdrant (admin)) flush right, wrapping right-aligned — right after
   "Dictionnaire", the localhost-only bar-chart icon button
+  right after "Créations", the localhost-only `#stop-dumps-btn`
+  ("StopDumps") toggles the `#stop-dumps` panel (`renderStopDumpsList`,
+  `GET /api/stop_dumps`; a row click runs `loadStopDump`, refused while a
+  generation runs: `applyStopDumpRequest` puts the record's `request` back
+  into the generation form, and the attempt-preview panel gets the
+  record's `examples_history` as its `previewHistory` plus, when
+  `live_preview` holds tiles, one last entry built from them — `previous`
+  stripped, the record's `step` without `examples`, its `success_count` —
+  shown first, i.e. what the player was looking at when "Stop" was
+  clicked);
   `#usage-stats-btn` toggles the `#usage-stats` panel (`loadUsageStats`/
   `renderUsageStats`: one row per language, one column per usage score,
   then the words rated 3 or more (`USAGE_STATS_MIN_SCORE`), then the total, from `GET /api/usage_stats`; below it `renderUsageLengthStats`: the words rated 3 or more per word length, one row per length, longest first, one column per language); `#mode` lists only the budget modes (flash … gridzilla),

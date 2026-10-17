@@ -994,7 +994,7 @@ STOP_DUMP_DIR = Path(__file__).resolve().parent.parent / "STOP_DUMP"
 
 
 def save_stop_dump(job_id, pseudo, request, step, live_preview, examples_history,
-                    resume_state=None):
+                    resume_state=None, success_count=None):
     """Writes `STOP_DUMP/<timestamp>_<pseudo slug>_<job_id>.json` and
     returns its id (filename stem) — best-effort: the one caller (backend/
     app.py's `_run_generate_job`, right in its `except GenerationCancelled:`
@@ -1006,7 +1006,8 @@ def save_stop_dump(job_id, pseudo, request, step, live_preview, examples_history
     see this module's own STOP_DUMP section comment above for why
     `live_preview` (not a fresh read of the search's own live internal
     state, unreachable by the time this runs) is the richest available
-    snapshot."""
+    snapshot. `success_count` is the job's number of successful attempts
+    at that moment (the gold-medal badge)."""
     STOP_DUMP_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     slug = _slugify_pseudo(pseudo)
@@ -1021,7 +1022,63 @@ def save_stop_dump(job_id, pseudo, request, step, live_preview, examples_history
         "live_preview": live_preview,
         "examples_history": examples_history,
         "resume_state": resume_state,
+        "success_count": success_count,
     }
     path = STOP_DUMP_DIR / f"{dump_id}.json"
     path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
     return dump_id
+
+
+# Same shape as a GRID_WORK id: `<timestamp>_<pseudo slug>_<job_id>`.
+_STOP_DUMP_ID_RE = _WORK_ID_RE
+
+# The request fields the "StopDumps" panel lists.
+_STOP_DUMP_REQUEST_FIELDS = ("language", "bilingual_language", "width", "height",
+                             "difficulty", "mode", "theme", "pattern_style")
+
+
+def list_stop_dumps():
+    """Compact metadata of every STOP_DUMP record, most recently stopped
+    first, for the localhost-only "StopDumps" panel: id, pseudo, stop
+    time, the request's main fields, the step the job was in (without its
+    `examples`), and how many live tiles and history entries the record
+    holds. A file that fails to parse is skipped."""
+    entries = []
+    if STOP_DUMP_DIR.is_dir():
+        for path in STOP_DUMP_DIR.glob("*.json"):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    record = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                continue
+            request = record.get("request") or {}
+            step = record.get("step")
+            entry = {
+                "id": record.get("id", path.stem),
+                "pseudo": record.get("pseudo"),
+                "stopped_at": record.get("stopped_at"),
+            }
+            for key in _STOP_DUMP_REQUEST_FIELDS:
+                entry[key] = request.get(key)
+            entry["step"] = ({k: v for k, v in step.items() if k != "examples"}
+                             if isinstance(step, dict) else None)
+            entry["tile_count"] = len(record.get("live_preview") or [])
+            entry["history_count"] = len(record.get("examples_history") or [])
+            entries.append(entry)
+    entries.sort(key=lambda e: e.get("stopped_at") or "", reverse=True)
+    return entries
+
+
+def get_stop_dump(dump_id):
+    """The full STOP_DUMP record for `dump_id` — or None if it doesn't
+    match the expected shape or no matching file exists."""
+    if not _STOP_DUMP_ID_RE.match(dump_id):
+        return None
+    path = STOP_DUMP_DIR / f"{dump_id}.json"
+    if not path.is_file():
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None

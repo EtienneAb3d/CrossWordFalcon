@@ -305,8 +305,8 @@ full again whenever a new generation or an Interactive session starts.
   mode" below); **Automatique / Automatic** (`#generate-auto-btn`, also
   triggered by pressing Enter in a field) starts an automatic generation
   with the settings above. The tool buttons (Bibliothèque, Dictionnaire,
-  Paraphraseur, Créations, and the usage-statistics icon and Qdrant
-  (admin) on the local machine) sit at
+  Paraphraseur, Créations, and the usage-statistics icon, StopDumps and
+  Qdrant (admin) on the local machine) sit at
   the right end of this same line (`#tool-buttons`); when the window is
   too narrow for all of them, the extra ones go onto a further line, still
   aligned to the right. While a generation is running, this and every
@@ -422,7 +422,9 @@ when relevant.
   "Dictionary", "Paraphraser" and "Créations" below). **Qdrant (admin)**
   (`#qdrant-admin-btn`) only appears on the machine running the app (see
   "Qdrant (admin)" below), and so does the bar-chart icon right after
-  "Dictionnaire" (`#usage-stats-btn`, see "Usage-score statistics" below).
+  "Dictionnaire" (`#usage-stats-btn`, see "Usage-score statistics" below),
+  and **StopDumps** right after "Créations" (`#stop-dumps-btn`, see
+  "StopDumps" below).
 
 ## Cross Talk news panel
 
@@ -611,6 +613,30 @@ by itself when the page loads if you have at least one draft
   Library from it is not affected.
 - **↻** (`#interactive-work-refresh-btn`) reloads the list; **✕**
   (`#interactive-work-close-btn`) closes the panel.
+
+## StopDumps
+
+The **StopDumps** button (`#stop-dumps-btn`), right after "Créations",
+appears **only when the page is opened on the machine that runs the app
+itself** (localhost). It opens or closes the list of the automatic
+generations someone interrupted with **Stop** (`#stop-dumps`,
+`frontend/static/script.js`, `renderStopDumpsList`; `GET
+/api/stop_dumps`), most recent first, whoever stopped them.
+
+- Each row shows when the generation was stopped, the nickname of the
+  player who stopped it, the language(s), size, difficulty, effort,
+  theme, and the step the generation was in.
+- Clicking a row (or Enter/Space) shows again what that player had in
+  front of them at that moment (`loadStopDump`): the generation form
+  takes back the settings of that generation (language, size, black
+  rate, symmetry, pattern style, difficulty, words per placement, effort,
+  theme, theme precision, "Mots Défi"), and the attempt-preview panel
+  opens on the attempts as they were when Stop was clicked. The ◀/▶
+  buttons go back through the steps recorded before. The status line
+  says when, and by whom, the generation was stopped. Not available while
+  a generation is running.
+- **↻** (`#stop-dumps-refresh-btn`) reloads the list; **✕**
+  (`#stop-dumps-close-btn`) closes the panel.
 
 ## Usage-score statistics
 
