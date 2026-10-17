@@ -1394,6 +1394,14 @@ button:disabled {
   font-weight: 400;
 }
 
+/* "✴" standing for a placed letter while "Voir les mots" is off
+   (script.js's renderAttemptPreview()): 90 % of the cell, inheriting the
+   cell's text colour so every colour code still shows. */
+.attempt-preview-grid .cell .preview-hidden-letter {
+  font-size: calc(1.1rem * 0.9);
+  line-height: 1;
+}
+
 .attempt-preview-grid .cell.white.forced {
   box-shadow: inset 0 0 0 2px var(--accent);
 }

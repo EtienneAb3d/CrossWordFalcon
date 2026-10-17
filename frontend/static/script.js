@@ -1433,7 +1433,7 @@ function setStatus(message, isError) {
 // rather than a class applied inline while each cell is first being built,
 // removing any doubt about draw order affecting whether it's visible.
 //
-// Letters themselves are shown as "*" unless `showPreviewLetters` is on (see
+// Letters themselves are shown as "✴" unless `showPreviewLetters` is on (see
 // #attempt-preview-reveal-btn, now shown from page load right next to
 // the generation buttons rather than only appearing once a preview exists — at the
 // user's own explicit follow-up request, so the choice can be made
@@ -1612,10 +1612,16 @@ function renderAttemptPreview(examples) {
         } else {
           cell.className = "cell white";
           if (ch !== ".") filledCount++;
-          // A placed letter shows as "*" while "Voir" is off, so the
+          // A placed letter shows as "✴" while "Voir" is off, so the
           // grid's progress and its colour codes stay visible without
           // spoiling the solution.
-          if (ch !== ".") cell.textContent = showPreviewLetters ? ch : "*";
+          if (ch !== "." && showPreviewLetters) cell.textContent = ch;
+          if (ch !== "." && !showPreviewLetters) {
+            const hidden = document.createElement("span");
+            hidden.className = "preview-hidden-letter";
+            hidden.textContent = "✴";
+            cell.appendChild(hidden);
+          }
           // Light-gray statistical letter in a still-empty cell, shown
           // whatever the "Voir" toggle.
           if (ch === ".") {

@@ -2740,7 +2740,7 @@ premier (`backend/crossword_gen.py`, `generate_grid`,
   (échec ou réussite de la tentative, avant optimisation), jamais sur les
   aperçus de début de cycle ni après le nettoyage. Elle s'affiche quel
   que soit l'état du bouton **Voir les mots (spoiler)** ; tant que ce bouton est
-  désactivé, les lettres posées sont remplacées par « * », avec leurs codes
+  désactivé, les lettres posées sont remplacées par « ✴ », avec leurs codes
   couleur (`frontend/static/script.js`, `renderAttemptPreview`).
 - **Cadre gras en pointillés** (zone d'attention) : le contour de la
   fenêtre où la recherche peut encore poser un

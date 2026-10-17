@@ -3729,13 +3729,17 @@ end through the real running API (interactive start/step/save,
 - **Preview statistical letters** (`.preview-stat-letter`): the same
   `--stats-fg` light gray, in each still-empty cell of an automatic-
   generation preview grid (live tiles and an attempt's key step), shown
-  only while "Voir" is on, like the real letters; normal weight (400)
+  whatever the "Voir" toggle; normal weight (400)
   rather than the Interactive grid's 600, since the preview cells are
   tiny (0.6rem) and a bold gray letter reads as a real one there.
   The letters really placed by the search are, conversely, bold (700,
   the base `.attempt-preview-grid .cell` weight, up from 500), at the
   user's request for a clearer split from the gray statistical ones;
   theme/challenge letters keep their heavier 800.
+  While "Voir" is off, each placed letter is drawn as a "✴"
+  (`.preview-hidden-letter`) filling 90 % of the cell (`calc(1.1rem *
+  0.9)`, line-height 1), in the cell's own text colour, so every colour
+  code still shows without the solution.
 
 - **"Eye" toggle button** on every "Mots"/"Croisés"/"Début"/"Fin" results
   block, at the user's explicit request: "ajouter un bouton icône 'voir'

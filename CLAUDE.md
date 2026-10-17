@@ -2403,7 +2403,7 @@ on the live tiles (computing, and the "failed" whitelist) and on the
 never on cycle-start, post-cleanup or `minimizing` previews.
 `renderAttemptPreview()` shows each as a `.preview-stat-letter` span in
 a still-empty (".") cell, whatever "Voir les mots (spoiler)" (`showPreviewLetters`) says;
-while that toggle is off, every placed letter is drawn as "*" (its cell
+while that toggle is off, every placed letter is drawn as a "✴" filling 90 % of the cell (`.preview-hidden-letter`; its cell
 keeping every colour class), so the grid's progress stays visible
 without the solution.
 
