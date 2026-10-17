@@ -2738,9 +2738,10 @@ premier (`backend/crossword_gen.py`, `generate_grid`,
   pour l'état record, figé à l'instant où ce record a été atteint).
   Présente sur les aperçus en direct d'une tentative et sur son étape clef
   (échec ou réussite de la tentative, avant optimisation), jamais sur les
-  aperçus de début de cycle ni après le nettoyage. Comme les vraies
-  lettres, elle ne s'affiche que lorsque le bouton **Voir les mots (spoiler)** est activé
-  (`frontend/static/script.js`, `renderAttemptPreview`).
+  aperçus de début de cycle ni après le nettoyage. Elle s'affiche quel
+  que soit l'état du bouton **Voir les mots (spoiler)** ; tant que ce bouton est
+  désactivé, les lettres posées sont remplacées par « * », avec leurs codes
+  couleur (`frontend/static/script.js`, `renderAttemptPreview`).
 - **Cadre gras en pointillés** (zone d'attention) : le contour de la
   fenêtre où la recherche peut encore poser un
   mot (voir « Remplissage incrémental », chapitre 4), à sa position du moment

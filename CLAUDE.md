@@ -2402,8 +2402,10 @@ on the live tiles (computing, and the "failed" whitelist) and on the
 `pattern_attempt_failed`/`pattern_found` key step (`last_examples`),
 never on cycle-start, post-cleanup or `minimizing` previews.
 `renderAttemptPreview()` shows each as a `.preview-stat-letter` span in
-a still-empty (".") cell, only while "Voir les mots (spoiler)" (`showPreviewLetters`) is on,
-like the real letters.
+a still-empty (".") cell, whatever "Voir les mots (spoiler)" (`showPreviewLetters`) says;
+while that toggle is off, every placed letter is drawn as "*" (its cell
+keeping every colour class), so the grid's progress stays visible
+without the solution.
 
 "Finir la grille"/"Finir la zone" (`POST /api/interactive/finish`) keeps
 the session's grid size and language(s) and takes every other generation

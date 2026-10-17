@@ -325,12 +325,13 @@ when relevant.
 
 - **Voir les mots (spoiler) / Show the words (spoiler)** (`#attempt-preview-reveal-btn`, `frontend/static/
   script.js`, `togglePreviewLetters`) — while a grid is generating, shows
-  or hides the actual letters inside the search-progress preview grids
-  (see "While a grid is generating" below) and the "grid word
-  verification" table underneath them (a dictionary/root-form lookup for
+  the actual letters inside the search-progress preview grids (see "While
+  a grid is generating" below) — off, each placed letter is drawn as "*",
+  its cell keeping every colour code, so progress stays visible — and the
+  "grid word verification" table underneath them (a dictionary/root-form lookup for
   each placed word — see that table's own entry further below). Off by
   default, so a generation in progress never spoils the puzzle before
-  it's ready to play. With it on, every still-empty cell of a live
+  it's ready to play. Whether it is on or off, every still-empty cell of a live
   preview (and of an attempt's own concluding step) also shows, in light
   gray, its statistically most likely letter — the same figure as
   Interactive mode's "Stats" button (`renderAttemptPreview`). Letters
@@ -369,7 +370,7 @@ when relevant.
   tile is shown on its stats line), the one the generator recommends
   framed in green, and the status line asks you to pick one. Hovering a
   tile tints it; clicking it selects that grid (a blue frame marks it) and
-  the definitions are then written for that grid only. Letters stay hidden
+  the definitions are then written for that grid only. Letters show as "*"
   unless **Voir les mots (spoiler)** is on, like every other preview. Without a click within
   10 minutes, the recommended grid is kept; **Stop** still cancels while
   the choice is pending. A single finished grid is used directly, with no
