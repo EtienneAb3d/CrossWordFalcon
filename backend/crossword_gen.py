@@ -218,8 +218,8 @@ GENERATION_PROCESS_NICE_INCREMENT = (
 # an absolute count (int, always the behavior of `--max-words` on the
 # command line) by its type.
 DIFFICULTY_PRESETS = {
-    "easy": 0.66,
-    "medium": 0.80,
+    "easy": 0.75,
+    "medium": 0.85,
     "hard": 1.0,
 }
 
@@ -3288,18 +3288,21 @@ _LEXICON_CACHE_LOCK = threading.Lock()
 LEXICON_CACHE_MAX = 8
 
 
-# Minimum usage score of the words a lexicon keeps, per difficulty, for a
-# language with a usage-score file (`load_lexicon`): "easy" keeps the
-# Scrabble words rated 3 and more (likely proper nouns excluded), "medium"
-# the Scrabble words rated 2 and more plus the freq words absent from the
-# Scrabble wordlist rated 2 and more (`usage_score_out_path`) within the
-# `DIFFICULTY_PRESETS["medium"]` cut, "hard" (`None`) every word of the
-# freq and Scrabble wordlists.
-# This selection replaces every other lexicon rule of that difficulty
-# (`DIFFICULTY_PRESETS` cut, "easy" gloss requirement and inflection filter
-# of the Scrabble words, "easy" `MAX_PROPER_NOUNS`/`MAX_NON_GLOSS_WORDS`
-# quotas); the "medium" and "hard" quotas still apply.
+# Minimum usage score of the Scrabble words a lexicon keeps, per
+# difficulty, for a language with a usage-score file (`load_lexicon`). The
+# usage criterion is combined with the freq wordlist's own cut (a union): a
+# word of that cut needs `FREQ_CUT_USAGE_LENIENCY` (1) point less. "easy"
+# keeps the Scrabble words rated 3 and more plus the words of the
+# `DIFFICULTY_PRESETS["easy"]` cut (definition required, likely proper
+# nouns excluded) rated 2 and more; "medium" the Scrabble words rated 2 and
+# more plus the words of the `DIFFICULTY_PRESETS["medium"]` cut rated 1 and
+# more; an unrated word is dropped; "hard" (`None`)
+# every word of the freq and Scrabble wordlists. The inflection filter of
+# the "easy" Scrabble words is not applied, nor are the "easy"
+# `MAX_PROPER_NOUNS`/`MAX_NON_GLOSS_WORDS` quotas (no such word enters);
+# the "medium" and "hard" quotas apply.
 USAGE_DIFFICULTY_MIN_SCORE = {"easy": 3, "medium": 2, "hard": None}
+FREQ_CUT_USAGE_LENIENCY = 1
 
 
 def usage_lexicon_active(language, difficulty):
@@ -3317,25 +3320,10 @@ def scrabble_easy_filter(language, difficulty):
     return difficulty == "easy" and not usage_lexicon_active(language, difficulty)
 
 
-def load_lexicon(wordlist_path, max_words, difficulty):
-    """The `LoadedLexicon` of `wordlist_path` for `difficulty`, with the
-    language's Scrabble wordlist merged in (`merge_scrabble_lexicon`) —
-    built once per (path, cut, difficulty) key and process, shared
-    read-only by every generation and Interactive session (the cache is
-    emptied once it holds `LEXICON_CACHE_MAX` entries).
-
-    With no explicit `max_words` and a language that has a usage-score
-    file (`usage_lexicon_active`), the words are selected by usage score
-    alone: the whole freq and Scrabble wordlists, cut to the words rated
-    at least `USAGE_DIFFICULTY_MIN_SCORE[difficulty]` (an unrated word is
-    dropped; no cut at "hard"), likely proper nouns excluded at "easy",
-    and no quota word set (`proper_nouns`/`non_gloss` empty) at "easy".
-    At "medium", the freq words absent from the Scrabble wordlist join
-    too when rated at least that score in `usage_score_out_path`'s file
-    and kept by the `DIFFICULTY_PRESETS["medium"]` cut (`load_wordlist`);
-    the "medium" and "hard" quotas apply. Otherwise
-    the lexicon is cut to `max_words`, else to `DIFFICULTY_PRESETS
-    [difficulty]` (`load_wordlist`), "easy" filters on at "easy"."""
+def _lexicon_params(wordlist_path, max_words, difficulty):
+    """`(language, by_usage, cut, easy, cache key)` of a lexicon: selected
+    by usage score (`by_usage`) or cut to `max_words`, else to
+    `DIFFICULTY_PRESETS[difficulty]`, "easy" filters on at "easy"."""
     language = _lang_from_path(wordlist_path)
     by_usage = max_words is None and usage_lexicon_active(language, difficulty)
     if by_usage:
@@ -3343,41 +3331,72 @@ def load_lexicon(wordlist_path, max_words, difficulty):
     else:
         mw = max_words or DIFFICULTY_PRESETS.get(difficulty)
         easy = difficulty == "easy"
-    key = (str(wordlist_path), mw, easy, difficulty if by_usage else None)
+    return language, by_usage, mw, easy, (str(wordlist_path), mw, easy, difficulty if by_usage else None)
+
+
+def _select_lexicon(wordlist_path, max_words, difficulty):
+    """The words of `wordlist_path`'s lexicon for `difficulty`, before
+    indexing: `(by_length, refs, frequencies, proper_nouns, non_gloss,
+    scrabble, usage_scores)`.
+
+    With no explicit `max_words` and a language that has a usage-score
+    file (`usage_lexicon_active`), the whole freq and Scrabble wordlists
+    are loaded and cut to the union of two criteria: the Scrabble words
+    rated at least `USAGE_DIFFICULTY_MIN_SCORE[difficulty]`, and the words
+    kept by the freq wordlist's own `DIFFICULTY_PRESETS[difficulty]` cut
+    (`load_wordlist`; at "easy" with the definition requirement and likely
+    proper nouns excluded) rated at least `FREQ_CUT_USAGE_LENIENCY` less
+    (an unrated word is dropped either way); no cut
+    at "hard"; no quota word set (`proper_nouns`/`non_gloss` empty) at
+    "easy". Otherwise the lexicon is cut to `max_words`, else to
+    `DIFFICULTY_PRESETS[difficulty]` (`load_wordlist`), "easy" filters on
+    at "easy"."""
+    language, by_usage, mw, easy, key = _lexicon_params(wordlist_path, max_words, difficulty)
+    by_length, refs, frequencies, proper_nouns, non_gloss = load_wordlist(
+        wordlist_path, mw, require_gloss=easy, exclude_proper_nouns=easy,
+    )
+    scrabble = merge_scrabble_lexicon(language, by_length, refs, frequencies, easy=easy)
+    usage_scores = load_usage_scores(language)
+    if by_usage:
+        min_score = USAGE_DIFFICULTY_MIN_SCORE[difficulty]
+        if min_score is not None:
+            freq_easy = difficulty == "easy"
+            freq_cut = {
+                w for words in load_wordlist(
+                    wordlist_path, DIFFICULTY_PRESETS[difficulty],
+                    require_gloss=freq_easy, exclude_proper_nouns=freq_easy,
+                )[0].values()
+                for w in words
+            }
+            by_length = {
+                length: kept for length, words in by_length.items()
+                if (kept := [
+                    w for w in words
+                    if (score := usage_scores.get(w, USAGE_SCORE_UNKNOWN)) >= min_score
+                    and w in scrabble
+                    or score >= min_score - FREQ_CUT_USAGE_LENIENCY and w in freq_cut
+                ])
+            }
+        if difficulty == "easy":
+            proper_nouns = non_gloss = frozenset()
+    return by_length, refs, frequencies, proper_nouns, non_gloss, scrabble, usage_scores
+
+
+def load_lexicon(wordlist_path, max_words, difficulty):
+    """The `LoadedLexicon` of `wordlist_path` for `difficulty`
+    (`_select_lexicon`), with the language's Scrabble wordlist merged in
+    (`merge_scrabble_lexicon`) — built once per (path, cut, easy,
+    usage-selected difficulty) key and process, shared read-only by every
+    generation and Interactive session (the cache is emptied once it holds
+    `LEXICON_CACHE_MAX` entries)."""
+    language, by_usage, mw, easy, key = _lexicon_params(wordlist_path, max_words, difficulty)
     with _LEXICON_CACHE_LOCK:
         loaded = _LEXICON_CACHE.get(key)
         if loaded is not None:
             return loaded
-        by_length, refs, frequencies, proper_nouns, non_gloss = load_wordlist(
-            wordlist_path, mw, require_gloss=easy, exclude_proper_nouns=easy,
-        )
-        scrabble = merge_scrabble_lexicon(language, by_length, refs, frequencies, easy=easy)
+        (by_length, refs, frequencies, proper_nouns, non_gloss, scrabble,
+         usage_scores) = _select_lexicon(wordlist_path, max_words, difficulty)
         sources = (str(wordlist_path), scrabble_wordlist_path(language) if language else None)
-        usage_scores = load_usage_scores(language)
-        if by_usage:
-            min_score = USAGE_DIFFICULTY_MIN_SCORE[difficulty]
-            excluded = proper_nouns - scrabble if difficulty == "easy" else frozenset()
-            # "medium": a freq word absent from the Scrabble wordlist stays
-            # under the freq wordlist's own "medium" cut.
-            freq_cut = (
-                {w for words in load_wordlist(wordlist_path, DIFFICULTY_PRESETS["medium"])[0].values()
-                 for w in words}
-                if difficulty == "medium" else None
-            )
-            if min_score is not None or excluded:
-                by_length = {
-                    length: kept for length, words in by_length.items()
-                    if (kept := [
-                        w for w in words
-                        if w not in excluded
-                        and (min_score is None
-                             or (usage_scores.get(w, USAGE_SCORE_UNKNOWN) >= min_score
-                                 and (w in scrabble
-                                      or (freq_cut is not None and w in freq_cut))))
-                    ])
-                }
-            if difficulty == "easy":
-                proper_nouns = non_gloss = frozenset()
         index = build_index(
             by_length, frequencies, load_dictionary_frequencies(wordlist_path), refs, sources,
             usage_scores,
@@ -3391,6 +3410,96 @@ def load_lexicon(wordlist_path, max_words, difficulty):
             _LEXICON_CACHE.clear()
         _LEXICON_CACHE[key] = loaded
         return loaded
+
+
+class LexiconWords:
+    """The words of one lexicon (`_select_lexicon`) packed for membership
+    tests: sorted, joined by newlines into one string (`text`), with each
+    word's start offset (`starts`, `array('I')`, a final sentinel past the
+    end) — a few bytes per word instead of a set of string objects."""
+
+    __slots__ = ("text", "starts")
+
+    def __init__(self, text, starts):
+        self.text = text
+        self.starts = starts
+
+    @classmethod
+    def of(cls, words):
+        ordered = sorted(set(words))
+        starts = array("I")
+        pos = 0
+        for w in ordered:
+            starts.append(pos)
+            pos += len(w) + 1
+        starts.append(pos)
+        return cls("\n".join(ordered) + ("\n" if ordered else ""), starts)
+
+    def __len__(self):
+        return len(self.starts) - 1
+
+    def word(self, i):
+        return self.text[self.starts[i]:self.starts[i + 1] - 1]
+
+    def __contains__(self, word):
+        lo, hi = 0, len(self)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            w = self.word(mid)
+            if w == word:
+                return True
+            if w < word:
+                lo = mid + 1
+            else:
+                hi = mid
+        return False
+
+    def length_counts(self):
+        """{word length: number of words}."""
+        counts = {}
+        for i in range(len(self)):
+            n = self.starts[i + 1] - self.starts[i] - 1
+            counts[n] = counts.get(n, 0) + 1
+        return counts
+
+
+_LEXICON_WORDS = {}
+_LEXICON_WORDS_LOCK = threading.Lock()
+
+
+def _lexicon_words_task(wordlist_path, difficulty):
+    by_length = _select_lexicon(wordlist_path, None, difficulty)[0]
+    packed = LexiconWords.of(w for words in by_length.values() for w in words)
+    return packed.text, packed.starts.tobytes()
+
+
+def lexicon_words(pairs):
+    """{(wordlist path, difficulty): LexiconWords} of the lexicon of each
+    `(wordlist path, difficulty)` of `pairs` (`_select_lexicon`, no
+    explicit cut) — the words a grid of that difficulty draws from, for
+    the Dictionnaire panel's per-word difficulties and the usage-score
+    statistics panel. Each pair is computed once per process, the missing
+    ones in parallel, one per worker process."""
+    pairs = [(str(path), difficulty) for path, difficulty in pairs]
+    with _LEXICON_WORDS_LOCK:
+        missing = [p for p in dict.fromkeys(pairs) if p not in _LEXICON_WORDS]
+        if missing:
+            with concurrent.futures.ProcessPoolExecutor(
+                max_workers=max(1, min(len(missing), PARALLEL_ATTEMPTS)),
+            ) as executor:
+                futures = {p: executor.submit(_lexicon_words_task, *p) for p in missing}
+                for p, future in futures.items():
+                    text, starts = future.result()
+                    offsets = array("I")
+                    offsets.frombytes(starts)
+                    _LEXICON_WORDS[p] = LexiconWords(text, offsets)
+        return {p: _LEXICON_WORDS[p] for p in pairs}
+
+
+def lexicon_length_counts(pairs):
+    """{(wordlist path, difficulty): {word length: number of words}} of the
+    lexicon of each pair of `pairs` (`lexicon_words`)."""
+    return {p: words.length_counts() for p, words in lexicon_words(pairs).items()}
 
 
 def word_forms(length_index, word):
@@ -16470,9 +16579,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
 
     rng = random.Random(seed)
     # The lexicon (index, quota word sets, Scrabble words) comes from the
-    # process-wide cache (`load_lexicon`): selected by usage score when the
-    # language has a usage-score file (`USAGE_DIFFICULTY_MIN_SCORE`, no
-    # quota word set), otherwise cut by `DIFFICULTY_PRESETS`, "easy"
+    # process-wide cache (`load_lexicon`): selected by usage score combined with
+    # the freq cut when the language has a usage-score file
+    # (`USAGE_DIFFICULTY_MIN_SCORE`, no quota word set at "easy"), otherwise cut by `DIFFICULTY_PRESETS`, "easy"
     # excluding proper nouns from the lexicon entirely — "medium"/"hard"
     # tolerating them within a per-grid quota (MAX_PROPER_NOUNS/
     # proper_noun_words below).

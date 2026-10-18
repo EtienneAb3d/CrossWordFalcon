@@ -207,10 +207,15 @@ public final class DictionaryLookup {
             m.put("form", row.form);
             m.put("canonical", row.canonical);
             m.put("definitions", row.definitions);
-            m.put("usage", UsageScores.usageScore(norm(row.form.replace("ß", "ss")).toUpperCase(Locale.ROOT), language));
+            m.put("usage", UsageScores.usageScore(gridForm(row.form), language));
             outRows.add(m);
         }
         result.put("rows", outRows);
         return result;
+    }
+
+    /** The grid form (MOT column: bare, uppercase) of a row's form (mirrors grid_form). */
+    public static String gridForm(String form) {
+        return norm(form.replace("ß", "ss")).toUpperCase(Locale.ROOT);
     }
 }

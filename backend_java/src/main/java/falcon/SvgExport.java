@@ -80,15 +80,15 @@ public final class SvgExport {
     private static final Map<String, String> NATIVE_LANGUAGE_NAMES = Map.of(
             "fr", "Français", "en", "English", "de", "Deutsch", "es", "Español", "it", "Italiano", "pt", "Português");
     private static final Map<String, String> DIFFICULTY_LABEL = Map.of(
-            "fr", "Difficulté", "en", "Difficulty", "de", "Schwierigkeit", "es", "Dificultad", "it", "Difficoltà",
-            "pt", "Dificuldade");
+            "fr", "Niveau", "en", "Level", "de", "Stufe", "es", "Nivel", "it", "Livello",
+            "pt", "Nível");
     private static final Map<String, Map<String, String>> DIFFICULTY_NAMES = Map.of(
-            "fr", Map.of("easy", "Facile", "medium", "Moyenne", "hard", "Difficile"),
+            "fr", Map.of("easy", "Facile", "medium", "Moyen", "hard", "Difficile"),
             "en", Map.of("easy", "Easy", "medium", "Medium", "hard", "Hard"),
             "de", Map.of("easy", "Leicht", "medium", "Mittel", "hard", "Schwer"),
-            "es", Map.of("easy", "Fácil", "medium", "Media", "hard", "Difícil"),
-            "it", Map.of("easy", "Facile", "medium", "Media", "hard", "Difficile"),
-            "pt", Map.of("easy", "Fácil", "medium", "Média", "hard", "Difícil"));
+            "es", Map.of("easy", "Fácil", "medium", "Medio", "hard", "Difícil"),
+            "it", Map.of("easy", "Facile", "medium", "Medio", "hard", "Difficile"),
+            "pt", Map.of("easy", "Fácil", "medium", "Médio", "hard", "Difícil"));
     private static final Map<String, String> PLAY_ONLINE_LABELS = Map.of(
             "fr", "Jouer en ligne (avec solution) : {url}",
             "en", "Play online (with solution): {url}",

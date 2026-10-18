@@ -311,11 +311,11 @@ On the page:
    available in full at Medium and Hard, on top of the everyday vocabulary
    the chosen difficulty keeps; at Easy, only its words whose inflected
    forms are known are used. Once a language's usage scores are built
-   (how common each word is, rated 0 to 5), the difficulty picks words by
-   that score instead: Easy keeps the Scrabble words rated 3 and more (no
-   proper nouns), Medium the words rated 2 and more (the Scrabble list,
-   plus the most frequent everyday words missing from it), Hard every
-   word. A grid never holds two forms of the same word: once "est" is
+   (how common each word is, rated 0 to 5), the difficulty combines that
+   score with word frequency: Easy keeps the Scrabble words rated 3 and
+   more, plus the frequent everyday words (with a definition, no proper
+   noun) rated 2 and more; Medium the Scrabble words rated 2 and more,
+   plus the frequent everyday words rated 1 and more; Hard every word. A grid never holds two forms of the same word: once "est" is
    placed, "été" or "était" (forms of "être") are left out, and "elms"
    once "elm" is in. A word you list this way never
    shows up in the Library's own grid listing, since it's meant to stay a
@@ -351,7 +351,7 @@ On the page:
    once zoomed in, sliders on the right of and below the grid move the
    view, while the row and column numbers stay visible (same in
    Interactive mode). Above the grid, a short generated title for the puzzle
-   is shown, with the grid's difficulty next to it ("Difficulty: Medium"). Clues follow the usual crossword format:
+   is shown, with the grid's level next to it ("Level: Medium"). Clues follow the usual crossword format:
    horizontal ("Horizontalement") clues appear to the left of the grid,
    grouped one line per row; vertical ("Verticalement") clues appear
    below, grouped one line per column, spanning the full width in two
@@ -516,7 +516,8 @@ looking words up in the chosen language:
 - **"Chercher" / "Search"** lists every word with the same root as what
   you typed (accents and case don't matter), each with its real
   definitions and, when known, how common it is ("usage : X/5": 5 for
-  everyday vocabulary down to 0 for a practically unknown word). These
+  everyday vocabulary down to 0 for a practically unknown word), and the
+  levels whose grids can use it ("Niveau : Facile, Moyen, Difficile"). These
   usage ratings also make grids favour everyday words; they are written
   once per language by the local language model
   (`data_builder/build_usage_scores.py fr` — a long run, about a day for

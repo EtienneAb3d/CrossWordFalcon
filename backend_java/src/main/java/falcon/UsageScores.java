@@ -63,10 +63,16 @@ public final class UsageScores {
     /**
      * Number of rated words per usage score, for the localhost-only "Statistiques" panel
      * (GET /api/usage_stats), over both files of each language, plus the number of words
-     * rated at least LENGTH_STATS_MIN_SCORE per word length, longest first (mirrors
+     * rated at least LENGTH_STATS_MIN_SCORE per word length, longest first, and, from
+     * {@code lexiconCounts} ({language: {difficulty: {word length: number of words}}}), each
+     * difficulty's lexicon total and the "easy" lexicon's words per length (mirrors
      * usage_scores.usage_score_counts).
      */
-    public static Map<String, Object> usageScoreCounts(List<String> languages) {
+    public static Map<String, Object> usageScoreCounts(List<String> languages,
+                                                       Map<String, Map<String, Map<Integer, Integer>>> lexiconCounts) {
+        if (lexiconCounts == null) lexiconCounts = Map.of();
+        List<String> levels = lexiconCounts.isEmpty() ? List.of()
+                : new ArrayList<>(lexiconCounts.values().iterator().next().keySet());
         Map<String, Optional<Map<String, Integer>>> perLanguage = new LinkedHashMap<>();
         for (String language : languages) perLanguage.put(language, load(language));
         TreeSet<Integer> scoreSet = new TreeSet<>();
@@ -78,30 +84,55 @@ public final class UsageScores {
                 if (s >= LENGTH_STATS_MIN_SCORE) lengthSet.add(w.codePointCount(0, w.length()));
             }));
         }
+        for (Map<String, Map<Integer, Integer>> c : lexiconCounts.values()) {
+            Map<Integer, Integer> easy = c.get("easy");
+            if (easy != null) lengthSet.addAll(easy.keySet());
+        }
         List<Integer> lengths = new ArrayList<>(lengthSet);
         List<Object> rows = new ArrayList<>();
         for (Map.Entry<String, Optional<Map<String, Integer>>> e : perLanguage.entrySet()) {
-            if (e.getValue().isEmpty()) {
-                rows.add(Json.obj("language", e.getKey(), "counts", null, "total", null,
-                        "length_counts", null));
-                continue;
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("language", e.getKey());
+            row.put("counts", null);
+            row.put("total", null);
+            row.put("length_counts", null);
+            if (e.getValue().isPresent()) {
+                Map<String, Integer> m = e.getValue().get();
+                Map<Integer, Integer> tally = new HashMap<>();
+                Map<Integer, Integer> byLength = new HashMap<>();
+                for (Map.Entry<String, Integer> w : m.entrySet()) {
+                    tally.merge(w.getValue(), 1, Integer::sum);
+                    if (w.getValue() >= LENGTH_STATS_MIN_SCORE) {
+                        byLength.merge(w.getKey().codePointCount(0, w.getKey().length()), 1, Integer::sum);
+                    }
+                }
+                List<Object> counts = new ArrayList<>();
+                for (int s : scores) counts.add(tally.getOrDefault(s, 0));
+                List<Object> lengthCounts = new ArrayList<>();
+                for (int n : lengths) lengthCounts.add(byLength.getOrDefault(n, 0));
+                row.put("counts", counts);
+                row.put("total", m.size());
+                row.put("length_counts", lengthCounts);
             }
-            Map<String, Integer> m = e.getValue().get();
-            Map<Integer, Integer> tally = new HashMap<>();
-            Map<Integer, Integer> byLength = new HashMap<>();
-            for (Map.Entry<String, Integer> w : m.entrySet()) {
-                tally.merge(w.getValue(), 1, Integer::sum);
-                if (w.getValue() >= LENGTH_STATS_MIN_SCORE) {
-                    byLength.merge(w.getKey().codePointCount(0, w.getKey().length()), 1, Integer::sum);
+            Map<String, Map<Integer, Integer>> levelsOf = lexiconCounts.get(e.getKey());
+            List<Object> levelTotals = null;
+            if (levelsOf != null) {
+                levelTotals = new ArrayList<>();
+                for (String d : levels) {
+                    int total = 0;
+                    for (int n : levelsOf.get(d).values()) total += n;
+                    levelTotals.add(total);
                 }
             }
-            List<Object> counts = new ArrayList<>();
-            for (int s : scores) counts.add(tally.getOrDefault(s, 0));
-            List<Object> lengthCounts = new ArrayList<>();
-            for (int n : lengths) lengthCounts.add(byLength.getOrDefault(n, 0));
-            rows.add(Json.obj("language", e.getKey(), "counts", counts, "total", m.size(),
-                    "length_counts", lengthCounts));
+            row.put("level_totals", levelTotals);
+            List<Object> easyLengthCounts = null;
+            if (levelsOf != null && levelsOf.containsKey("easy")) {
+                easyLengthCounts = new ArrayList<>();
+                for (int n : lengths) easyLengthCounts.add(levelsOf.get("easy").getOrDefault(n, 0));
+            }
+            row.put("easy_length_counts", easyLengthCounts);
+            rows.add(row);
         }
-        return Json.obj("scores", scores, "languages", rows, "lengths", lengths);
+        return Json.obj("scores", scores, "levels", levels, "languages", rows, "lengths", lengths);
     }
 }

@@ -45,7 +45,7 @@ from .clues import (
     ClueGenerationError, LLMBackupWindow, LLMClueGenerator, TITLE_PROPOSALS_COUNT,
     _LANGUAGE_STOPWORDS_RAW,
 )
-from .dictionary_lookup import search as dictionary_search_impl
+from .dictionary_lookup import search as dictionary_search_impl, grid_form as dictionary_grid_form
 from .embedder import Embedder, EmbedderError
 from .qdrant_store import QdrantStore, QdrantStoreError
 from .secret_store import is_valid_pseudo
@@ -59,7 +59,9 @@ from .crossword_gen import (
     _interactive_fill_diagnostics, _interactive_letter_stats,
     _serialize_resume_state, interactive_boundary_candidates, interactive_clean_impossible_zones,
     interactive_crossing_words, interactive_minimize_black_cells,
-    interactive_place_word, interactive_slot_candidates, load_lexicon, make_pattern,
+    interactive_place_word, interactive_slot_candidates, lexicon_length_counts, lexicon_words,
+    load_lexicon,
+    make_pattern,
     scrabble_word_cells, scrabble_wordlist_path,
     scrabble_words_for_languages,
 )
@@ -2124,8 +2126,15 @@ def _library_page(preferred_language, page, seen_filter, seen_ids,
 def usage_stats():
     """Localhost-only (frontend/server.py): the number of words per usage
     score of each language, both usage-score files counted, for the
-    "Statistiques" panel."""
-    return usage_score_counts(list(WORDLISTS))
+    "Statistiques" panel, with the number of words of each difficulty's
+    lexicon (`lexicon_length_counts`, computed once per process)."""
+    pairs = [(WORDLISTS[language], difficulty)
+             for language in WORDLISTS for difficulty in DIFFICULTY_PRESETS]
+    counts = lexicon_length_counts(pairs)
+    return usage_score_counts(list(WORDLISTS), {
+        language: {difficulty: counts[(str(WORDLISTS[language]), difficulty)]
+                   for difficulty in DIFFICULTY_PRESETS}
+        for language in WORDLISTS})
 
 
 @app.get("/api/stop_dumps")
@@ -2312,7 +2321,22 @@ async def dictionary_search(q: str, lang: str = "fr"):
     running it via asyncio.to_thread."""
     if lang not in WORDLISTS:
         raise HTTPException(status_code=400, detail=f"langue inconnue : {lang!r}")
-    return await asyncio.to_thread(dictionary_search_impl, q, lang)
+    return await asyncio.to_thread(_dictionary_search_with_levels, q, lang)
+
+
+def _dictionary_search_with_levels(q, lang):
+    """`dictionary_search_impl`'s result, each row also carrying `levels`:
+    the difficulties (easy, medium, hard order) whose lexicon holds the
+    row's grid form (`lexicon_words`, computed once per process)."""
+    result = dictionary_search_impl(q, lang)
+    rows = result.get("rows") or []
+    if rows:
+        path = str(WORDLISTS[lang])
+        words = lexicon_words([(path, d) for d in DIFFICULTY_PRESETS])
+        for row in rows:
+            mot = dictionary_grid_form(row["form"])
+            row["levels"] = [d for d in DIFFICULTY_PRESETS if mot in words[(path, d)]]
+    return result
 
 
 # Difficulty used for the "Définir" button below — the Dictionary panel

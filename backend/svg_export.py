@@ -110,12 +110,12 @@ _NATIVE_LANGUAGE_NAMES = {
 # Mirrors frontend/static/i18n.js's difficultyLabel/difficultyEasy/
 # difficultyMedium/difficultyHard per language, for the metadata header line.
 _DIFFICULTY_LABELS = {
-    "fr": ("Difficulté", {"easy": "Facile", "medium": "Moyenne", "hard": "Difficile"}),
-    "en": ("Difficulty", {"easy": "Easy", "medium": "Medium", "hard": "Hard"}),
-    "de": ("Schwierigkeit", {"easy": "Leicht", "medium": "Mittel", "hard": "Schwer"}),
-    "es": ("Dificultad", {"easy": "Fácil", "medium": "Media", "hard": "Difícil"}),
-    "it": ("Difficoltà", {"easy": "Facile", "medium": "Media", "hard": "Difficile"}),
-    "pt": ("Dificuldade", {"easy": "Fácil", "medium": "Média", "hard": "Difícil"}),
+    "fr": ("Niveau", {"easy": "Facile", "medium": "Moyen", "hard": "Difficile"}),
+    "en": ("Level", {"easy": "Easy", "medium": "Medium", "hard": "Hard"}),
+    "de": ("Stufe", {"easy": "Leicht", "medium": "Mittel", "hard": "Schwer"}),
+    "es": ("Nivel", {"easy": "Fácil", "medium": "Medio", "hard": "Difícil"}),
+    "it": ("Livello", {"easy": "Facile", "medium": "Medio", "hard": "Difficile"}),
+    "pt": ("Nível", {"easy": "Fácil", "medium": "Médio", "hard": "Difícil"}),
 }
 
 # Public base for the "play online" link printed in the PDF's footer

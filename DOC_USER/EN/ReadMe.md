@@ -137,7 +137,7 @@ full again whenever a new generation or an Interactive session starts.
   5 to 50 on the local machine, from 5 to 20 from another machine on the
   network; same out-of-range snap-back on blur as **Largeur / Width**
   above (`frontend/static/script.js`, `clampDimensionInputs`).
-- **Difficulté / Difficulty** (`#difficulty`, first field of the line
+- **Niveau / Level** (`#difficulty`, first field of the line
   above "Générer les mots croisés", followed by Mots par pose, Mode and
   "Voir les mots (spoiler)") — Easy, Medium, or Hard.
   Easy and Medium use a smaller, more common vocabulary and never place a
@@ -505,7 +505,8 @@ those was showing.
     common the word is, when it is known: 5 everyday, 4 formal or
     literary, 3 rare form of an everyday word (such as an imperfect
     subjunctive), 2 technical term, 1 dated, 0 practically unknown
-    (`frontend/static/script.js`, `renderDictionaryResult`; `GET
+    A second grey line lists the levels whose grids can use the word
+    ("Niveau : Facile, Moyen, Difficile", or "aucun"). (`frontend/static/script.js`, `renderDictionaryResult`; `GET
     /api/dictionary`).
   - **Synonymes / Synonyms** (`#dictionary-synonyms-btn`,
     `frontend/static/script.js`, `buildSimilarWordsResultNode`; `GET
@@ -649,10 +650,16 @@ holding two tables. The first has one row per language, one column per usage sco
 (0 practically unknown … 5 everyday), then the words rated 3 or more
 ("Total ≥ 3", the ones an Easy grid can use), then the total — the number of
 words each language's dictionaries rate with that score, both rated word
-lists counted (the Scrabble words and the corpus words absent from them).
-A second table below it ("Words rated ≥ 3 by length") splits the words
-rated 3 or more by word length: one row per length, longest first, one
-column per language (`renderUsageLengthStats`).
+lists counted (the Scrabble words and the corpus words absent from them) —
+then one column per difficulty ("Easy", "Medium", "Hard"; the "Total ≥ 3"
+and "Easy" columns in bold): the number of
+words a grid of that difficulty can use, usage score and frequency
+selection combined (the first opening after the app starts takes up to a
+minute to measure them).
+A second table below it ("Words rated ≥ 3 by length / Easy level") splits
+them by word length: one row per length, longest first, one column per
+language, each cell showing the words rated 3 or more, then the words an
+Easy grid can use (`renderUsageLengthStats`).
 A language with no usage scores yet shows "—" (`frontend/static/
 script.js`, `renderUsageStats`; `GET /api/usage_stats`, gated to loopback
 requests by `frontend/server.py`, `_require_localhost`). **✕**
@@ -765,7 +772,7 @@ exact language (`backend/app.py`, `_library_page`).
 A level filter (`#library-difficulty-filter`, in the panel's top-right
 row alongside the other filters) narrows the list to one difficulty —
 **Tous les niveaux / All levels** (the default), **Facile / Easy**,
-**Moyenne / Medium**, or **Difficile / Hard**. Unlike the language
+**Moyen / Medium**, or **Difficile / Hard**. Unlike the language
 filter, it does not follow the interface language; it stays on "Tous les
 niveaux" until changed. Filtering happens on the server before
 pagination, so the page count reflects only the matching grids
@@ -950,8 +957,8 @@ Once generation completes, the search-progress panel disappears and
 
 - **Grid title** (`#grid-title`) — a short, LLM-generated title for the
   puzzle, based on its own words (`backend/clues.py`, `generate_title`),
-  followed by the grid's difficulty as a full phrase ("Difficulté :
-  Moyenne", translated to the interface language,
+  followed by the grid's difficulty as a full phrase ("Niveau :
+  Moyen", translated to the interface language,
   `frontend/static/script.js`, `renderGridDifficulty`). The whole line
   is shown whenever there is a title or a difficulty to display.
 - **Stats line** (`#stats`) — the finished grid's own black-cell
@@ -1502,7 +1509,7 @@ real letter. Both update after every edit.
   it stays available in your "Créations" list. The grid size and the
   language(s) stay those of the session; every other setting is read from
   the generation form at the top of the page as it stands at the moment
-  you click — Difficulté, Taux noir, Symétrie, Mots par pose, Mode, Thématique, Précision thématique and the "Mots Défi"
+  you click — Niveau, Taux noir, Symétrie, Mots par pose, Mode, Thématique, Précision thématique and the "Mots Défi"
   list — so you can change any of them before finishing. The session's
   theme glossary is reused only while the form still asks for the same
   theme at the same precision; otherwise it is rebuilt from the form's
@@ -1829,11 +1836,12 @@ dictionary words. The difficulty trims the everyday, corpus-based
 vocabulary (keeping its most frequent words); the Scrabble list is kept
 whole at Medium and Hard, and limited to its words with a known
 inflection at Easy. When the language has its usage scores, the
-difficulty instead picks words by usage score: Easy keeps the Scrabble
-words rated 3 and more (likely proper nouns left out), Medium the
-Scrabble words rated 2 and more plus the everyday-vocabulary words
-missing from the Scrabble list that are rated 2 and more and among the
-80 % most frequent, Hard every word of both lists. A word is never
+difficulty combines that score with the frequency selection: Easy keeps
+the Scrabble words rated 3 and more, plus the words of its frequency
+selection (75 % most frequent, with a definition, no likely proper noun)
+rated 2 and more; Medium the Scrabble words rated 2 and more, plus the
+words of the 85 % most frequent rated 1 and more; Hard every word of both
+lists. A word is never
 used twice in a grid, and neither are two words sharing a base form (their
 lemma in the dictionary): once EST ("is") is placed in French, ETE and ETAIT (other forms of "être") are
 no longer candidates anywhere, and once ELM is placed, ELMS is out

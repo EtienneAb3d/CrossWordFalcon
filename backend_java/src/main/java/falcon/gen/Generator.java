@@ -11,6 +11,7 @@ import falcon.gen.Words.PW;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -134,80 +135,201 @@ public final class Generator {
     private static final Map<String, Loaded> LOADED = new ConcurrentHashMap<>();
     private static final int LOADED_CACHE_MAX = 8;
 
-    /** The Loaded lexicon of {@code path} for {@code difficulty}, the Scrabble wordlist merged in, cached per
-     * (path, cut, difficulty) key (mirrors load_lexicon): with no explicit {@code maxWords} and a language with a
-     * usage-score file, the whole freq and Scrabble wordlists cut to the words rated at least
-     * USAGE_DIFFICULTY_MIN_SCORE (Scrabble words only at "easy", likely proper nouns excluded, with no quota word set; at "medium" also the
-     * freq words absent from the Scrabble wordlist rated in its out file and kept by the DIFFICULTY_PRESETS cut; no cut
-     * at "hard");
-     * otherwise cut to {@code maxWords}, else to DIFFICULTY_PRESETS, "easy" filters on at "easy". */
-    public static Loaded load(String path, Number maxWords, String difficulty) throws IOException {
+    /** The words of a lexicon before indexing (mirrors _select_lexicon's result). */
+    private record Selection(Map<Integer, List<String>> byLength, Words.Lexicon lex, Set<String> scrabble,
+                             Map<String, Integer> usageScores, Set<String> properNouns, Set<String> nonGloss) {}
+
+    /** The cache key of a lexicon (mirrors _lexicon_params): selected by usage score, or cut to {@code maxWords},
+     * else to DIFFICULTY_PRESETS, "easy" filters on at "easy". */
+    private static String lexiconKey(String path, Number maxWords, String difficulty) {
+        boolean byUsage = maxWords == null && Words.usageLexiconActive(Words.langFromPath(path), difficulty);
+        Number mw = byUsage ? null : (maxWords != null ? maxWords : Words.DIFFICULTY_PRESETS.get(difficulty));
+        boolean easy = !byUsage && "easy".equals(difficulty);
+        return path + "|" + mw + "|" + easy + "|" + (byUsage ? difficulty : null);
+    }
+
+    /** The words of {@code path}'s lexicon for {@code difficulty} (mirrors _select_lexicon): with no explicit
+     * {@code maxWords} and a language with a usage-score file, the whole freq and Scrabble wordlists cut to the union
+     * of the Scrabble words rated at least USAGE_DIFFICULTY_MIN_SCORE and the words kept by the freq wordlist's own
+     * DIFFICULTY_PRESETS cut ("easy": definition required, likely proper nouns excluded) rated at least
+     * FREQ_CUT_USAGE_LENIENCY less (an unrated word dropped either way); no cut at "hard"; no
+     * quota word set at "easy". Otherwise cut to {@code maxWords}, else to DIFFICULTY_PRESETS, "easy" filters on at
+     * "easy". */
+    private static Selection select(String path, Number maxWords, String difficulty) throws IOException {
         String lang = Words.langFromPath(path);
         boolean byUsage = maxWords == null && Words.usageLexiconActive(lang, difficulty);
         Number mw = byUsage ? null : (maxWords != null ? maxWords : Words.DIFFICULTY_PRESETS.get(difficulty));
         boolean easy = !byUsage && "easy".equals(difficulty);
-        String key = path + "|" + mw + "|" + easy + "|" + (byUsage ? difficulty : null);
+        Words.Lexicon lex = Words.loadWordlist(path, mw, easy, easy);
+        // The Scrabble wordlist joins the lexicon (merge_scrabble_lexicon).
+        Set<String> scrabble = Words.mergeScrabbleLexicon(lang, lex, Grids.NOISE_FREQUENCY_THRESHOLD, easy);
+        Map<String, Integer> usageScores = Words.loadUsageScores(lang);
+        Map<Integer, List<String>> byLength = lex.byLength();
+        Set<String> proper = new HashSet<>(lex.properNouns());
+        Set<String> nonGloss = new HashSet<>(lex.nonGloss());
+        if (byUsage) {
+            Integer minScore = Words.USAGE_DIFFICULTY_MIN_SCORE.get(difficulty);
+            if (minScore != null) {
+                // Usage criterion (Scrabble words), or the freq wordlist's own cut with one point less.
+                boolean freqEasy = "easy".equals(difficulty);
+                Set<String> freqCut = new HashSet<>();
+                for (List<String> ws : Words.loadWordlist(path, Words.DIFFICULTY_PRESETS.get(difficulty),
+                        freqEasy, freqEasy).byLength().values()) freqCut.addAll(ws);
+                Map<Integer, List<String>> kept = new LinkedHashMap<>();
+                byLength.forEach((len, words) -> {
+                    List<String> k = new ArrayList<>();
+                    for (String w : words) {
+                        int score = usageScores.getOrDefault(w, Words.USAGE_SCORE_UNKNOWN);
+                        if ((score >= minScore && scrabble.contains(w))
+                                || (score >= minScore - Words.FREQ_CUT_USAGE_LENIENCY && freqCut.contains(w))) k.add(w);
+                    }
+                    if (!k.isEmpty()) kept.put(len, k);
+                });
+                byLength = kept;
+            }
+            // The "medium" and "hard" quotas still apply.
+            if ("easy".equals(difficulty)) {
+                proper.clear();
+                nonGloss.clear();
+            }
+        }
+        return new Selection(byLength, lex, scrabble, usageScores, proper, nonGloss);
+    }
+
+    /** The Loaded lexicon of {@code path} for {@code difficulty} ({@link #select}), the Scrabble wordlist merged in,
+     * cached per (path, cut, easy, usage-selected difficulty) key (mirrors load_lexicon). */
+    public static Loaded load(String path, Number maxWords, String difficulty) throws IOException {
+        String lang = Words.langFromPath(path);
+        String key = lexiconKey(path, maxWords, difficulty);
         Loaded l = LOADED.get(key);
         if (l != null) return l;
         synchronized (LOADED) {
             l = LOADED.get(key);
             if (l != null) return l;
-            Words.Lexicon lex = Words.loadWordlist(path, mw, easy, easy);
-            // The Scrabble wordlist joins the lexicon (merge_scrabble_lexicon).
-            Set<String> scrabble = Words.mergeScrabbleLexicon(lang, lex, Grids.NOISE_FREQUENCY_THRESHOLD, easy);
+            Selection sel = select(path, maxWords, difficulty);
             String[] sources = {path, lang == null ? null : Words.scrabbleWordlistPath(lang).toString()};
-            Map<String, Integer> usageScores = Words.loadUsageScores(lang);
-            Map<Integer, List<String>> byLength = lex.byLength();
-            Set<String> proper = new HashSet<>(lex.properNouns());
-            Set<String> nonGloss = new HashSet<>(lex.nonGloss());
-            if (byUsage) {
-                Integer minScore = Words.USAGE_DIFFICULTY_MIN_SCORE.get(difficulty);
-                Set<String> excluded = new HashSet<>();
-                if ("easy".equals(difficulty)) {
-                    excluded.addAll(proper);
-                    excluded.removeAll(scrabble);
-                }
-                // "medium": a freq word absent from the Scrabble wordlist stays under the freq wordlist's own
-                // "medium" cut.
-                Set<String> freqCut = null;
-                if ("medium".equals(difficulty)) {
-                    freqCut = new HashSet<>();
-                    for (List<String> ws : Words.loadWordlist(path, Words.DIFFICULTY_PRESETS.get("medium"), false, false)
-                            .byLength().values()) freqCut.addAll(ws);
-                }
-                Set<String> cut = freqCut;
-                if (minScore != null || !excluded.isEmpty()) {
-                    Map<Integer, List<String>> kept = new LinkedHashMap<>();
-                    byLength.forEach((len, words) -> {
-                        List<String> k = new ArrayList<>();
-                        for (String w : words) {
-                            if (excluded.contains(w)) continue;
-                            if (minScore != null
-                                    && (usageScores.getOrDefault(w, Words.USAGE_SCORE_UNKNOWN) < minScore
-                                    || !(scrabble.contains(w) || (cut != null && cut.contains(w))))) continue;
-                            k.add(w);
-                        }
-                        if (!k.isEmpty()) kept.put(len, k);
-                    });
-                    byLength = kept;
-                }
-                // The "medium" and "hard" quotas still apply.
-                if ("easy".equals(difficulty)) {
-                    proper.clear();
-                    nonGloss.clear();
-                }
-            }
-            Map<Integer, LenIndex> idx = Words.buildIndex(byLength, lex.frequencies(),
-                    Words.loadDictionaryFrequencies(path), lex.refs(), sources, usageScores);
-            Words.attachLemmas(idx, lex.refs(), sources);
+            Map<Integer, LenIndex> idx = Words.buildIndex(sel.byLength(), sel.lex().frequencies(),
+                    Words.loadDictionaryFrequencies(path), sel.lex().refs(), sources, sel.usageScores());
+            Words.attachLemmas(idx, sel.lex().refs(), sources);
             // A Scrabble word is valid at every difficulty: never counted against either quota.
-            proper.removeAll(scrabble);
-            nonGloss.removeAll(scrabble);
-            l = new Loaded(idx, Collections.unmodifiableSet(proper), Collections.unmodifiableSet(nonGloss), scrabble);
+            Set<String> proper = sel.properNouns();
+            Set<String> nonGloss = sel.nonGloss();
+            proper.removeAll(sel.scrabble());
+            nonGloss.removeAll(sel.scrabble());
+            l = new Loaded(idx, Collections.unmodifiableSet(proper), Collections.unmodifiableSet(nonGloss),
+                    sel.scrabble());
             if (LOADED.size() >= LOADED_CACHE_MAX) LOADED.clear();
             LOADED.put(key, l);
             return l;
         }
+    }
+
+    /** The words of one lexicon packed for membership tests (mirrors LexiconWords): sorted, joined by newlines into
+     * one ASCII byte array, with each word's start offset (a final sentinel past the end). */
+    public static final class LexiconWords {
+        private final byte[] text;
+        private final int[] starts;
+
+        LexiconWords(Collection<String> words) {
+            String[] ordered = new TreeSet<>(words).toArray(new String[0]);
+            starts = new int[ordered.length + 1];
+            int pos = 0;
+            for (int i = 0; i < ordered.length; i++) {
+                starts[i] = pos;
+                pos += ordered[i].length() + 1;
+            }
+            starts[ordered.length] = pos;
+            text = new byte[pos];
+            for (int i = 0; i < ordered.length; i++) {
+                byte[] w = ordered[i].getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+                System.arraycopy(w, 0, text, starts[i], w.length);
+                text[starts[i] + w.length] = '\n';
+            }
+        }
+
+        public int size() {
+            return starts.length - 1;
+        }
+
+        private int compareAt(int i, byte[] word) {
+            int from = starts[i];
+            int len = starts[i + 1] - from - 1;
+            return java.util.Arrays.compare(text, from, from + len, word, 0, word.length);
+        }
+
+        public boolean contains(String word) {
+            byte[] w = word.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+            int lo = 0;
+            int hi = size();
+            while (lo < hi) {
+                int mid = (lo + hi) >>> 1;
+                int c = compareAt(mid, w);
+                if (c == 0) return true;
+                if (c < 0) lo = mid + 1;
+                else hi = mid;
+            }
+            return false;
+        }
+
+        /** {word length: number of words}. */
+        public Map<Integer, Integer> lengthCounts() {
+            Map<Integer, Integer> counts = new TreeMap<>();
+            for (int i = 0; i < size(); i++) counts.merge(starts[i + 1] - starts[i] - 1, 1, Integer::sum);
+            return counts;
+        }
+    }
+
+    private static final Map<String, LexiconWords> LEXICON_WORDS = new ConcurrentHashMap<>();
+
+    /** {"path|difficulty": LexiconWords} of the lexicon of each (path, difficulty) of {@code pairs} ({@link #select},
+     * no explicit cut), for the Dictionnaire panel's per-word difficulties and the usage-score statistics panel; each
+     * pair is computed once per process, the missing ones in parallel, one per thread (mirrors lexicon_words). */
+    public static Map<String, LexiconWords> lexiconWords(List<String[]> pairs) throws IOException {
+        synchronized (LEXICON_WORDS) {
+            List<String[]> missing = new ArrayList<>();
+            Set<String> seen = new HashSet<>();
+            for (String[] p : pairs) {
+                String key = p[0] + "|" + p[1];
+                if (!LEXICON_WORDS.containsKey(key) && seen.add(key)) missing.add(p);
+            }
+            if (!missing.isEmpty()) {
+                ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, Math.min(missing.size(),
+                        Runtime.getRuntime().availableProcessors())));
+                try {
+                    Map<String, Future<LexiconWords>> futures = new LinkedHashMap<>();
+                    for (String[] p : missing) {
+                        futures.put(p[0] + "|" + p[1], pool.submit(() -> {
+                            List<String> all = new ArrayList<>();
+                            for (List<String> ws : select(p[0], null, p[1]).byLength().values()) all.addAll(ws);
+                            return new LexiconWords(all);
+                        }));
+                    }
+                    for (Map.Entry<String, Future<LexiconWords>> e : futures.entrySet()) {
+                        try {
+                            LEXICON_WORDS.put(e.getKey(), e.getValue().get());
+                        } catch (InterruptedException ex) {
+                            Thread.currentThread().interrupt();
+                            throw new IOException(ex);
+                        } catch (ExecutionException ex) {
+                            throw new IOException(ex.getCause());
+                        }
+                    }
+                } finally {
+                    pool.shutdown();
+                }
+            }
+            Map<String, LexiconWords> out = new LinkedHashMap<>();
+            for (String[] p : pairs) out.put(p[0] + "|" + p[1], LEXICON_WORDS.get(p[0] + "|" + p[1]));
+            return out;
+        }
+    }
+
+    /** {"path|difficulty": {word length: number of words}} of each pair's lexicon ({@link #lexiconWords}; mirrors
+     * lexicon_length_counts). */
+    public static Map<String, Map<Integer, Integer>> lexiconLengthCounts(List<String[]> pairs) throws IOException {
+        Map<String, Map<Integer, Integer>> out = new LinkedHashMap<>();
+        lexiconWords(pairs).forEach((k, v) -> out.put(k, v.lengthCounts()));
+        return out;
     }
 
     // ================================================================== worker context

@@ -245,23 +245,23 @@ easy)`; `scrabble_words_for_languages(..., difficulty)` applies
 inflection keys are read only while that selection is made, never cached.
 Not applied to a language whose lexicon is selected by usage score (below).
 
-**Lexicon selected by usage score**: when the language has
+**Lexicon selected by usage score and frequency**: when the language has
 `data/usage_score_<lang>_scrabble.tsv` and no explicit `max_words` is
 given (`usage_lexicon_active`, Java `Words.usageLexiconActive`),
 `load_lexicon(path, max_words, difficulty)` (Java `Generator.load(path,
-maxWords, difficulty)`) loads the whole freq and Scrabble wordlists, then
-keeps the words rated at least `USAGE_DIFFICULTY_MIN_SCORE[difficulty]`
-(easy 3, medium 2, hard `None` = every word; an unrated word is dropped
-at easy/medium):
-- easy: Scrabble words only, likely proper nouns (`load_wordlist`'s
-  capitalized-ACCENTUE set minus the Scrabble words) excluded, no quota
-  set (`proper_nouns`/`non_gloss` empty) — the `DIFFICULTY_PRESETS` cut,
-  the gloss requirement and the inflection filter above are ignored;
-- medium: the Scrabble words, plus the freq words absent from the Scrabble
-  wordlist rated in `data/usage_score_<lang>_scrabble_out.tsv` and kept by
-  the freq wordlist's own `DIFFICULTY_PRESETS["medium"]` cut (a second
-  `load_wordlist(path, 0.80)`); the `MAX_PROPER_NOUNS`/`MAX_NON_GLOSS_WORDS`
-  medium quotas (2) apply;
+maxWords, difficulty)`), through `_select_lexicon` (Java `Generator.
+select`), loads the whole freq and Scrabble wordlists, then keeps the union
+of two criteria (a word with no usage score is dropped at easy/medium):
+a Scrabble word rated at least `USAGE_DIFFICULTY_MIN_SCORE[difficulty]`
+(easy 3, medium 2, hard `None` = every word), or a word kept by the freq
+wordlist's own `DIFFICULTY_PRESETS[difficulty]` cut (a second
+`load_wordlist`) rated at least `FREQ_CUT_USAGE_LENIENCY` (1) point less
+(easy 2, medium 1; its score from either usage-score file):
+- easy: the freq cut is `load_wordlist(path, 0.75, require_gloss=True,
+  exclude_proper_nouns=True)`; no quota set (`proper_nouns`/`non_gloss`
+  empty) — the Scrabble inflection filter above is ignored;
+- medium: the freq cut is `load_wordlist(path, 0.85)`; the
+  `MAX_PROPER_NOUNS`/`MAX_NON_GLOSS_WORDS` medium quotas (2) apply;
 - hard: every word, the hard quotas (5) apply.
 A language without the file keeps the rules above.
 
@@ -406,7 +406,11 @@ json`. Holds all server-side state in plain module dicts/lists:
   `puz_export.py`),
   `POST /api/game/save` (autosave play state to `GRID_GAME`), `GET
   /api/game/leaderboard/{grid_id}` (players' ranking on that grid).
-- *Dictionary/paraphrase*: `GET /api/dictionary` (root-family search),
+- *Dictionary/paraphrase*: `GET /api/dictionary` (root-family search;
+  each row also carries `levels`, the difficulties whose lexicon holds its
+  grid form — `app._dictionary_search_with_levels`, `dictionary_lookup.
+  grid_form`, `crossword_gen.lexicon_words`; Java `DictionaryLookup.
+  gridForm`, `Generator.lexiconWords`),
   `GET /api/dictionary/define` (LLM candidate definitions), `GET /api/
   paraphrase` (LLM paraphrases), `GET /api/correct` (LLM proofreading of
   one typed definition or title, Interactive mode's "Corriger"), `GET /api/similar_words` (LLM-expanded +
@@ -444,13 +448,24 @@ json`. Holds all server-side state in plain module dicts/lists:
   qdrant/admin/delete-tenant`.
 - *Usage-score statistics* (localhost-only, gated by `frontend/server.py`):
   `GET /api/usage_stats` (`usage_scores.usage_score_counts`, Java
-  `UsageScores.usageScoreCounts`: `{scores, languages: [{language, counts,
-  total, length_counts}], lengths}`, every score found in ascending order,
-  one count per score, both usage-score files of each language counted;
-  `lengths` every word length of the words rated at least
-  `LENGTH_STATS_MIN_SCORE` (3), longest first, `length_counts` one count of
-  such words per length; `counts`/`total`/`length_counts` null for a
-  language with neither file).
+  `UsageScores.usageScoreCounts`: `{scores, levels, languages: [{language,
+  counts, total, length_counts, level_totals, easy_length_counts}],
+  lengths}`, every score found in ascending order, one count per score,
+  both usage-score files of each language counted; `levels` easy/medium/
+  hard, `level_totals` the size of each difficulty's lexicon
+  (`crossword_gen.lexicon_length_counts`, Java `Generator.
+  lexiconLengthCounts`, per length, from `lexicon_words`/`Generator.
+  lexiconWords`: each (language, difficulty) lexicon's words
+  (`_select_lexicon`) packed as one sorted newline-joined string with an
+  `array('I')` of offsets — `LexiconWords`, Java `byte[]` + `int[]`,
+  binary-searched — a few bytes per word, computed once per process, the
+  missing pairs in parallel, one worker process / thread each); `lengths` every word length of the
+  words rated at least `LENGTH_STATS_MIN_SCORE` (3) or of an easy lexicon,
+  longest first, `length_counts` one count of such rated words per length,
+  `easy_length_counts` the easy lexicon's words per length;
+  `counts`/`total`/`length_counts` null for a language with neither file).
+  Its proxy route has its own `USAGE_STATS_PROXY_TIMEOUT_S` (150 s), the
+  page its `USAGE_STATS_FETCH_TIMEOUT_MS` (160 s).
 - *STOP_DUMP records* (localhost-only, gated by `frontend/server.py`):
   `GET /api/stop_dumps` (`{items}`, `grid_store.list_stop_dumps`, Java
   `GridStore.listStopDumps`: per record its id, pseudo, `stopped_at`, the
@@ -508,7 +523,7 @@ proper_nouns, non_gloss)`; `build_index()` turns that into a `(length,
 position, letter) → word set` index for fast domain computation, and
 `load_lexicon()` caches the result per process (see "What a lexicon keeps
 in memory" above). `DIFFICULTY_
-PRESETS = {easy: 0.66, medium: 0.80, hard: 1.0}` are *fractions* of the
+PRESETS = {easy: 0.75, medium: 0.85, hard: 1.0}` are *fractions* of the
 gloss-filtered lexicon kept (not fixed counts, so the effect is
 comparable across languages with very different vocabulary sizes); "easy"
 additionally requires a findable Wiktionary gloss and excludes likely
@@ -3013,7 +3028,7 @@ state, unlike the backend).
   clicked);
   `#usage-stats-btn` toggles the `#usage-stats` panel (`loadUsageStats`/
   `renderUsageStats`: one row per language, one column per usage score,
-  then the words rated 3 or more (`USAGE_STATS_MIN_SCORE`), then the total, from `GET /api/usage_stats`; below it `renderUsageLengthStats`: the words rated 3 or more per word length, one row per length, longest first, one column per language); `#mode` lists only the budget modes (flash … gridzilla),
+  then the words rated 3 or more (`USAGE_STATS_MIN_SCORE`), then the total, then one column per difficulty (`level_totals`, headed by the `difficulty*` names; "Total ≥ 3" and "Facile" bold, `.usage-stats-strong`), from `GET /api/usage_stats`; below it `renderUsageLengthStats`: per word length, one row per length, longest first, one column per language, "rated 3 or more / easy lexicon" in each cell); `#mode` lists only the budget modes (flash … gridzilla),
   also read by "Finir la grille"/"Finir la zone".
   While a playable grid is on screen (`displayFinalGrid`), the creation
   form is folded (`#generate-form.play-collapsed`, `setGenerateFormCollapsed`
@@ -3126,7 +3141,9 @@ state, unlike the backend).
   grids" button; a grid displayed with `archived: true` shows the red
   `#grid-archived-warning` above its title, `displayFinalGrid`);
   the dictionary panel (root-family search, each form's "usage : X/5"
-  line under it when its usage score is known, "Définir", "Thématique"/
+  line under it when its usage score is known, then "Niveau : Facile,
+  Moyen, Difficile" — `gridDifficulty` over the row's `levels`,
+  `dictionaryLevelNone` when empty —, "Définir", "Thématique"/
   "Synonymes", bilingual-aware); the chatbot UI (Markdown rendering,
   incremental streaming, live UI-context snapshot sent as grounding,
   open/collapsed state persisted in its own `cwf-chatbot-state` cookie —

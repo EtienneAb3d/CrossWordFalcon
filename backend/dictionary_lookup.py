@@ -140,6 +140,11 @@ def _definitions_for(canonicals, gloss_index, show_lemma):
     return out
 
 
+def grid_form(form):
+    """The grid form (MOT column: bare, uppercase) of a row's form."""
+    return _norm(form.replace("ß", "ss")).upper()
+
+
 def search(query, language):
     """Returns {"query", "language", "rows": [...], "truncated": bool}.
 
@@ -255,6 +260,6 @@ def search(query, language):
         result["truncated"] = True
     for row in rows:
         row.pop("_canon_norm", None)
-        row["usage"] = usage_score(_norm(row["form"].replace("ß", "ss")).upper(), language)
+        row["usage"] = usage_score(grid_form(row["form"]), language)
     result["rows"] = rows
     return result

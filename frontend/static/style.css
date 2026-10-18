@@ -2446,9 +2446,9 @@ button:disabled {
   text-align: left;
 }
 
-.usage-stats-table:not(.usage-stats-lengths) td:nth-last-child(-n+2),
-.usage-stats-table:not(.usage-stats-lengths) thead th:nth-last-child(-n+2) {
-  font-weight: 600;
+/* "Total ≥ 3" and "Facile" columns (script.js's USAGE_STATS_STRONG_LEVEL). */
+.usage-stats-table .usage-stats-strong {
+  font-weight: 700;
 }
 
 /* Per-length table (script.js's renderUsageLengthStats), under the

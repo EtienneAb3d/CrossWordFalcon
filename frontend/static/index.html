@@ -245,14 +245,14 @@
         <button type="button" id="stop-btn" data-i18n="stopBtn" hidden>Stop</button>
         <button type="button" id="continue-btn" data-i18n="continueBtn" hidden>Continuer</button>
       </div>
-      <!-- "Difficulté", "Mots par pose", "Mode" and "Voir les mots (spoiler)" on a line of their own, right above
+      <!-- "Niveau", "Mots par pose", "Mode" and "Voir les mots (spoiler)" on a line of their own, right above
            the "Générer les mots croisés :" row. -->
       <div id="generate-options-row">
         <label for="difficulty">
-          <span data-i18n="difficultyLabel">Difficulté</span>
+          <span data-i18n="difficultyLabel">Niveau</span>
           <select id="difficulty" name="difficulty">
             <option value="easy" selected data-i18n="difficultyEasy">Facile</option>
-            <option value="medium" data-i18n="difficultyMedium">Moyenne</option>
+            <option value="medium" data-i18n="difficultyMedium">Moyen</option>
             <option value="hard" data-i18n="difficultyHard">Difficile</option>
           </select>
         </label>
@@ -426,7 +426,7 @@
         <select id="library-difficulty-filter" data-i18n-aria="libraryDifficultyFilterLabel">
           <option value="all" data-i18n="libraryDifficultyFilterAll">Tous les niveaux</option>
           <option value="easy" data-i18n="difficultyEasy">Facile</option>
-          <option value="medium" data-i18n="difficultyMedium">Moyenne</option>
+          <option value="medium" data-i18n="difficultyMedium">Moyen</option>
           <option value="hard" data-i18n="difficultyHard">Difficile</option>
         </select>
         <button type="button" id="library-refresh-btn" class="nav-btn"
@@ -521,7 +521,7 @@
                 data-i18n-aria="interactiveWorkCloseBtn">✕</button>
       </div>
       <!-- Same columns, in the same order, as #library-table (Langue,
-           Date, Titre, Thématique, Difficulté, Taille — see libraryCol*
+           Date, Titre, Thématique, Niveau, Taille — see libraryCol*
            in i18n.js, reused as-is here since these are exactly the
            same concepts) — at the user's explicit request.
            "Dernière modification" and the delete button, specific to

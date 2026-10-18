@@ -28,7 +28,7 @@ import java.util.regex.Pattern;
 public final class Words {
     private Words() {}
 
-    public static final Map<String, Double> DIFFICULTY_PRESETS = Map.of("easy", 0.66, "medium", 0.80, "hard", 1.0);
+    public static final Map<String, Double> DIFFICULTY_PRESETS = Map.of("easy", 0.75, "medium", 0.85, "hard", 1.0);
     public static final Map<String, Integer> MAX_PROPER_NOUNS = Map.of("easy", 0, "medium", 2, "hard", 5);
     public static final Map<String, Integer> MAX_NON_GLOSS_WORDS = Map.of("easy", 0, "medium", 2, "hard", 5);
     public static final Set<String> PROPER_NOUN_EXCLUDED_LANGS = Set.of("de");
@@ -303,13 +303,17 @@ public final class Words {
         return out;
     }
 
-    /** Minimum usage score of the words a lexicon keeps, per difficulty, for a language with a usage-score file
-     * (Generator.load): "easy" the Scrabble words rated 3 and more (likely proper nouns excluded), "medium" the
-     * Scrabble words rated 2 and more plus the freq words absent from the Scrabble wordlist rated 2 and more within
-     * the DIFFICULTY_PRESETS "medium" cut, "hard" (absent: no cut) every word of the freq and Scrabble wordlists.
-     * Replaces every other lexicon rule of that difficulty, except the "medium" and "hard" quotas (mirrors
-     * USAGE_DIFFICULTY_MIN_SCORE). */
+    /** Minimum usage score of the Scrabble words a lexicon keeps, per difficulty, for a language with a usage-score
+     * file (Generator.load), combined with the freq wordlist's own DIFFICULTY_PRESETS cut (a union, a word of that cut
+     * needing FREQ_CUT_USAGE_LENIENCY point less): "easy" the Scrabble words rated 3 and more plus the words of the
+     * "easy" cut (definition required, likely proper nouns excluded) rated 2 and more, "medium" the Scrabble words
+     * rated 2 and more plus the words of the "medium" cut rated 1 and more, an unrated word dropped, "hard" (absent:
+     * no cut) every word of the freq and Scrabble wordlists. The "easy" inflection filter and quotas are not applied;
+     * the "medium" and "hard" quotas are (mirrors USAGE_DIFFICULTY_MIN_SCORE). */
     public static final Map<String, Integer> USAGE_DIFFICULTY_MIN_SCORE = Map.of("easy", 3, "medium", 2);
+
+    /** Usage points a word of the freq wordlist's own cut needs less (mirrors FREQ_CUT_USAGE_LENIENCY). */
+    public static final int FREQ_CUT_USAGE_LENIENCY = 1;
 
     /** True when the language's lexicon at {@code difficulty} is selected by usage score (mirrors
      * usage_lexicon_active). */

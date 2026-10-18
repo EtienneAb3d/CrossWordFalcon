@@ -4680,6 +4680,15 @@ end through the real running API (interactive start/step/save,
   known — 0.85em, normal weight (the cell itself is bold), `#777` like the
   table's own header text. No new token. **Visually confirmed** with
   Playwright/Chromium: "aberrant (aberrant; aberrer)" over "usage : 5/5".
+  Below it, same class, the levels whose lexicon holds the form ("Niveau :
+  Facile, Moyen, Difficile", `gridDifficulty`; "aucun" when none).
+- **"Niveau", never "Difficulté"** — the user's rule: the difficulty is
+  called "Niveau" (masculine) everywhere — form label, grid title phrase
+  "Niveau : Moyen", Library column, PDF/SVG header (`svg_export.
+  _DIFFICULTY_LABELS`, Java `SvgExport`) — and its middle value "Moyen"
+  (en Level/Medium, de Stufe/Mittel, es Nivel/Medio, it Livello/Medio, pt
+  Nível/Médio). Older entries quoting "Difficulté"/"Moyenne" describe the
+  same controls.
 
 - **Library archiving controls** (`#library-archive-bar`,
   `#library-archived-note`, `#library-archived-warning`), at the user's
@@ -4790,8 +4799,11 @@ end through the real running API (interactive start/step/save,
   `#qdrant-admin` (header label + `.nav-btn` ✕), in the central toggling
   group (`syncRssPanelVisibility`). Its `.usage-stats-table`: one row per
   language (its own name, from `#language`'s options, left-aligned grey
-  bold row header), one column per usage score, then "Total ≥ 3" and
-  "Total" (both bold),
+  bold row header), one column per usage score, then "Total ≥ 3",
+  "Total", and one column per difficulty's lexicon size ("Facile",
+  "Moyen", "Difficile" — the `difficulty*` names); "Total ≥ 3" and
+  "Facile" are bold (700, `.usage-stats-strong`, set by `script.js` per
+  column, `USAGE_STATS_STRONG_LEVEL`), the user's rule;
   counts right-aligned in tabular digits with locale thousands
   separators, "—" for a language without scores; thin `--border` row
   dividers like `.qdrant-admin-table`. No new token. **Visually

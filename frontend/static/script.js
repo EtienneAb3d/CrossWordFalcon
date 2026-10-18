@@ -3973,6 +3973,12 @@ const DEFINE_FETCH_TIMEOUT_MS = 110000;
 // "above the callee's timeout" reasoning as the others.
 const SIMILAR_FETCH_TIMEOUT_MS = 70000;
 
+// The usage-score statistics (GET /api/usage_stats) measure every
+// difficulty's lexicon of every language on their first call per back-end
+// process. Set above frontend/server.py's own USAGE_STATS_PROXY_TIMEOUT_S
+// (150s), same reasoning.
+const USAGE_STATS_FETCH_TIMEOUT_MS = 160000;
+
 // Refresh period of the elapsed-time counters on the status line during an
 // automatic generation (pollJob()'s `timed` option).
 const STATUS_CLOCK_INTERVAL_MS = 1000;
@@ -4717,7 +4723,7 @@ function renderGridDifficulty() {
   ];
   if (key) {
     // Prefixed with "Difficulté : " (punctuation per language) rather
-    // than a bare adjective ("Moyenne"), which reads oddly with no
+    // than a bare adjective ("Moyen"), which reads oddly with no
     // context.
     gridDifficultyEl.textContent = I18N[uiLanguage].gridDifficulty(I18N[uiLanguage][key]);
     gridDifficultyEl.hidden = false;
@@ -5484,6 +5490,15 @@ function buildDictionaryResultNode(query, data) {
       usage.className = "dictionary-usage";
       usage.textContent = t.dictionaryUsage.replace("{score}", row.usage);
       c1.appendChild(usage);
+    }
+    // Levels whose lexicon holds the form ("Niveau : Facile, Moyen").
+    if (Array.isArray(row.levels)) {
+      const levels = document.createElement("div");
+      levels.className = "dictionary-usage";
+      levels.textContent = t.gridDifficulty(row.levels.length
+        ? row.levels.map((level) => t[DIFFICULTY_LABEL_KEYS[level]] || level).join(", ")
+        : t.dictionaryLevelNone);
+      c1.appendChild(levels);
     }
     tr.appendChild(c1);
 
@@ -6380,18 +6395,32 @@ function hideUsageStatsPanel() {
 // Lowest score counted by the panel's "≥ 3" total column.
 const USAGE_STATS_MIN_SCORE = 3;
 
+// Difficulty whose lexicon-size column is bold, like the "≥ 3" one.
+const USAGE_STATS_STRONG_LEVEL = "easy";
+
+// I18N key of each difficulty's name.
+const DIFFICULTY_LABEL_KEYS = { easy: "difficultyEasy", medium: "difficultyMedium", hard: "difficultyHard" };
+
 function renderUsageStats(data) {
   const t = I18N[uiLanguage];
   const fmt = (n) => (n == null ? "—" : Number(n).toLocaleString(uiLanguage));
   const table = document.createElement("table");
   table.className = "usage-stats-table";
   const headRow = document.createElement("tr");
-  for (const label of [t.usageStatsColLang, ...data.scores.map(String),
-    t.usageStatsColTotalMin(USAGE_STATS_MIN_SCORE), t.usageStatsColTotal]) {
+  const levels = data.levels || [];
+  // Bold columns: "Total ≥ 3" and the easy lexicon's size.
+  const minColumn = 1 + data.scores.length;
+  const strongColumns = new Set([minColumn,
+    ...levels.map((level, i) => (level === USAGE_STATS_STRONG_LEVEL ? minColumn + 2 + i : -1))]);
+  const headLabels = [t.usageStatsColLang, ...data.scores.map(String),
+    t.usageStatsColTotalMin(USAGE_STATS_MIN_SCORE), t.usageStatsColTotal,
+    ...levels.map((level) => t[DIFFICULTY_LABEL_KEYS[level]] || level)];
+  headLabels.forEach((label, i) => {
     const th = document.createElement("th");
     th.textContent = label;
+    if (strongColumns.has(i)) th.className = "usage-stats-strong";
     headRow.appendChild(th);
-  }
+  });
   table.createTHead().appendChild(headRow);
   const body = table.createTBody();
   for (const row of data.languages) {
@@ -6403,23 +6432,26 @@ function renderUsageStats(data) {
       || row.language;
     tr.appendChild(name);
     const cells = row.counts ? row.counts : data.scores.map(() => null);
-    // Words rated USAGE_STATS_MIN_SCORE or more (the easy-difficulty lexicon).
+    // Words rated USAGE_STATS_MIN_SCORE or more.
     const atLeastMin = row.counts
       ? row.counts.reduce((sum, n, i) => sum + (data.scores[i] >= USAGE_STATS_MIN_SCORE ? n : 0), 0)
       : null;
-    for (const n of [...cells, atLeastMin, row.total]) {
+    // Words of each difficulty's lexicon (usage score and freq cut combined).
+    const levelTotals = row.level_totals || levels.map(() => null);
+    [...cells, atLeastMin, row.total, ...levelTotals].forEach((n, i) => {
       const td = document.createElement("td");
       td.textContent = fmt(n);
+      if (strongColumns.has(i + 1)) td.className = "usage-stats-strong";
       tr.appendChild(td);
-    }
+    });
     body.appendChild(tr);
   }
   usageStatsBody.replaceChildren(table, renderUsageLengthStats(data, fmt));
 }
 
 // Words rated at least USAGE_STATS_MIN_SCORE per word length (the backend's
-// LENGTH_STATS_MIN_SCORE): one row per length, longest first, one column per
-// language.
+// LENGTH_STATS_MIN_SCORE) / words of the easy-difficulty lexicon of that
+// length: one row per length, longest first, one column per language.
 function renderUsageLengthStats(data, fmt) {
   const t = I18N[uiLanguage];
   const wrap = document.createElement("div");
@@ -6449,7 +6481,8 @@ function renderUsageLengthStats(data, fmt) {
     tr.appendChild(th);
     for (const row of data.languages) {
       const td = document.createElement("td");
-      td.textContent = fmt(row.length_counts ? row.length_counts[i] : null);
+      td.textContent = `${fmt(row.length_counts ? row.length_counts[i] : null)} / ${
+        fmt(row.easy_length_counts ? row.easy_length_counts[i] : null)}`;
       tr.appendChild(td);
     }
     body.appendChild(tr);
@@ -6468,7 +6501,7 @@ async function loadUsageStats() {
   };
   usageStatsBody.replaceChildren(para(t.usageStatsLoading));
   try {
-    const response = await fetchWithTimeout("/api/usage_stats", {}, FETCH_TIMEOUT_MS);
+    const response = await fetchWithTimeout("/api/usage_stats", {}, USAGE_STATS_FETCH_TIMEOUT_MS);
     if (!response.ok) throw new Error();
     renderUsageStats(await response.json());
   } catch (err) {

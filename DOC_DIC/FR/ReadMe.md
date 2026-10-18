@@ -555,14 +555,17 @@ Ses mots s'ajoutent à la part du dictionnaire de fréquences retenue pour
 ce niveau, avec la référence de leur ligne, hors quotas de noms
 propres et de mots sans définition. Quand la langue a ses scores d'usage
 (`data/usage_score_<langue>_scrabble.tsv`), les deux dictionnaires sont
-versés en entier et la difficulté ne retient que les mots Scrabble notés 3
-et plus en facile (noms propres probables exclus) ; en moyen, les mots
-Scrabble notés 2 et plus, plus les mots de la liste de fréquences absents
-du Scrabble notés 2 et plus (`data/usage_score_<langue>_scrabble_out.tsv`)
-qui restent dans la coupe de fréquence du niveau moyen
-(`DIFFICULTY_PRESETS`, 80 %) ; tous en difficile (`load_lexicon`,
-`USAGE_DIFFICULTY_MIN_SCORE`). Les autres règles ci-dessus ne
-s'appliquent plus, sauf les quotas des niveaux moyen et difficile. La génération essaie en priorité ses
+versés en entier et la difficulté combine les deux critères : un mot est
+retenu s'il est un mot Scrabble noté au moins 3 en facile, 2 en moyen
+(`USAGE_DIFFICULTY_MIN_SCORE`), ou s'il est dans la coupe de fréquence du
+niveau (`DIFFICULTY_PRESETS` : 75 % avec définition exigée et noms propres
+probables exclus en facile, 85 % en moyen) et noté un point de moins, 2 en
+facile, 1 en moyen (`FREQ_CUT_USAGE_LENIENCY` ; un mot du corpus absent du
+Scrabble est noté dans `data/usage_score_<langue>_scrabble_out.tsv`) ; tous
+en difficile (`backend/crossword_gen.py`, `_select_lexicon`). Un mot sans
+score est écarté en facile et en moyen. Le filtre des formes fléchies du
+niveau facile ne s'applique plus ; les quotas des niveaux moyen et
+difficile restent. La génération essaie en priorité ses
 mots (voir `DOC_ALGO/FR/ReadMe.md`, « Choisir quel mot essayer »).
 
 ## Scores d'usage

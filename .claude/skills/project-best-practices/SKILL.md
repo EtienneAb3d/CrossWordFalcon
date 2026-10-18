@@ -972,8 +972,8 @@ project's engineering language.
   silently return zero examples for every accented word, a real bug fixed
   once already.
 - `DIFFICULTY_PRESETS` (`backend/crossword_gen.py`) are *fractions* of each
-  language's own gloss-filtered lexicon, not fixed word counts: easy=0.66,
-  medium=0.80, hard=1.0 (uncapped). A fixed count doesn't have a comparable
+  language's own gloss-filtered lexicon, not fixed word counts: easy=0.75,
+  medium=0.85, hard=1.0 (uncapped). A fixed count doesn't have a comparable
   effect across languages with very different vocabulary sizes (e.g.
   French ~127k words vs. German ~436k due to heavy compounding). "Easy"
   additionally requires a findable gloss (`require_gloss=True`) — the
@@ -1800,39 +1800,31 @@ the current defaults/behavior to know before touching this code.
   like any other word — its usage score when the file rates it, even when
   it is absent from the grid's lexicon (`usage_scores_of`), else −3. The Dictionnaire panel shows "usage : X/5" under
   each rated form.
-- **With usage scores, the difficulty selects the lexicon by usage score
-  alone** (`USAGE_DIFFICULTY_MIN_SCORE`, `load_lexicon`, Java
-  `Generator.load`) — the user's rule: "si un score d'usage existe pour la
-  langue, prendre tous les mots en fonction de leur score d'usage (et
-  ignorer les autres règles) : Facile : mots avec un score 3 et plus, noms
-  propres exclus. Moyen : mots avec un score 2 et plus. Difficile : tous
-  les mots Scrabble + FREQ." Choices made with the rule, to revisit with
-  the user: "the other rules" are the `DIFFICULTY_PRESETS` cut, the easy
-  gloss requirement, the easy inflection filter of the Scrabble words and
-  the Easy/Medium `MAX_PROPER_NOUNS`/`MAX_NON_GLOSS_WORDS` quotas — the
-  user's rule keeps the Hard quotas (5 proper nouns, 5 words with no
-  definition); the in-search 60 %
-  usage filter and the content-score correction stay; an unrated word
-  (every freq-only word) is dropped at Easy/Medium; "proper nouns" is the
-  existing signal (capitalized freq ACCENTUE, Scrabble words exempt), so
-  it removes nothing, Easy keeping only Scrabble words; an explicit CLI
-  `--max-words` keeps the old cut.
-- **Medium also takes the rated freq words absent from the Scrabble list**
-  — the user's rule: "identifier les mots FREQ qui ne sont pas dans
-  Scrabble, et calculer leur score d'usage à mettre dans
-  data/usage_score_fr_scrabble_out.tsv. Utiliser ces mots dans le mode
-  moyen, en rétablissant les règles qui peuvent les concerner (celles
-  appliquées quand il n'y a pas de score d'usage)."
-  (`build_usage_scores.py --source out`, `load_lexicon`). Choices made
-  with the rule, to revisit with the user: the out file is named
-  `usage_score_<lang>_scrabble_out.tsv` for every language and
-  `build_<lang>.sh` step 8 produces it; such a word joins at a score of 2
-  and more and only within the freq wordlist's medium cut
-  (`DIFFICULTY_PRESETS`, 80 %); the medium quotas (2 proper nouns, 2 words
-  with no definition) apply again; its score also feeds the in-search 60 %
-  filter, the content-score correction, the "Mots Défi" scoring and the
-  Dictionnaire panel, like a Scrabble word's (so at Hard these words are
-  no longer "unrated"); Easy and Hard are otherwise unchanged.
+- **With usage scores, the difficulty combines usage score and frequency**
+  (`USAGE_DIFFICULTY_MIN_SCORE`, `FREQ_CUT_USAGE_LENIENCY`,
+  `_select_lexicon`/`load_lexicon`, Java `Generator.select`/`load`) — the
+  user's rules: "combiner les 2 critères Usage+FREQ (au lieu de les
+  exclure)", and "si un mot est dans le lot des mots acceptés par la règle
+  Freq, accepter un niveau Usage de moins que la règle actuelle (en niveau
+  facile, un mot Usage=2 passe, s'il est dans la sélection Freq>=0.66, mais
+  pas un mot Usage=1 ou 0)". A word is kept when it is a Scrabble word
+  rated at least the level's threshold (Easy 3, Medium 2), or a word of
+  the freq wordlist's own `DIFFICULTY_PRESETS` cut (the rules applied with
+  no usage score: Easy 75 % with a definition and no likely proper noun,
+  Medium 85 %) rated one point less; Hard keeps every word of both lists.
+  Choices made with the rules, to revisit with the user: "combine" is a
+  union (the user's answer); the first criterion stays Scrabble-only, as
+  before; an unrated word is dropped at Easy/Medium in both criteria; a
+  freq-only word gets its score from `usage_score_<lang>_scrabble_out.tsv`
+  (`build_usage_scores.py --source out`, `build_<lang>.sh` step 8); the
+  easy inflection filter of the Scrabble words and the Easy quotas are not
+  applied (nothing they would catch enters), the Medium/Hard quotas (2 and
+  5 proper nouns, words with no definition) apply; the in-search 60 %
+  usage filter and the content-score correction stay; an explicit CLI
+  `--max-words` keeps the old cut. The localhost-only usage-score
+  statistics panel shows each difficulty's lexicon size (one column per
+  level after "Total") and, per length, "rated ≥ 3 / Easy lexicon", the
+  user's rule; those sizes are measured once per back-end process.
 - **An unaccented spelling is looked up accents aside.** The Scrabble
   lists carry no accents, so a wordlist row (freq or Scrabble) whose
   ACCENTUE holds no accent has unknown accents: the user's rule is that

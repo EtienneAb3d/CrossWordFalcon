@@ -119,7 +119,7 @@ Le lexique réunit deux dictionnaires par langue :
 
 - `data/wordlist_<langue>_freq.tsv`, issu du corpus, avec ses fréquences :
   la difficulté n'en garde que les mots les plus fréquents
-  (`DIFFICULTY_PRESETS` : 66 % en facile, 80 % en moyen, tout en
+  (`DIFFICULTY_PRESETS` : 75 % en facile, 85 % en moyen, tout en
   difficile), et le niveau facile en retire aussi les mots sans définition
   et les noms propres probables (`load_wordlist`) ;
 - `data/wordlist_<langue>_scrabble.tsv`, le dictionnaire Scrabble, versé
@@ -135,21 +135,25 @@ Le lexique réunit deux dictionnaires par langue :
   par `load_lexicon`).
 
 Quand la langue a un fichier de scores d'usage
-(`data/usage_score_<langue>_scrabble.tsv`), la difficulté choisit les mots
-**par leur score d'usage seul**, et toutes les règles ci-dessus sont
-ignorées (coupe `DIFFICULTY_PRESETS`, définition exigée et filtre des
-formes fléchies au niveau facile, quotas `MAX_PROPER_NOUNS` et
-`MAX_NON_GLOSS_WORDS` au niveau facile — ceux des niveaux moyen et
-difficile, 2 et 5 noms propres et mots sans définition au plus, restent
-appliqués) : les deux dictionnaires sont versés en entier, puis le niveau
-facile ne garde que les mots Scrabble notés 3 et plus, noms propres
-probables exclus ; le niveau moyen garde les mots Scrabble notés 2 et plus
-et les mots du corpus absents du Scrabble notés 2 et plus
-(`data/usage_score_<langue>_scrabble_out.tsv`) qui restent dans sa coupe
-de fréquence (`DIFFICULTY_PRESETS`, 80 %) ; le niveau difficile garde tous
-les mots, Scrabble et corpus (`USAGE_DIFFICULTY_MIN_SCORE`,
-`usage_lexicon_active`, `load_lexicon`). Un mot sans score est donc retiré
-aux niveaux facile et moyen. Le jeu de mots Scrabble d'une telle langue
+(`data/usage_score_<langue>_scrabble.tsv`), la difficulté **combine le
+score d'usage et la coupe de fréquence** : les deux dictionnaires sont
+versés en entier, puis un mot est gardé s'il remplit l'un des deux
+critères — mot Scrabble noté au moins le seuil du niveau
+(`USAGE_DIFFICULTY_MIN_SCORE` : 3 en facile, 2 en moyen), ou mot de la
+coupe de fréquence du niveau (`DIFFICULTY_PRESETS`, 75 % avec définition
+exigée et noms propres probables exclus en facile, 85 % en moyen) noté au
+moins `FREQ_CUT_USAGE_LENIENCY` (1) point de moins (2 en facile, 1 en
+moyen). Le score de ce second critère vient de l'un ou l'autre fichier de
+scores (le mot du corpus absent du Scrabble est noté dans
+`data/usage_score_<langue>_scrabble_out.tsv`). Le niveau difficile garde
+tous les mots, Scrabble et corpus (`backend/crossword_gen.py`,
+`_select_lexicon`, `usage_lexicon_active`, `load_lexicon`). Un mot sans
+score est retiré aux niveaux facile et moyen. Le filtre des formes
+fléchies et les quotas du niveau facile ne s'appliquent pas (aucun nom
+propre probable ni mot sans définition n'y entre par la coupe de
+fréquence, et un mot Scrabble en est exempt) ; ceux des niveaux moyen et
+difficile (2 et 5 noms propres et mots sans définition au plus) restent
+appliqués. Le jeu de mots Scrabble d'une telle langue
 n'est alors jamais restreint aux formes fléchies connues
 (`scrabble_easy_filter`, `scrabble_words_for_languages`).
 

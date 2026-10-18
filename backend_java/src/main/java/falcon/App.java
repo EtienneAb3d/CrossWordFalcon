@@ -1832,7 +1832,22 @@ public final class App {
                     b.bool("archived", false));
         });
         // Localhost-only (gated by frontend/server.py): the "Statistiques" panel's usage-score counts.
-        w.get("/api/usage_stats", r -> UsageScores.usageScoreCounts(new ArrayList<>(WORDLISTS.keySet())));
+        // With the number of words of each difficulty's lexicon (Generator.lexiconLengthCounts, once per process).
+        w.get("/api/usage_stats", r -> {
+            List<String> difficulties = List.of("easy", "medium", "hard");
+            List<String[]> pairs = new ArrayList<>();
+            for (String language : WORDLISTS.keySet()) {
+                for (String d : difficulties) pairs.add(new String[] {WORDLISTS.get(language).toString(), d});
+            }
+            Map<String, Map<Integer, Integer>> counts = falcon.gen.Generator.lexiconLengthCounts(pairs);
+            Map<String, Map<String, Map<Integer, Integer>>> lexiconCounts = new LinkedHashMap<>();
+            for (String language : WORDLISTS.keySet()) {
+                Map<String, Map<Integer, Integer>> perLevel = new LinkedHashMap<>();
+                for (String d : difficulties) perLevel.put(d, counts.get(WORDLISTS.get(language) + "|" + d));
+                lexiconCounts.put(language, perLevel);
+            }
+            return UsageScores.usageScoreCounts(new ArrayList<>(WORDLISTS.keySet()), lexiconCounts);
+        });
         w.get("/api/stop_dumps", r -> Json.obj("items", GridStore.listStopDumps()));
         w.get("/api/stop_dumps/{dump_id}", r -> {
             Map<String, Object> record = GridStore.getStopDump(r.pathParams.get("dump_id"));
@@ -1912,7 +1927,24 @@ public final class App {
             String q = r.qRequired("q");
             String lang = r.q("lang", "fr");
             requireLang(lang);
-            return DictionaryLookup.search(q, lang);
+            Map<String, Object> result = DictionaryLookup.search(q, lang);
+            // Each row's levels: the difficulties whose lexicon holds its grid form (Generator.lexiconWords).
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> rows = (List<Map<String, Object>>) (List<?>) result.get("rows");
+            if (rows != null && !rows.isEmpty()) {
+                String path = WORDLISTS.get(lang).toString();
+                List<String> difficulties = List.of("easy", "medium", "hard");
+                List<String[]> pairs = new ArrayList<>();
+                for (String d : difficulties) pairs.add(new String[] {path, d});
+                Map<String, falcon.gen.Generator.LexiconWords> words = falcon.gen.Generator.lexiconWords(pairs);
+                for (Map<String, Object> row : rows) {
+                    String mot = DictionaryLookup.gridForm((String) row.get("form"));
+                    List<Object> levels = new ArrayList<>();
+                    for (String d : difficulties) if (words.get(path + "|" + d).contains(mot)) levels.add(d);
+                    row.put("levels", levels);
+                }
+            }
+            return result;
         });
         w.get("/api/dictionary/define", r -> {
             String q = r.qRequired("q");
