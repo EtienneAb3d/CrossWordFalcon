@@ -311,6 +311,103 @@ SOURCES = {
         ),
     },
 
+    # English sources taken from the dailycrosswordlinks.com directory:
+    # its free, non-cryptic crosswords that have a stable URL (a page whose
+    # address does not change with the date or the puzzle number), each
+    # fetched with this script's own client (200, real crossword content).
+    # Not kept: paid ($) and cryptic entries; acrostics, rows gardens and
+    # other variety puzzles; dated/numbered links (Puzzmo, Newsday's
+    # brainsonly player, Crosshare puzzle pages, campus papers); app-store,
+    # forum and Discord links; pages answering with a bot challenge or an
+    # access block (WordPress.com-hosted blogs, The Atlantic, Morning Brew,
+    # The Walrus, Fast Company, Crosswoods, India Mini, FreeDailyCrosswords),
+    # a paywall (WSJ, People, The Telegraph), an error (USA Today, LunaMini)
+    # or an empty JavaScript shell (Yahoo Mini, Crossherd, GenXword);
+    # inactive pages (Vox, Odd Bear Puzzles); the Washington Post Sunday and
+    # Mini Meta links, which redirect to the "washingtonpost" page above.
+    "sevendown": {"name": "7 down", "url": "https://sa.ilbo.at/puz/", "language": "en"},
+    "blackcrossword": {"name": "Black Crossword", "url": "https://www.blackcrossword.com/", "language": "en"},
+    "suntimes_mini": {"name": "Chicago Sun-Times – Mini", "url": "https://chicago.suntimes.com/games/chicago-mini-crossword", "language": "en"},
+    "dailybeast": {"name": "The Daily Beast", "url": "https://www.thedailybeast.com/crossword-puzzles", "language": "en"},
+    "slate": {
+        "name": "Slate", "url": "https://slate.com/life/crossword", "language": "en",
+        # An archive page listing the recent puzzles newest first
+        # ("Slate Mini Crossword for Oct. 19, 2026").
+        "extract": (_extract_from_visible_text, r"Slate Mini Crossword for\s+(\w+\.? \d{1,2}, \d{4})", "Slate – Mini Crossword for {}"),
+    },
+    "bostonglobe_mini": {"name": "The Boston Globe – Mini", "url": "https://www.bostonglobe.com/games/mini-crossword/", "language": "en"},
+    "globeandmail_mini": {"name": "The Globe and Mail – Mini", "url": "https://www.theglobeandmail.com/puzzles-and-crosswords/mini/", "language": "en"},
+    "latimes": {"name": "Los Angeles Times", "url": "https://www.latimes.com/games/daily-crossword", "language": "en"},
+    "latimes_midi": {"name": "Los Angeles Times – Midi", "url": "https://www.latimes.com/games/midi-crossword", "language": "en"},
+    "latimes_mini": {"name": "Los Angeles Times – Mini", "url": "https://www.latimes.com/games/mini-crossword", "language": "en"},
+    "merlreagle": {"name": "Merl Reagle's Sunday Crosswords", "url": "https://www.sundaycrosswords.com/ccpuz/MPuz.php", "language": "en"},
+    "nyt_mini": {"name": "The New York Times – Mini", "url": "https://www.nytimes.com/crosswords/game/mini", "language": "en"},
+    "nyt_midi": {"name": "The New York Times – Midi", "url": "https://www.nytimes.com/crosswords/game/midi", "language": "en"},
+    "ajc_premier": {"name": "AJC – Premier Crossword", "url": "https://games.ajc.com/games/premier-crossword", "language": "en"},
+    "crosshare": {"name": "Crosshare", "url": "https://crosshare.org/", "language": "en"},
+    "dailypop": {"name": "Daily POP Crosswords", "url": "http://dailypopcrosswordsweb.puzzlenation.com/", "language": "en"},
+    "mgmini": {
+        "name": "MG Mini (Mangesh Ghogre)", "url": "https://mangeshghogre.com/", "language": "en",
+        # The date of the day's warm-up mini ("Mon · October 19, 2026").
+        "extract": (_extract_from_visible_text, r"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s*·\s*(\w+ \d{1,2}, \d{4})", "MG Mini – {}"),
+    },
+    "tribune_tv": {"name": "Chicago Tribune – TV Crossword", "url": "https://fun.chicagotribune.com/game/tca-tv-crossword", "language": "en"},
+    "yourpuzzlesource_daily": {"name": "YourPuzzleSource – Daily", "url": "https://yourpuzzlesource.com/puzzles/daily-crossword/", "language": "en"},
+    "yourpuzzlesource_weekend": {"name": "YourPuzzleSource – Weekend", "url": "https://yourpuzzlesource.com/puzzles/weekend-crossword/", "language": "en"},
+    "reason": {
+        "name": "Reason", "url": "https://reason.com/tag/crossword/", "language": "en",
+        # An archive page listing the weekly puzzles newest first
+        # ("The Horror: Puzzle #169").
+        "extract": (_extract_from_visible_text, r"Puzzle #(\d{2,5})", "Reason – Puzzle #{}"),
+    },
+    "spyscape": {"name": "Spyscape", "url": "https://spyscape.com/puzzles", "language": "en"},
+    "sfgate_mini": {"name": "SFGATE – California Mini", "url": "https://www.sfgate.com/california-mini-crossword-puzzle-puzzmo/", "language": "en"},
+    "stat_mini": {"name": "STAT – Mini", "url": "https://www.statnews.com/stat-mini-crossword/", "language": "en"},
+    "vulture": {
+        "name": "Vulture 10×10", "url": "https://www.vulture.com/article/daily-crossword-puzzle.html", "language": "en",
+        # The page title names the day's puzzle ("Free Daily Crossword:
+        # The Art of Play Puzzle — October 16").
+        "extract": (_extract_from_visible_text, r"Free Daily Crossword:[^|]*?—\s*(\w+ \d{1,2})", "Vulture 10×10 – {}"),
+    },
+    "jonesin": {"name": "Jonesin' Crosswords", "url": "https://www.crosswordnexus.com/jonesin/", "language": "en"},
+    "arkadium_easy": {"name": "Stan Newman's Easy Crossword", "url": "https://www.arkadium.com/games/stan-newmans-easy-crossword/", "language": "en"},
+    "arkadium_medium": {"name": "Arkadium – Daily Medium Crossword", "url": "https://www.arkadium.com/games/daily-medium-crossword/", "language": "en"},
+    "arkadium_hard": {"name": "Stan Newman's Hard Crossword", "url": "https://www.arkadium.com/games/stan-newmans-hard-crossword/", "language": "en"},
+    "aarp": {"name": "AARP", "url": "https://games.aarp.org/games/daily-crossword", "language": "en"},
+    "newyorker": {
+        "name": "The New Yorker", "url": "https://www.newyorker.com/puzzles-and-games-dept/crossword", "language": "en",
+        # Archive pages listing the puzzles newest first ("The Crossword:
+        # Monday, October 19, 2026").
+        "extract": (_extract_from_visible_text, r"The Crossword:\s*(\w+, \w+ \d{1,2}, \d{4})", "The New Yorker – {}"),
+    },
+    "newyorker_mini": {
+        "name": "The New Yorker – Mini", "url": "https://www.newyorker.com/puzzles-and-games-dept/mini-crossword", "language": "en",
+        "extract": (_extract_from_visible_text, r"The Mini Crossword:\s*(\w+, \w+ \d{1,2}, \d{4})", "The New Yorker – Mini, {}"),
+    },
+    "crosswordclub": {
+        "name": "Crossword Club", "url": "https://crosswordclub.com/puzzles/", "language": "en",
+        # The archive's first entry is today's puzzle ("All Puzzles |
+        # Monday, October 19, 2026").
+        "extract": (_extract_from_visible_text, r"All Puzzles\s*\|\s*(\w+, \w+ \d{1,2}, \d{4})", "Crossword Club – {}"),
+    },
+    "beq": {
+        "name": "Brendan Emmett Quigley", "url": "https://brendanemmettquigley.com/", "language": "en",
+        "extract": (_extract_from_visible_text, r"CROSSWORD #(\d{3,5})", "Brendan Emmett Quigley – Crossword #{}"),
+    },
+    "blockheads": {"name": "Blockheads", "url": "https://blockheadspuzzles.blogspot.com/", "language": "en"},
+    "punofakind": {
+        "name": "Pun of a Kind", "url": "https://punofakind.blogspot.com/", "language": "en",
+        # The latest post's title starts with its puzzle number ("193. Glean
+        # Sweep").
+        "extract": (_extract_from_visible_text, r"Posts\s*\|\s*(\d{1,4})\.\s", "Pun of a Kind – #{}"),
+    },
+    "lutercross": {"name": "LuterCross (Matthew Luter)", "url": "https://matthewluter.com/", "language": "en"},
+    "bywaters": {
+        "name": "David Alfred Bywaters", "url": "https://davidalfredbywaters.com/blog/", "language": "en",
+        "extract": (_extract_from_visible_text, r"Crossword (\d{2,4}):", "David Alfred Bywaters – Crossword {}"),
+    },
+    "mondayfills": {"name": "Monday Fills", "url": "https://www.mondayfills.com/", "language": "en"},
+
     # Bilingual (English + French) source, added by the user. Every
     # puzzle is a single grid solved DOWN in English and ACROSS in
     # French, so "language" is a list: the entry appears under both the
