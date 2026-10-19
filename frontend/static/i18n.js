@@ -47,6 +47,8 @@ const I18N = {
     interactiveHelpTitle: "Aide — Édition de mots croisés",
     interactiveHelpCloseBtn: "Fermer l'aide",
     interactiveHelpLines: [
+      "Cliquez sur une case pour sélectionner un emplacement ; un second clic sur la même case change le sens (horizontal/vertical).",
+      "Cliquer-glisser sur la grille sélectionne une zone (tous les emplacements qu'elle touche) ; un cliquer-glisser sans sortir d'une case sélectionne les deux emplacements qui s'y croisent. <strong>Échap</strong> annule la sélection. <strong>Maj</strong> + cliquer-glisser déplace les lettres de la zone sélectionnée (ou, sans zone, de l'emplacement sélectionné) ; les cases noires ne bougent pas.",
       "Placez vos lettres dans la grille. La touche Espace permet d'ajouter ou de supprimer une case noire.",
       "Le bouton <strong>Suivant</strong> génère automatiquement un nouveau mot (en tenant compte d'un éventuel glossaire thématique et de la liste <strong>Mots Défi (personnalisation)</strong>). Le bouton <strong>Précédent</strong> permet de revenir en arrière (par exemple pour faire générer un autre mot par Suivant).",
       "Le panneau <strong>Mots Défi (personnalisation)</strong>, à droite de la grille, permet de lister des mots que vous souhaitez imposer dans la grille : ils sont proposés en priorité (en vert) par les boutons Mots, Croisés, Début et Fin, et le bouton Suivant les place aussi en priorité — même si ce mot n'existe pas dans le dictionnaire.",
@@ -499,6 +501,8 @@ const I18N = {
     interactiveHelpTitle: "Help — Building a crossword",
     interactiveHelpCloseBtn: "Close help",
     interactiveHelpLines: [
+      "Click a cell to select a slot; a second click on the same cell switches the direction (across/down).",
+      "Click and drag over the grid to select a zone (every slot it touches); click and drag without leaving a cell selects the two slots crossing there. <strong>Escape</strong> clears the selection. <strong>Shift</strong> + click and drag moves the letters of the selected zone (or, with no zone, of the selected slot); black cells stay put.",
       "Place your letters in the grid. The Space key adds or removes a black cell.",
       "The <strong>Next</strong> button automatically generates a new word (taking any theme glossary and the <strong>Challenge Words (customization)</strong> list into account). The <strong>Back</strong> button undoes a step (for example so Next generates a different word).",
       "The <strong>Challenge Words (customization)</strong> panel, to the right of the grid, lets you list words you want to force into the grid: they are shown first (in green) by the Words, Crossings, Start and End buttons, and the Next button also places them first — even if the word isn't in the dictionary.",
@@ -940,6 +944,8 @@ const I18N = {
     interactiveHelpTitle: "Hilfe — Kreuzworträtsel bearbeiten",
     interactiveHelpCloseBtn: "Hilfe schließen",
     interactiveHelpLines: [
+      "Klicken Sie auf ein Kästchen, um ein Feld auszuwählen; ein zweiter Klick auf dasselbe Kästchen wechselt die Richtung (waagerecht/senkrecht).",
+      "Klicken und ziehen Sie über das Gitter, um einen Bereich auszuwählen (alle Felder, die er berührt); Klicken und Ziehen innerhalb eines Kästchens wählt die beiden Felder aus, die sich dort kreuzen. <strong>Esc</strong> hebt die Auswahl auf. <strong>Umschalt</strong> + Klicken und Ziehen verschiebt die Buchstaben des ausgewählten Bereichs (oder, ohne Bereich, des ausgewählten Feldes); schwarze Felder bleiben an ihrem Platz.",
       "Setzen Sie Ihre Buchstaben ins Gitter. Mit der Leertaste fügen Sie ein schwarzes Feld hinzu oder entfernen es.",
       "Die Schaltfläche <strong>„Weiter\"</strong> erzeugt automatisch ein neues Wort (unter Berücksichtigung eines eventuellen thematischen Wortschatzes und der Liste <strong>„Herausforderungswörter (Personalisierung)\"</strong>). Mit <strong>„Zurück\"</strong> machen Sie einen Schritt rückgängig (zum Beispiel, damit „Weiter\" ein anderes Wort erzeugt).",
       "Das Feld <strong>„Herausforderungswörter (Personalisierung)\"</strong> rechts neben dem Gitter erlaubt es, Wörter aufzulisten, die Sie ins Gitter erzwingen möchten: Sie werden von den Schaltflächen „Wörter\", „Kreuzungen\", „Anfang\" und „Ende\" bevorzugt (grün) angezeigt, und auch „Weiter\" platziert sie bevorzugt — selbst wenn das Wort nicht im Wörterbuch steht.",
@@ -1383,6 +1389,8 @@ const I18N = {
     interactiveHelpTitle: "Ayuda — Edición del crucigrama",
     interactiveHelpCloseBtn: "Cerrar la ayuda",
     interactiveHelpLines: [
+      "Haga clic en una casilla para seleccionar un hueco; un segundo clic en la misma casilla cambia la dirección (horizontal/vertical).",
+      "Haga clic y arrastre sobre la cuadrícula para seleccionar una zona (todos los huecos que toca); hacer clic y arrastrar sin salir de una casilla selecciona los dos huecos que se cruzan en ella. <strong>Escape</strong> anula la selección. <strong>Mayús</strong> + clic y arrastrar desplaza las letras de la zona seleccionada (o, sin zona, del hueco seleccionado); las casillas negras no se mueven.",
       "Coloque sus letras en la cuadrícula. La tecla Espacio permite añadir o quitar una casilla negra.",
       "El botón <strong>Siguiente</strong> genera automáticamente una nueva palabra (teniendo en cuenta un posible glosario temático y la lista de <strong>Palabras Reto (personalización)</strong>). El botón <strong>Atrás</strong> permite deshacer un paso (por ejemplo, para que Siguiente genere otra palabra).",
       "El panel <strong>Palabras Reto (personalización)</strong>, a la derecha de la cuadrícula, permite indicar palabras que desea forzar en la cuadrícula: se muestran primero (en verde) en los botones Palabras, Cruces, Inicio y Fin, y el botón Siguiente también las coloca con prioridad, aunque la palabra no exista en el diccionario.",
@@ -1826,6 +1834,8 @@ const I18N = {
     interactiveHelpTitle: "Aiuto — Modifica del cruciverba",
     interactiveHelpCloseBtn: "Chiudi l'aiuto",
     interactiveHelpLines: [
+      "Fai clic su una casella per selezionare uno spazio; un secondo clic sulla stessa casella cambia la direzione (orizzontale/verticale).",
+      "Fai clic e trascina sulla griglia per selezionare una zona (tutti gli spazi che tocca); fare clic e trascinare senza uscire da una casella seleziona i due spazi che vi si incrociano. <strong>Esc</strong> annulla la selezione. <strong>Maiusc</strong> + clic e trascinamento sposta le lettere della zona selezionata (o, senza zona, dello spazio selezionato); le caselle nere restano al loro posto.",
       "Inserisci le tue lettere nella griglia. Il tasto Spazio aggiunge o rimuove una casella nera.",
       "Il pulsante <strong>Avanti</strong> genera automaticamente una nuova parola (tenendo conto di un eventuale glossario tematico e dell'elenco <strong>Parole Sfida (personalizzazione)</strong>). Il pulsante <strong>Indietro</strong> permette di tornare indietro di un passo (ad esempio per far generare un'altra parola da Avanti).",
       "Il pannello <strong>Parole Sfida (personalizzazione)</strong>, a destra della griglia, permette di elencare le parole che vuoi imporre nella griglia: vengono mostrate per prime (in verde) dai pulsanti Parole, Incroci, Inizio e Fine, e anche il pulsante Avanti le colloca in via prioritaria, anche se la parola non esiste nel dizionario.",
@@ -2270,6 +2280,8 @@ const I18N = {
     interactiveHelpTitle: "Ajuda — Editar as palavras cruzadas",
     interactiveHelpCloseBtn: "Fechar a ajuda",
     interactiveHelpLines: [
+      "Clique numa casa para selecionar um espaço; um segundo clique na mesma casa muda o sentido (horizontal/vertical).",
+      "Clique e arraste sobre a grelha para selecionar uma zona (todos os espaços que ela toca); clicar e arrastar sem sair de uma casa seleciona os dois espaços que nela se cruzam. <strong>Esc</strong> anula a seleção. <strong>Shift</strong> + clicar e arrastar desloca as letras da zona selecionada (ou, sem zona, do espaço selecionado); as casas pretas não se movem.",
       "Coloque as suas letras na grelha. A tecla Espaço adiciona ou remove uma casa preta.",
       "O botão <strong>Seguinte</strong> gera automaticamente uma nova palavra (tendo em conta um eventual glossário temático e a lista de <strong>Palavras Desafio (personalização)</strong>). O botão <strong>Anterior</strong> permite recuar um passo (por exemplo, para que Seguinte gere outra palavra).",
       "O painel <strong>Palavras Desafio (personalização)</strong>, à direita da grelha, permite listar palavras que deseja forçar na grelha: são mostradas primeiro (a verde) pelos botões Palavras, Cruzamentos, Início e Fim, e o botão Seguinte também as coloca com prioridade, mesmo que a palavra não exista no dicionário.",

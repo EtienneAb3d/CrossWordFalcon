@@ -3113,6 +3113,7 @@ state, unlike the backend).
   the letters of the selected zone, else of the focused word, by the
   dragged offset (`interactiveMoveSourceLetters`/`interactiveMovePlan`/
   `renderInteractiveMovePreview`/`finishInteractiveMove`: black cells stay,
+  and so does a source letter of a complete emplacement not moved whole,
   refused when a letter would leave the grid or land on a black cell; the
   zone, selection, theme/challenge/Scrabble colouring and the definitions
   of wholly moved words follow, one undo step) —, calls to every `/api/interactive/*` endpoint, "Définitions"/

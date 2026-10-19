@@ -7155,7 +7155,9 @@ function renderInteractiveMovePreview() {
 
 // Applies the Shift+drag move on mouse release: the source letters are
 // erased, then written at their destination (overwriting what was there);
-// black cells never move. The selected zone, the selected cell, the
+// black cells never move. A source letter belonging to a complete
+// emplacement (every cell lettered) that does not move whole is left in
+// place — moving a word never mutilates a complete word it crosses. The selected zone, the selected cell, the
 // theme/"Mots Défi"/Scrabble letter colouring and the definition of every
 // word moved whole follow the letters; any other definition touching a
 // changed cell is dropped. Refused (message) when a letter would leave the
@@ -7177,9 +7179,16 @@ function finishInteractiveMove() {
     const [r, c] = key.split(",").map(Number);
     return `${r + plan.dr},${c + plan.dc}`;
   };
+  // Source cells kept: those of a complete emplacement not moved whole.
+  const kept = new Set();
   // Definitions of the words whose every cell moves, to carry over.
   const movedDefs = [];
   for (const s of interactiveSlots()) {
+    if (s.filled && !s.cells.every(({ row, col }) => plan.source.has(`${row},${col}`))) {
+      for (const { row, col } of s.cells) {
+        if (plan.source.has(`${row},${col}`)) kept.add(`${row},${col}`);
+      }
+    }
     const def = interactiveDefs.get(interactiveKey(s));
     if (def !== undefined && s.cells.every(({ row, col }) => plan.source.has(`${row},${col}`))) {
       movedDefs.push({ s, def });
@@ -7187,6 +7196,7 @@ function finishInteractiveMove() {
   }
   interactivePushUndo();
   for (const key of plan.source.keys()) {
+    if (kept.has(key)) continue;
     const [r, c] = key.split(",").map(Number);
     interactiveClearDefsAt(r, c);
     interactiveGrid[r][c] = "";
@@ -7206,7 +7216,8 @@ function finishInteractiveMove() {
     if (moved) interactiveDefs.set(interactiveKey(moved), def);
   }
   const moveSet = (set) => {
-    const out = new Set([...set].filter((key) => !plan.source.has(key) && !plan.target.has(key)));
+    const out = new Set([...set].filter((key) => (!plan.source.has(key) || kept.has(key))
+      && !plan.target.has(key)));
     for (const key of set) if (plan.source.has(key)) out.add(shiftKey(key));
     return out;
   };

@@ -1094,9 +1094,16 @@ The same guidance below is also available in-app, once the interactive
 session has started: click the **?** button (`#interactive-help-btn`) just
 to the left of **Mots / Words** to open it as an overlay panel.
 
+- Click a cell to select a slot; a second click on the same cell
+  switches the direction (across/down), like the Ctrl key.
+- Click and drag over the grid to select a zone (every slot it touches);
+  click and drag without leaving a cell selects the two slots crossing
+  there; Escape clears the selection. Shift + click and drag moves the
+  letters of the selected zone (or, with no zone, of the selected slot);
+  black cells stay put (see "Click and drag" and "Shift + click and drag"
+  below).
 - Place your letters in the grid. The Space key or any punctuation mark
-  adds or removes a black cell. Clicking the cell that already has the
-  focus switches the fill direction, like the Ctrl key.
+  adds or removes a black cell.
 - The **Suivant / Next** button automatically generates a new word (taking
   any "Mots Défi (personnalisation)" list into account first, then any
   theme glossary — see "Mots Défi (personnalisation) / Challenge Words
@@ -1435,7 +1442,9 @@ real letter. Both update after every edit.
   destination cell shows the letter it would receive, on a light-blue
   background, or on a red one when the move is impossible (a letter would
   leave the grid or land on a black cell). Releasing the mouse moves them
-  by the dragged offset: black cells never move, the letters overwrite
+  by the dragged offset: black cells never move, a letter shared with a
+  complete word that is not moved whole (a full word the moved word
+  crosses) stays where it is too, the letters overwrite
   whatever the destination cells held, and the zone, the selected cell,
   the letter colours and the definition of every word moved whole follow
   them (other definitions touching a changed cell are dropped). An
