@@ -1765,6 +1765,22 @@ the current defaults/behavior to know before touching this code.
   validated so far). The run is long (~26 h for French at ~4.5 words/s on
   the shared local LLM, which also slows the public site's LLM calls
   while it runs) and resumable (`.partial`).
+- **Hunspell words outside both wordlists get definitions and a usage
+  score** — the user's rule: enrich the gloss dictionary with the
+  crossword-compatible Hunspell words missing from the usage-score files
+  and rate them into `usage_score_<lang>_scrabble_out.tsv`, the step being
+  part of the glossary preparation. `data_builder/build_wordlist_hunspell.py`
+  writes `data/wordlist_<lang>_hunspell.tsv` (committed, Scrabble wordlist
+  format) right after the Scrabble dictionary; the gloss dictionary, the
+  inflection table and `build_usage_scores.py --source out` read it. Its
+  words join no grid lexicon. The user's rule: only the low-volume
+  languages, English, French and Spanish (~900, ~43 000, ~46 000 words);
+  German (~275 000 compounds), Italian (~2.6 M enclitic verb forms) and
+  Portuguese (~2.1 M derivations) stay out of the pipeline. Choices made
+  with it, to revisit with the user: the forms come from `unmunch`, each
+  re-validated by `hunspell -G`; proper nouns and abbreviations are kept;
+  a usage-score run skips the words its final file already rates, so the
+  extension rates only the new words.
 - **No two words of a grid share a canonical form** — the user's rule:
   "interdire la pose d'un mot ayant la même forme canonique qu'un mot déjà
   présent dans la grille" (French EST/ETE/ETAIT, English ELM/ELMS). Each
@@ -1870,7 +1886,7 @@ the current defaults/behavior to know before touching this code.
   they lack). The whole data pipeline reruns from its upstream sources
   with `data_builder/build_all.sh` (or `build_<lang>.sh`), which downloads
   every missing input itself; its only system tools are `curl`, `xz` and
-  the `hunspell` CLI, which `Install.sh` installs. Any new pipeline step
+  the `hunspell`/`unmunch` CLIs, which `Install.sh` installs. Any new pipeline step
   or tool must keep this true (add it to `build_<lang>.sh` and, for a
   system tool, to `Install.sh`).
 - **Raw Wiktionary/Kaikki dumps live in `data/wiktionary/`** (gitignored,

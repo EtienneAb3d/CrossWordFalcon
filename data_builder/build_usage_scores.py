@@ -3,10 +3,13 @@
 Rates how common every word of data/wordlist_<lang>_scrabble.tsv is, with
 the local LLM, and writes data/usage_score_<lang>_scrabble.tsv
 (`MOT<TAB>ACCENTUE<TAB>SCORE`, sorted by decreasing SCORE, then MOT).
-With `--source out`, rates instead every word of
-data/wordlist_<lang>_freq.tsv absent from the Scrabble wordlist (its
+With `--source out`, rates instead every word absent from the Scrabble
+wordlist — each word of data/wordlist_<lang>_freq.tsv missing from it (its
 highest-FREQUENCE row per MOT: ACCENTUE as the form, CANONIQUE as the
-lemmas) and writes data/usage_score_<lang>_scrabble_out.tsv, same format.
+lemmas), then each word of data/wordlist_<lang>_hunspell.tsv
+(build_wordlist_hunspell.py, when it exists: every spelling of ACCENTUE,
+CANONIQUE as the lemmas) — and writes
+data/usage_score_<lang>_scrabble_out.tsv, same format.
 
 Scale (SCORE):
   5  everyday vocabulary
@@ -40,7 +43,10 @@ Resumable: every answered word is appended to the output file's
 `.partial` (data/usage_score_<lang>_scrabble[_out].tsv.partial,
 gitignored) and skipped on
 the next run; the sorted final file replaces it once every word has a
-score. A word with no digit from 0 to 5 in its answer after
+score. A word already rated in the final file is not rated again either,
+so a run after the word set grew only rates the new words (delete the
+final file to rate everything again); the final file keeps only the
+words of the current word set. A word with no digit from 0 to 5 in its answer after
 `MAX_ATTEMPTS` is left out (reported) — a re-run picks it up.
 
 Needs the local LLM (./run_llm.sh): LLM_BASE_URL/LLM_MODEL/LLM_API_KEY,
@@ -161,7 +167,9 @@ def _load_entries(language):
 def _load_out_entries(language):
     """(MOT, [ACCENTUE], [CANONIQUE...]) of every freq-wordlist word absent
     from the Scrabble wordlist — its highest-FREQUENCE row, like
-    `backend/crossword_gen.py`'s `load_wordlist` — in decreasing FREQUENCE."""
+    `backend/crossword_gen.py`'s `load_wordlist` — in decreasing FREQUENCE,
+    then (MOT, [spellings], [lemmas]) of every word of the Hunspell
+    wordlist (`_load_hunspell_entries`) neither of them holds."""
     with open(DATA_DIR / f"wordlist_{language}_scrabble.tsv", encoding="utf-8") as f:
         scrabble = {line.split("\t", 1)[0] for line in f}
     best = {}
@@ -181,7 +189,27 @@ def _load_out_entries(language):
                 lemmas = [s for s in parts[3].split(";") if s] or [parts[1]]
                 best[mot] = (freq, parts[1], lemmas)
     ranked = sorted(best.items(), key=lambda kv: -kv[1][0])
-    return [(mot, [accented], lemmas) for mot, (_freq, accented, lemmas) in ranked]
+    entries = [(mot, [accented], lemmas) for mot, (_freq, accented, lemmas) in ranked]
+    return entries + [e for e in _load_hunspell_entries(language)
+                      if e[0] not in scrabble and e[0] not in best]
+
+
+def _load_hunspell_entries(language):
+    """(MOT, [spellings], [lemmas]) of data/wordlist_<language>_hunspell.tsv
+    (build_wordlist_hunspell.py), [] when it does not exist."""
+    path = DATA_DIR / f"wordlist_{language}_hunspell.tsv"
+    if not path.exists():
+        return []
+    entries = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 3 or not parts[0]:
+                continue
+            spellings = [s for s in parts[1].split(";") if s] or [parts[0].lower()]
+            lemmas = [s for s in parts[2].split(";") if s] or [spellings[0]]
+            entries.append((parts[0], spellings, lemmas))
+    return entries
 
 
 def _frequency_text(word, counts, total):
@@ -283,6 +311,7 @@ class Rater:
 
 
 def _read_partial(path):
+    """{MOT: (ACCENTUE, SCORE)} of a partial or final score file."""
     done = {}
     if path.exists():
         with open(path, encoding="utf-8") as f:
@@ -340,8 +369,11 @@ def main():
     suffix = "" if args.source == "scrabble" else "_out"
     dst = DATA_DIR / f"usage_score_{lang}_scrabble{suffix}.tsv"
     partial_path = dst.with_suffix(".tsv.partial")
-    scores = _read_partial(partial_path)
     accented_of = {m: s[0] for m, s, _ in entries}
+    # Words already in the final file keep their score; the partial file
+    # holds the ones rated since.
+    scores = {m: v for m, v in {**_read_partial(dst), **_read_partial(partial_path)}.items()
+              if m in accented_of}
     todo = [e for e in entries if e[0] not in scores]
     if args.limit is not None:
         todo = todo[:args.limit]

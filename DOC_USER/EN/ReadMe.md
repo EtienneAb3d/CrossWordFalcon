@@ -1420,11 +1420,28 @@ real letter. Both update after every edit.
 - **Click and drag** over the grid to select a zone: release the mouse
   and every emplacement (across or down) that shares at least one cell
   with the dragged rectangle is added to the selection in full — every
-  other cell of the grid is then shaded gray. A single click (no
-  dragging) never changes an already-selected zone, so you can keep
+  other cell of the grid is then shaded gray. Dragging without leaving
+  the starting cell (the pointer moved a few pixels, the button released
+  over the same cell) selects the two emplacements, across and down, that
+  cross on that cell, and leaves the selected cell and direction as they
+  were (`frontend/static/script.js`, `INTERACTIVE_DRAG_MIN_PX`). A single
+  click (no dragging) never changes an already-selected zone, so you can keep
   working inside it (typing, "Mots", "Croisés", ...); dragging a new
   rectangle replaces it, and the **Escape** key clears it. See "Finir la
   zone" below for what this selection is actually used for.
+- **Shift + click and drag** moves letters: those of the selected zone,
+  or, with no zone selected, those of the word holding the focus (the
+  selected cell's word in the current direction). While dragging, every
+  destination cell shows the letter it would receive, on a light-blue
+  background, or on a red one when the move is impossible (a letter would
+  leave the grid or land on a black cell). Releasing the mouse moves them
+  by the dragged offset: black cells never move, the letters overwrite
+  whatever the destination cells held, and the zone, the selected cell,
+  the letter colours and the definition of every word moved whole follow
+  them (other definitions touching a changed cell are dropped). An
+  impossible move changes nothing and shows a message; **Précédent**
+  undoes a move like any other edit
+  (`frontend/static/script.js`, `finishInteractiveMove`).
 
 **Writing the definitions**
 

@@ -4812,3 +4812,12 @@ end through the real running API (interactive start/step/save,
 - `.tool-icon-btn[hidden] { display: none }` is mandatory: `.tool-icon-btn`'s
   own `display: inline-flex` otherwise beats the browser's `[hidden]` rule
   and shows the localhost-only `#usage-stats-btn` on every origin.
+
+- **Interactive-mode letter move preview** (Shift+click-drag,
+  `script.js`'s `renderInteractiveMovePreview`): each destination cell
+  shows the letter it would receive in a `.interactive-move-ghost`
+  overlay covering the whole cell (absolute, `inset: 0`, bold, no pointer
+  events), on the light-blue `--selected` fill when the move is allowed,
+  on `--incorrect-bg` with an `--error` letter (`.move-preview-invalid`)
+  when a letter would leave the grid or land on a black cell. No new
+  token. Not yet checked in a real browser.

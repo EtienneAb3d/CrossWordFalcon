@@ -461,7 +461,8 @@ cinq étapes — en construisant le dictionnaire Scrabble (voir plus bas)
 juste après l'étape 2, après avoir téléchargé les listes brutes de la
 langue si elles manquent, et en complétant juste avant les lemmes des
 graphies sans accents de la liste de fréquences (voir « Graphies sans
-accents » plus bas) — puis, en dernière étape, alimentent la base
+accents » plus bas), puis, en anglais, français et espagnol, la liste des
+mots Hunspell (voir « Liste des mots Hunspell » plus bas) — puis, en dernière étape, alimentent la base
 vectorielle Qdrant avec tout le lexique de la langue (la note d'usage de
 chaque mot, voir « Scores d'usage », est calculée juste avant) : les mots de
 `data/wordlist_<lang>_freq.tsv`, puis ceux de
@@ -471,8 +472,8 @@ classe `WordEmbeddingIndexer` ; `--source scrabble` n'envoie que ces
 derniers, sans réencoder le reste). `data_builder/build_all.sh` enchaîne
 les six langues, chacune dans son journal `logs/build_<lang>.log`. Le
 pipeline n'a besoin que de la bibliothèque standard de Python, de
-`httpx`, de `curl`, de `xz` et de l'outil `hunspell` en ligne de commande,
-qu'`Install.sh` installe. Cette sixième étape n'est pas
+`httpx`, de `curl`, de `xz` et des outils `hunspell` et `unmunch` en ligne
+de commande, qu'`Install.sh` installe. Cette sixième étape n'est pas
 essentielle au dictionnaire lui-même : elle ne sert qu'à la recherche de
 « mots similaires » de l'interface, exige que Qdrant (`./run_qdrant.sh`)
 et le serveur d'embeddings (`./run_embed.sh`) tournent, et se contente
@@ -568,6 +569,41 @@ niveau facile ne s'applique plus ; les quotas des niveaux moyen et
 difficile restent. La génération essaie en priorité ses
 mots (voir `DOC_ALGO/FR/ReadMe.md`, « Choisir quel mot essayer »).
 
+## Liste des mots Hunspell
+
+`data_builder/build_wordlist_hunspell.py` écrit
+`data/wordlist_<langue>_hunspell.tsv` (même format que le dictionnaire
+Scrabble : `MOT<TAB>ACCENTUE<TAB>CANONIQUE`, trié par MOT) : tous les mots
+du dictionnaire Hunspell de la langue (`data/hunspell_cache/<langue>.dic`
+et `.aff`) qui tiennent dans une grille et ne figurent ni dans la liste de
+fréquences ni dans le dictionnaire Scrabble (`build`). `unmunch` (l'outil
+de Hunspell) développe chaque radical avec tous ses affixes
+(`_unmunched_forms`) ; comme il lit mal certains fichiers d'affixes
+(drapeaux de plusieurs caractères, préfixes élidés), un reste de drapeaux
+après « / » est coupé et chaque graphie retenue doit être acceptée par
+`hunspell -G`, telle quelle ou avec une majuscule
+(`build_wordlist_freq.py`, `_spellcheck_valid`). MOT est la forme grille
+(`build_wordlist_scrabble.py`, `grid_form` : une graphie avec apostrophe,
+trait d'union ou chiffre est écartée) ; ACCENTUE liste toutes les graphies
+de ce MOT, une graphie en minuscules en tête ; CANONIQUE réunit leurs
+lemmes donnés par `hunspell -m`, la graphie principale à défaut.
+
+Ces mots n'entrent dans aucun lexique de grille : ils reçoivent des
+définitions (le dictionnaire de définitions cherche aussi les lemmes de la
+colonne CANONIQUE, `build_gloss_dictionary.py`, `_target_lemmas`), des
+analyses grammaticales (`build_inflections.py`, `_wordlist_forms`) et un
+score d'usage (`build_usage_scores.py --source out`, voir plus bas). La
+liste est construite juste après le dictionnaire Scrabble, pour l'anglais
+(environ 900 mots, presque tous des noms propres et des sigles), le
+français (environ 43 000) et l'espagnol (environ 46 000) seulement
+(`LANGUAGES`). Pour l'allemand, l'italien et le portugais, le dictionnaire
+Hunspell se développe en centaines de milliers ou en millions de formes
+supplémentaires — mots composés allemands avec toutes leurs déclinaisons
+(environ 275 000), formes verbales italiennes suivies de leurs pronoms
+enclitiques (« chiudetevele », environ 2,6 millions), dérivés portugais
+préfixés et suffixés de chaque racine (« desinteiriçadoramente », environ
+2,1 millions) —, bien au-delà de ce que la notation d'usage peut traiter.
+
 ## Scores d'usage
 
 `data_builder/build_usage_scores.py` note, avec le LLM local, chaque mot de
@@ -577,9 +613,11 @@ courant ou qu'il est rare, et écrit `data/usage_score_<lang>_scrabble.tsv`
 score décroissant puis par ordre alphabétique de MOT. Avec `--source out`,
 il note de même chaque mot de `data/wordlist_<lang>_freq.tsv` absent du
 dictionnaire Scrabble (sa ligne de plus forte FREQUENCE : la colonne
-ACCENTUE comme forme, CANONIQUE comme lemmes ; `_load_out_entries`) et
-écrit `data/usage_score_<lang>_scrabble_out.tsv`, même format (environ
-18 000 mots en français, à peu près une heure). Le barème :
+ACCENTUE comme forme, CANONIQUE comme lemmes ; `_load_out_entries`), puis
+chaque mot de la liste des mots Hunspell quand elle existe (toutes ses
+graphies, ses lemmes ; `_load_hunspell_entries`), et écrit
+`data/usage_score_<lang>_scrabble_out.tsv`, même format (environ 61 000
+mots en français, à peu près quatre heures). Le barème :
 
 - **5** : vocabulaire courant ;
 - **4** : vocabulaire soutenu ou littéraire ;
@@ -626,7 +664,10 @@ redemandée jusqu'à `MAX_ATTEMPTS` (3) fois.
 
 Chaque mot noté est ajouté au fichier `.partial` du fichier de sortie
 (`data/usage_score_<lang>_scrabble[_out].tsv.partial`, non versionné) et sauté à la relance ; le fichier final trié le remplace
-une fois tous les mots notés. Un mot resté sans note est signalé, et une
+une fois tous les mots notés. Un mot déjà présent dans le fichier final
+n'est pas noté de nouveau : quand l'ensemble des mots s'agrandit, une
+relance ne note que les nouveaux (supprimer le fichier final pour tout
+renoter), et le fichier final ne garde que les mots de l'ensemble courant. Un mot resté sans note est signalé, et une
 relance le reprend. Le traitement est long : en français (environ 411 000
 mots), autour de 4,5 mots par seconde sur le serveur LLM local, soit près
 de 26 heures. `data_builder/build_<lang>.sh` le lance en avant-dernière

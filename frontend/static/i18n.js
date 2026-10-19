@@ -109,6 +109,8 @@ const I18N = {
     interactiveRecomputeConfirm: "Recalculer toutes les définitions ? Les définitions existantes seront remplacées.",
     interactiveFinishZoneBtn: "Finir la zone",
     interactiveFinishZoneNeedsSelection: "Sélectionnez d'abord une zone (cliquer-glisser sur la grille).",
+    interactiveMoveBlocked: "Déplacement impossible : des lettres sortiraient de la grille ou tomberaient sur une case noire.",
+    interactiveMoveNothing: "Aucune lettre à déplacer : sélectionnez une zone ou un mot contenant des lettres.",
     interactiveFinishBtn: "Finir la grille",
     interactiveDefinitionsNothing: "Aucun mot à définir.",
     interactiveDefinitionsWorking: (done, total) =>
@@ -557,6 +559,8 @@ const I18N = {
     interactiveRecomputeConfirm: "Recompute every definition? The existing definitions will be replaced.",
     interactiveFinishZoneBtn: "Finish the zone",
     interactiveFinishZoneNeedsSelection: "Select a zone first (click-drag on the grid).",
+    interactiveMoveBlocked: "Cannot move: some letters would leave the grid or land on a black cell.",
+    interactiveMoveNothing: "No letter to move: select a zone or a word holding letters.",
     interactiveFinishBtn: "Finish the grid",
     interactiveDefinitionsNothing: "No word to define.",
     interactiveDefinitionsWorking: (done, total) =>
@@ -998,6 +1002,8 @@ const I18N = {
     interactiveRecomputeConfirm: "Alle Definitionen neu berechnen? Die vorhandenen Definitionen werden ersetzt.",
     interactiveFinishZoneBtn: "Bereich fertigstellen",
     interactiveFinishZoneNeedsSelection: "Wählen Sie zuerst einen Bereich aus (auf dem Gitter klicken und ziehen).",
+    interactiveMoveBlocked: "Verschieben nicht möglich: Buchstaben würden das Gitter verlassen oder auf einem schwarzen Feld landen.",
+    interactiveMoveNothing: "Keine Buchstaben zu verschieben: Wählen Sie einen Bereich oder ein Wort mit Buchstaben aus.",
     interactiveFinishBtn: "Gitter fertigstellen",
     interactiveDefinitionsNothing: "Kein Wort zu definieren.",
     interactiveDefinitionsWorking: (done, total) =>
@@ -1439,6 +1445,8 @@ const I18N = {
     interactiveRecomputeConfirm: "¿Recalcular todas las definiciones? Las definiciones existentes serán reemplazadas.",
     interactiveFinishZoneBtn: "Terminar la zona",
     interactiveFinishZoneNeedsSelection: "Seleccione primero una zona (haga clic y arrastre sobre la cuadrícula).",
+    interactiveMoveBlocked: "No se puede mover: algunas letras saldrían de la cuadrícula o caerían en una casilla negra.",
+    interactiveMoveNothing: "No hay letras que mover: seleccione una zona o una palabra con letras.",
     interactiveFinishBtn: "Terminar el crucigrama",
     interactiveDefinitionsNothing: "No hay ninguna palabra que definir.",
     interactiveDefinitionsWorking: (done, total) =>
@@ -1880,6 +1888,8 @@ const I18N = {
     interactiveRecomputeConfirm: "Ricalcolare tutte le definizioni? Le definizioni esistenti verranno sostituite.",
     interactiveFinishZoneBtn: "Completa la zona",
     interactiveFinishZoneNeedsSelection: "Seleziona prima una zona (clic e trascinamento sulla griglia).",
+    interactiveMoveBlocked: "Spostamento impossibile: alcune lettere uscirebbero dalla griglia o finirebbero su una casella nera.",
+    interactiveMoveNothing: "Nessuna lettera da spostare: seleziona una zona o una parola con delle lettere.",
     interactiveFinishBtn: "Completa la griglia",
     interactiveDefinitionsNothing: "Nessuna parola da definire.",
     interactiveDefinitionsWorking: (done, total) =>
@@ -2322,6 +2332,8 @@ const I18N = {
     interactiveRecomputeConfirm: "Recalcular todas as definições? As definições existentes serão substituídas.",
     interactiveFinishZoneBtn: "Terminar a zona",
     interactiveFinishZoneNeedsSelection: "Selecione primeiro uma zona (clique e arraste na grelha).",
+    interactiveMoveBlocked: "Não é possível mover: algumas letras sairiam da grelha ou cairiam numa casa preta.",
+    interactiveMoveNothing: "Nenhuma letra para mover: selecione uma zona ou uma palavra com letras.",
     interactiveFinishBtn: "Terminar a grelha",
     interactiveDefinitionsNothing: "Nenhuma palavra para definir.",
     interactiveDefinitionsWorking: (done, total) =>

@@ -16,29 +16,32 @@ LANG_CODE=es
 
 step() { echo; echo "=== $(date '+%F %T')  $*"; }
 
-step "1/9  build_sentence_corpus $LANG_CODE"
+step "1/10  build_sentence_corpus $LANG_CODE"
 $PY data_builder/build_sentence_corpus.py "$LANG_CODE" || { echo "FAILED at build_sentence_corpus"; exit 1; }
 
-step "2/9  build_wordlist_freq $LANG_CODE"
+step "2/10  build_wordlist_freq $LANG_CODE"
 $PY data_builder/build_wordlist_freq.py "$LANG_CODE" || { echo "FAILED at build_wordlist_freq"; exit 1; }
 
-step "3/9  build_unaccented_lemmas $LANG_CODE"
+step "3/10  build_unaccented_lemmas $LANG_CODE"
 $PY data_builder/build_unaccented_lemmas.py "$LANG_CODE" || { echo "FAILED at build_unaccented_lemmas"; exit 1; }
 
-step "4/9  build_wordlist_scrabble $LANG_CODE"
+step "4/10  build_wordlist_scrabble $LANG_CODE"
 $PY data_builder/download_scrabble_dictionaries.py "$LANG_CODE" || { echo "FAILED at download_scrabble_dictionaries"; exit 1; }
 $PY data_builder/build_wordlist_scrabble.py "$LANG_CODE" || { echo "FAILED at build_wordlist_scrabble"; exit 1; }
 
-step "5/9  build_gloss_dictionary $LANG_CODE"
+step "5/10  build_wordlist_hunspell $LANG_CODE"
+$PY data_builder/build_wordlist_hunspell.py "$LANG_CODE" || { echo "FAILED at build_wordlist_hunspell"; exit 1; }
+
+step "6/10  build_gloss_dictionary $LANG_CODE"
 $PY data_builder/build_gloss_dictionary.py "$LANG_CODE" || { echo "FAILED at build_gloss_dictionary"; exit 1; }
 
-step "6/9  compress_reference_corpus $LANG_CODE"
+step "7/10  compress_reference_corpus $LANG_CODE"
 $PY data_builder/compress_reference_corpus.py "$LANG_CODE" || { echo "FAILED at compress_reference_corpus"; exit 1; }
 
-step "7/9  build_inflections $LANG_CODE"
+step "8/10  build_inflections $LANG_CODE"
 $PY data_builder/build_inflections.py "$LANG_CODE" || { echo "FAILED at build_inflections"; exit 1; }
 
-step "8/9  build_usage_scores $LANG_CODE  (best effort — needs the local LLM, ./run_llm.sh; resumable, many hours)"
+step "9/10  build_usage_scores $LANG_CODE  (best effort — needs the local LLM, ./run_llm.sh; resumable, many hours)"
 # Non-fatal: the usage scores refine word choice and grid scoring, but every
 # other artefact works without them. Interrupted, it resumes where it stopped.
 $PY data_builder/build_usage_scores.py "$LANG_CODE" \
@@ -46,7 +49,7 @@ $PY data_builder/build_usage_scores.py "$LANG_CODE" \
 $PY data_builder/build_usage_scores.py "$LANG_CODE" --source out \
     || echo "WARNING: build_usage_scores --source out skipped/failed — start the LLM (./run_llm.sh), then: $PY data_builder/build_usage_scores.py $LANG_CODE --source out"
 
-step "9/9  qdrant_populate $LANG_CODE  (best effort — needs ./run_qdrant.sh + ./run_embed.sh running)"
+step "10/10  qdrant_populate $LANG_CODE  (best effort — needs ./run_qdrant.sh + ./run_embed.sh running)"
 # Non-fatal: the wordlist/gloss artefacts above are the real deliverables; feeding
 # the Qdrant "words" collection is a downstream nicety. --recreate wipes this
 # language's tenant first, since the wordlist it mirrors was just rebuilt.
@@ -54,5 +57,5 @@ $PY -m data_builder.qdrant_populate "$LANG_CODE" --recreate \
     || echo "WARNING: qdrant_populate skipped/failed — start Qdrant (./run_qdrant.sh) and the embed server (./run_embed.sh), then: $PY -m data_builder.qdrant_populate $LANG_CODE --recreate"
 
 step "DONE — Spanish data pipeline complete"
-ls -la data/wordlist_es_freq.tsv data/wordlist_es_scrabble.tsv data/gloss_dictionary/es_glosses.jsonl \
+ls -la data/wordlist_es_freq.tsv data/wordlist_es_scrabble.tsv data/wordlist_es_hunspell.tsv data/gloss_dictionary/es_glosses.jsonl \
        data/reference_corpus_es.tar.xz data/reference_corpus/es_sentences.txt data/inflection/es.jsonl data/usage_score_es_scrabble.tsv data/usage_score_es_scrabble_out.tsv 2>&1

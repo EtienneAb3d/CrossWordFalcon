@@ -53,7 +53,7 @@ Engineering language is English (code, comments, this file, the SKILLs,
 | `data_builder/` | One-off/periodic scripts that build each language's dictionary artifacts (corpus → wordlist → gloss dictionary → inflection table → Qdrant embeddings), plus one orchestration shell script per language. |
 | `scrapper/` | Daily-refreshed content scrapers feeding the web UI's "Actu Croisée" panel (RSS feeds, aggregated crossword-publisher links). |
 | `Automation/` | `Populate.py`, a CLI daemon that drives the real `/api/generate` endpoint to bulk-fill the grid library. |
-| `data/` | Per-language dictionaries (`wordlist_<lang>_freq.tsv`, `wordlist_<lang>_scrabble.tsv`, `gloss_dictionary/`, `inflection/`, the raw `scrabble/` lists, the gitignored `wiktionary/` dump cache), the reference sentence corpus, and Qdrant's on-disk storage. |
+| `data/` | Per-language dictionaries (`wordlist_<lang>_freq.tsv`, `wordlist_<lang>_scrabble.tsv`, `wordlist_<lang>_hunspell.tsv` (en/fr/es), `gloss_dictionary/`, `inflection/`, the raw `scrabble/` lists, the gitignored `wiktionary/` dump cache), the reference sentence corpus, and Qdrant's on-disk storage. |
 | `DOC_ALGO/FR/`, `DOC_DIC/FR/`, `DOC_USER/EN/` | Hand-maintained, present-tense-only reference docs (see intro). |
 | `GRID_STORE/`, `GRID_WORK/`, `GRID_GAME/` | Persisted grids: published library grids (archived ones under `GRID_STORE/BACKUP/`), in-progress "Interactif" authoring drafts, per-player play state. All gitignored. |
 | `STOP_DUMP/` | One diagnostic snapshot per automatic-generation job interrupted via the "Stop" button: last known cell/slot state of every attempt still running at that moment. Gitignored. |
@@ -127,12 +127,15 @@ Each of the six languages has its own dictionary, built independently by
 wordlist,
 lemmas of its unaccented spellings (`build_unaccented_lemmas.py`),
 Scrabble download (`download_scrabble_dictionaries.py <lang>`) + Scrabble
-dictionary, gloss dictionary, corpus archive,
+dictionary, Hunspell wordlist (`build_wordlist_hunspell.py`, en/fr/es
+only, see "Hunspell wordlist" below), gloss dictionary, corpus archive,
 inflection table, usage scores (`build_usage_scores.py`, see "Usage
-scores" below), Qdrant tenant (steps 1/9-9/9, the last two non-fatal);
+scores" below), Qdrant tenant (steps 1/10-10/10 for en/fr/es, 1/9-9/9 for
+de/it/pt, the last two non-fatal);
 `data_builder/build_all.sh` runs the six in turn (logs/build_<lang>.log).
-Only Python's standard library, `httpx`, `curl`, `xz` and the `hunspell`
-CLI are needed (`Install.sh` installs `hunspell`/`xz`).
+Only Python's standard library, `httpx`, `curl`, `xz` and the `hunspell`/
+`unmunch` CLIs are needed (`Install.sh` installs `hunspell`/`unmunch`/
+`xz`).
 
 Each stage is idempotent and reuses its own on-disk cache
 (`CORPUS/`/`data/wiktionary/`/`data/hunspell_cache/`) — a full re-run only re-fetches
@@ -145,7 +148,7 @@ Qdrant index haven't caught up with).
 `MOT<TAB>ACCENTUE<TAB>CANONIQUE` sorted by MOT — the freq wordlist's
 columns minus FREQUENCE, ACCENTUE listing every possible spelling,
 `;`-separated, the main one first), built by `data_builder/build_wordlist_scrabble.
-py` right after stage 2 (`build_<lang>.sh` step 4/8) from `data/scrabble/
+py` right after stage 2 (`build_<lang>.sh` step 4) from `data/scrabble/
 <lang>/*.txt` (the raw official/reference Scrabble lists — fr ODS8, en
 SOWPODS + TWL, es FILE 2017 + FISE 2, it Zingarelli, pt LibreOffice-
 derived, de reference list — copied verbatim from GitHub `FlandersBurger/
@@ -176,10 +179,31 @@ dictionary._target_lemmas` adds its CANONIQUE column, `build_inflections.
 _wordlist_forms` every spelling of its ACCENTUE column. Every raw Wiktionary/Kaikki dump is
 kept in `data/wiktionary/` (gitignored) for reuse.
 
+**Hunspell wordlist** (`data/wordlist_<lang>_hunspell.tsv`, committed,
+`MOT<TAB>ACCENTUE<TAB>CANONIQUE` sorted by MOT, the Scrabble wordlist's
+format), built by `data_builder/build_wordlist_hunspell.py` right after the
+Scrabble dictionary, for English, French and Spanish only
+(`LANGUAGES`): every form of the language's Hunspell dictionary (`unmunch`
+over `data/hunspell_cache/<lang>.dic/.aff`, a leftover "/flags" cut off,
+each spelling accepted by `hunspell -G` as-is or title-cased —
+`build_wordlist_freq._spellcheck_valid`, since `unmunch` misreads some
+affix files) whose grid form (`build_wordlist_scrabble.grid_form`) is in
+neither the freq nor the Scrabble wordlist. ACCENTUE lists every spelling
+of the MOT, a lowercase one first; CANONIQUE the union of their `hunspell
+-m` stems, else the main spelling. Its words join no grid lexicon: the
+gloss dictionary (`build_gloss_dictionary._target_lemmas`, its CANONIQUE
+column), the inflection table (`build_inflections._wordlist_forms`, its
+ACCENTUE column) and the out usage scores (`build_usage_scores.py --source
+out`) cover them. German, Italian and Portuguese have none: their Hunspell
+dictionaries expand to hundreds of thousands or millions of extra forms
+(German compounds with every declension, Italian verb forms with their
+enclitic pronouns, Portuguese prefixed/suffixed derivations), beyond what
+the usage scoring can rate.
+
 **Usage scores** (`data/usage_score_<lang>_scrabble.tsv`, committed once
 built, `MOT<TAB>ACCENTUE<TAB>SCORE`, the main spelling as ACCENTUE, sorted
 by decreasing SCORE then MOT): `data_builder/build_usage_scores.py`
-(`build_<lang>.sh` step 8/9, non-fatal, needs the local LLM) rates every
+(`build_<lang>.sh`'s usage-score step, non-fatal, needs the local LLM) rates every
 Scrabble-wordlist word 0-5 — 5 everyday, 4 formal/literary, 3 rare form of
 an everyday word, 2 technical, 1 dated, 0 practically unknown. One LLM
 request per word (`--concurrency` 5 in flight; words sharing a prompt
@@ -196,12 +220,16 @@ mostly the lemma's), definitions (`gloss_lookup`, 3 per lemma). The answer
 is the score alone (`max_tokens` 1, thinking off, temperature 0), retried
 up to `MAX_ATTEMPTS` (3) times. Resumable through `<file>.partial`
 (gitignored, `/data/*.tsv.partial`), replaced by the sorted file once every
-word is rated; `--words` prints a few ratings without writing,
+word is rated; a word already in the final file is not rated again (a run
+after the word set grew rates only the new words), and the final file keeps
+only the current word set's words; `--words` prints a few ratings without writing,
 `--show-prompt` prints the first prompt. `--source out` rates instead
 every freq-wordlist word absent from the Scrabble wordlist (its
 highest-FREQUENCE row: ACCENTUE as the form, CANONIQUE as the lemmas,
-`_load_out_entries`) into `data/usage_score_<lang>_scrabble_out.tsv`, same
-format, same prompt; `build_<lang>.sh` step 8/9 runs both. The lookup tables are loaded once
+`_load_out_entries`), then every word of the Hunspell wordlist when it
+exists (`_load_hunspell_entries`), into `data/usage_score_<lang>_scrabble_
+out.tsv`, same format, same prompt; `build_<lang>.sh`'s usage-score step
+runs both. The lookup tables are loaded once
 before the worker threads start (their lazy caches are unlocked). The
 grid engine reads both files when a lexicon is loaded (`load_usage_scores`
 merges the out file in, only when the Scrabble one exists; Java `Words.
@@ -213,7 +241,7 @@ the file is neither filtered nor corrected.
 
 **Unaccented spellings**: a freq-wordlist row whose ACCENTUE holds no
 accent (ASCII only) may have unknown accents, so `data_builder/
-build_unaccented_lemmas.py` (`build_<lang>.sh` step 3/8, right after
+build_unaccented_lemmas.py` (`build_<lang>.sh` step 3, right after
 stage 2) looks its MOT up accents aside in the stage-5 English-Wiktionary
 Kaikki dump (`build_wordlist_scrabble._kaikki_forms`) and appends to
 CANONIQUE the lemmas (from the dump and from `hunspell -m`) of every
@@ -3074,11 +3102,20 @@ state, unlike the backend).
   started and the time in its current step — the palier, `step.attempt`,
   else `step.code`, `generationStepKey` — measured client-side and
   re-rendered every `STATUS_CLOCK_INTERVAL_MS` (1 s)); the interactive-authoring
-  mode (by far the largest block — zone selection, undo stack, per-cell
+  mode (by far the largest block — zone selection (a drag that stays in
+  its starting cell, at least `INTERACTIVE_DRAG_MIN_PX` (4 px) of pointer
+  movement, selects the two emplacements crossing there and swallows the
+  following click, `interactiveSuppressNextClick`), undo stack, per-cell
   editing — space or any punctuation toggles the selected cell black,
   with its images under the form's `#symmetry` (`interactiveToggleBlack`,
   `symmetryCells`), and a click on the already-selected cell swaps the
-  fill direction (`selectCell`, in play mode too) —, calls to every `/api/interactive/*` endpoint, "Définitions"/
+  fill direction (`selectCell`, in play mode too), Shift+click-drag moves
+  the letters of the selected zone, else of the focused word, by the
+  dragged offset (`interactiveMoveSourceLetters`/`interactiveMovePlan`/
+  `renderInteractiveMovePreview`/`finishInteractiveMove`: black cells stay,
+  refused when a letter would leave the grid or land on a black cell; the
+  zone, selection, theme/challenge/Scrabble colouring and the definitions
+  of wholly moved words follow, one undo step) —, calls to every `/api/interactive/*` endpoint, "Définitions"/
   "Recalculer" (`generateInteractiveDefinitions`: `POST /api/interactive/
   verify` then `GET /api/dictionary/define` per filled valid word —
   only those lacking a definition, or all of them, replacing the

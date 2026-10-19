@@ -931,6 +931,18 @@ let interactiveZoneSelection = null;
 let interactiveDragStart = null; // { row, col } while a drag is in progress, else null
 let interactiveDragCurrent = null; // { row, col }, updated as the pointer moves
 let interactiveDragActive = false;
+// Pointer position at mousedown, and whether the pointer has since moved
+// at least INTERACTIVE_DRAG_MIN_PX away from it — a drag that stays inside
+// its starting cell selects the two emplacements crossing on that cell,
+// while a plain click (no such movement) only selects the cell.
+const INTERACTIVE_DRAG_MIN_PX = 4;
+let interactiveDragPoint = null; // { x, y } while a drag is in progress, else null
+let interactiveDragMovedInCell = false;
+// Set when a drag ends on its own starting cell: the "click" event the
+// browser fires right after must not reach selectCell() (which would swap
+// the direction on an already-selected cell). Consumed by the capture-phase
+// listener below.
+let interactiveSuppressNextClick = false;
 // "row,col" for every cell already carrying a letter in `interactiveGrid`
 // at the moment "Finir la grille" is clicked — highlighted in light green
 // in every attempt-preview grid of the automatic generation that button
@@ -7069,6 +7081,153 @@ function renderInteractiveDragPreview() {
   });
 }
 
+// Shift+click-drag letter move (Interactive mode): the cell the drag
+// started on and the cell the pointer is over now, or null when no move
+// is in progress. The offset between the two is applied to every letter
+// of interactiveMoveSourceLetters() when the button is released.
+let interactiveMoveStart = null;
+let interactiveMoveCurrent = null;
+
+// The letters a Shift+drag moves: those of the selected zone, else those
+// of the focused word (selectedInteractiveWord()) — Map "row,col" ->
+// letter, black and empty cells left out (only letters move).
+function interactiveMoveSourceLetters() {
+  const letters = new Map();
+  let keys = [];
+  if (interactiveZoneSelection && interactiveZoneSelection.size) {
+    keys = [...interactiveZoneSelection];
+  } else {
+    const word = selectedInteractiveWord();
+    if (word) keys = word.cells.map(({ row, col }) => `${row},${col}`);
+  }
+  for (const key of keys) {
+    const [r, c] = key.split(",").map(Number);
+    const ch = interactiveGrid[r][c];
+    if (ch && ch !== "#") letters.set(key, ch);
+  }
+  return letters;
+}
+
+// The move a Shift+drag would make right now: the offset, the letters at
+// their destination (Map "row,col" -> letter), and whether it is allowed
+// — every destination inside the grid and not on a black cell.
+function interactiveMovePlan() {
+  const dr = interactiveMoveCurrent.row - interactiveMoveStart.row;
+  const dc = interactiveMoveCurrent.col - interactiveMoveStart.col;
+  const rows = interactiveGrid.length;
+  const cols = rows ? interactiveGrid[0].length : 0;
+  const source = interactiveMoveSourceLetters();
+  const target = new Map();
+  let valid = true;
+  for (const [key, ch] of source) {
+    const [r, c] = key.split(",").map(Number);
+    const nr = r + dr;
+    const nc = c + dc;
+    if (nr < 0 || nr >= rows || nc < 0 || nc >= cols || interactiveGrid[nr][nc] === "#") {
+      valid = false;
+      continue;
+    }
+    target.set(`${nr},${nc}`, ch);
+  }
+  return { dr, dc, source, target, valid };
+}
+
+// Live feedback while a Shift+drag is in progress: each destination cell
+// shows the letter it would receive (.interactive-move-ghost), framed blue
+// when the move is allowed, red when it is not — toggled on the rendered
+// cells, no full re-render.
+function renderInteractiveMovePreview() {
+  const plan = interactiveMovePlan();
+  const moving = plan.dr !== 0 || plan.dc !== 0;
+  cellElements.forEach((el, key) => {
+    el.querySelectorAll(".interactive-move-ghost").forEach((g) => g.remove());
+    const ch = moving ? plan.target.get(key) : undefined;
+    el.classList.toggle("move-preview", ch !== undefined && plan.valid);
+    el.classList.toggle("move-preview-invalid", ch !== undefined && !plan.valid);
+    if (ch !== undefined) {
+      const ghost = document.createElement("span");
+      ghost.className = "interactive-move-ghost";
+      ghost.textContent = ch;
+      el.appendChild(ghost);
+    }
+  });
+}
+
+// Applies the Shift+drag move on mouse release: the source letters are
+// erased, then written at their destination (overwriting what was there);
+// black cells never move. The selected zone, the selected cell, the
+// theme/"Mots Défi"/Scrabble letter colouring and the definition of every
+// word moved whole follow the letters; any other definition touching a
+// changed cell is dropped. Refused (message) when a letter would leave the
+// grid or land on a black cell.
+function finishInteractiveMove() {
+  const plan = interactiveMovePlan();
+  interactiveMoveStart = null;
+  interactiveMoveCurrent = null;
+  if (plan.dr === 0 && plan.dc === 0) {
+    renderInteractive();
+    return;
+  }
+  if (!plan.valid) {
+    setInteractiveMessage(I18N[uiLanguage].interactiveMoveBlocked, true);
+    renderInteractive();
+    return;
+  }
+  const shiftKey = (key) => {
+    const [r, c] = key.split(",").map(Number);
+    return `${r + plan.dr},${c + plan.dc}`;
+  };
+  // Definitions of the words whose every cell moves, to carry over.
+  const movedDefs = [];
+  for (const s of interactiveSlots()) {
+    const def = interactiveDefs.get(interactiveKey(s));
+    if (def !== undefined && s.cells.every(({ row, col }) => plan.source.has(`${row},${col}`))) {
+      movedDefs.push({ s, def });
+    }
+  }
+  interactivePushUndo();
+  for (const key of plan.source.keys()) {
+    const [r, c] = key.split(",").map(Number);
+    interactiveClearDefsAt(r, c);
+    interactiveGrid[r][c] = "";
+  }
+  for (const [key, ch] of plan.target) {
+    const [r, c] = key.split(",").map(Number);
+    interactiveGrid[r][c] = ch;
+  }
+  for (const key of plan.target.keys()) {
+    const [r, c] = key.split(",").map(Number);
+    interactiveClearDefsAt(r, c);
+  }
+  for (const { s, def } of movedDefs) {
+    const moved = interactiveSlots().find((m) => m.direction === s.direction
+      && m.startRow === s.startRow + plan.dr && m.startCol === s.startCol + plan.dc
+      && m.answer === s.answer);
+    if (moved) interactiveDefs.set(interactiveKey(moved), def);
+  }
+  const moveSet = (set) => {
+    const out = new Set([...set].filter((key) => !plan.source.has(key) && !plan.target.has(key)));
+    for (const key of set) if (plan.source.has(key)) out.add(shiftKey(key));
+    return out;
+  };
+  interactiveThemeCells = moveSet(interactiveThemeCells);
+  interactiveChallengeCells = moveSet(interactiveChallengeCells);
+  interactiveScrabbleCells = moveSet(interactiveScrabbleCells);
+  if (interactiveZoneSelection) {
+    const rows = interactiveGrid.length;
+    const cols = interactiveGrid[0].length;
+    interactiveZoneSelection = new Set([...interactiveZoneSelection].map(shiftKey).filter((key) => {
+      const [r, c] = key.split(",").map(Number);
+      return r >= 0 && r < rows && c >= 0 && c < cols;
+    }));
+  }
+  if (selected && plan.target.has(shiftKey(`${selected.row},${selected.col}`))) {
+    selected = { row: selected.row + plan.dr, col: selected.col + plan.dc };
+  }
+  setInteractiveMessage("");
+  renderInteractive();
+}
+
 // Starts/continues a click-drag zone selection on one grid cell — see
 // interactiveZoneSelection's own docstring. Mousedown begins tracking;
 // mouseenter (while a drag is already active) extends the live preview
@@ -7083,9 +7242,19 @@ function attachInteractiveDragHandlers(cell, r, c) {
     // otherwise fight with this custom one (grid cells hold real text
     // nodes for their letters/numbers).
     e.preventDefault();
+    // Shift+click-drag moves letters instead of selecting a zone (see
+    // interactiveMoveStart).
+    if (e.shiftKey) {
+      interactiveMoveStart = interactiveMoveSourceLetters().size ? { row: r, col: c } : null;
+      interactiveMoveCurrent = interactiveMoveStart;
+      if (!interactiveMoveStart) setInteractiveMessage(I18N[uiLanguage].interactiveMoveNothing, true);
+      return;
+    }
     interactiveDragStart = { row: r, col: c };
     interactiveDragCurrent = { row: r, col: c };
     interactiveDragActive = true;
+    interactiveDragPoint = { x: e.clientX, y: e.clientY };
+    interactiveDragMovedInCell = false;
     // Deliberately does NOT call renderInteractiveDragPreview() here — at
     // the user's explicit request: "When no zone is selected, a click
     // should not change the display... only select the word and the cell
@@ -7102,6 +7271,11 @@ function attachInteractiveDragHandlers(cell, r, c) {
     // only thing that reacts to it.
   });
   cell.addEventListener("mouseenter", () => {
+    if (interactiveMode && interactiveMoveStart) {
+      interactiveMoveCurrent = { row: r, col: c };
+      renderInteractiveMovePreview();
+      return;
+    }
     if (!interactiveMode || !interactiveDragActive) return;
     interactiveDragCurrent = { row: r, col: c };
     renderInteractiveDragPreview();
@@ -7119,7 +7293,34 @@ function attachInteractiveDragHandlers(cell, r, c) {
 // can freely click around (type, run "Croisés"/"Mots", ...) without
 // losing an already drag-selected zone — only dragging a genuinely new
 // rectangle ever replaces it.
+// A drag that stays inside its starting cell: once the pointer has moved
+// INTERACTIVE_DRAG_MIN_PX away from where the button went down, the live
+// preview shows the two emplacements crossing on that cell (the one-cell
+// rectangle, expanded by renderInteractiveDragPreview()). A black cell
+// belongs to no emplacement and gets no preview.
+document.addEventListener("mousemove", (e) => {
+  if (!interactiveDragActive || interactiveDragMovedInCell || !interactiveDragPoint) return;
+  if (Math.hypot(e.clientX - interactiveDragPoint.x, e.clientY - interactiveDragPoint.y)
+    < INTERACTIVE_DRAG_MIN_PX) return;
+  interactiveDragMovedInCell = true;
+  const { row, col } = interactiveDragStart;
+  if (interactiveGrid[row][col] !== "#") renderInteractiveDragPreview();
+});
+
+// Swallows the "click" that follows a drag ended on its own starting cell
+// (see interactiveSuppressNextClick), before any cell's own listener.
+document.addEventListener("click", (e) => {
+  if (!interactiveSuppressNextClick) return;
+  interactiveSuppressNextClick = false;
+  e.stopPropagation();
+  e.preventDefault();
+}, true);
+
 document.addEventListener("mouseup", () => {
+  if (interactiveMoveStart) {
+    finishInteractiveMove();
+    return;
+  }
   if (!interactiveDragActive) return;
   interactiveDragActive = false;
   const startCell = interactiveDragStart;
@@ -7127,12 +7328,27 @@ document.addEventListener("mouseup", () => {
     interactiveDragStart.row !== interactiveDragCurrent.row
     || interactiveDragStart.col !== interactiveDragCurrent.col
   );
+  const movedInCell = !moved && interactiveDragMovedInCell;
   const rect = interactiveDragRectCells();
   interactiveDragStart = null;
   interactiveDragCurrent = null;
+  interactiveDragPoint = null;
+  interactiveDragMovedInCell = false;
   let changed = false;
   if (moved) {
     interactiveZoneSelection = interactiveExpandZoneSelection(rect);
+    changed = true;
+  } else if (movedInCell) {
+    // A drag inside one cell selects the across and down emplacements
+    // crossing on it (a black cell: nothing changes). The click the
+    // browser fires next is swallowed either way.
+    interactiveSuppressNextClick = true;
+    // Never outlives this mouseup: the click, when the browser fires one,
+    // is dispatched before this timer runs.
+    setTimeout(() => { interactiveSuppressNextClick = false; }, 0);
+    if (interactiveGrid[startCell.row][startCell.col] !== "#") {
+      interactiveZoneSelection = interactiveExpandZoneSelection(rect);
+    }
     changed = true;
   } else if (
     startCell && interactiveZoneSelection

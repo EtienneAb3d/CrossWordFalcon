@@ -21,9 +21,10 @@ limits) JSON-lines file, one object per line, sorted by form:
         {"pos": "verb", "tags": "third-person singular future", "lemma": "humer"}]}
 
 filtered to just the surface forms (ACCENTUE) present in
-`data/wordlist_<lang>_freq.tsv` and `data/wordlist_<lang>_scrabble.tsv`
-(the app only ever looks these up: every grid word comes from those
-files), which keeps each language's file to a few MB up to ~20 MB. A
+`data/wordlist_<lang>_freq.tsv`, `data/wordlist_<lang>_scrabble.tsv` (the
+app only ever looks these up: every grid word comes from those files) and
+`data/wordlist_<lang>_hunspell.tsv` (the usage scoring's extra words),
+which keeps each language's file to a few MB up to ~20 MB. A
 wordlist form with no accent (only ASCII letters) is also matched
 impoverished, accents aside: its accents may be unknown (the Scrabble
 lists are written without accents), so the analyses of every accented
@@ -90,11 +91,13 @@ def _download_dump(lang):
 
 def _wordlist_forms(lang):
     """Every ACCENTED spelling (2nd column, `;`-separated in the Scrabble
-    one) of the language's wordlists — data/wordlist_<lang>_freq.tsv and,
-    when it exists, data/wordlist_<lang>_scrabble.tsv — lowercased: the
-    inflection table is filtered to just these."""
+    and Hunspell ones) of the language's wordlists — data/wordlist_<lang>_
+    freq.tsv and, when they exist, data/wordlist_<lang>_scrabble.tsv and
+    data/wordlist_<lang>_hunspell.tsv — lowercased: the inflection table is
+    filtered to just these."""
     forms = set()
-    for name in (f"wordlist_{lang}_freq.tsv", f"wordlist_{lang}_scrabble.tsv"):
+    for name in (f"wordlist_{lang}_freq.tsv", f"wordlist_{lang}_scrabble.tsv",
+                 f"wordlist_{lang}_hunspell.tsv"):
         path = WORDLIST_DIR / name
         if not path.exists():
             continue

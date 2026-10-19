@@ -34,25 +34,29 @@ if ! command -v rsvg-convert >/dev/null 2>&1; then
     fi
 fi
 
-# hunspell (the command-line spellchecker) and xz — needed only by the data
-# pipeline (data_builder/build_<lang>.sh / build_all.sh: corpus language
-# filtering, wordlist validation and lemmas, Scrabble dictionary accents),
+# hunspell (the command-line spellchecker), unmunch (Hunspell's affix
+# expander) and xz — needed only by the data pipeline (data_builder/
+# build_<lang>.sh / build_all.sh: corpus language filtering, wordlist
+# validation and lemmas, Scrabble dictionary accents, Hunspell wordlist),
 # never by the running app; xz also unpacks the reference-corpus archives
-# below. The Hunspell dictionaries themselves are downloaded on first use
-# into data/hunspell_cache/.
-for tool in hunspell xz; do
+# below. unmunch ships with the hunspell package except on Debian/Ubuntu
+# (hunspell-tools). The Hunspell dictionaries themselves are downloaded on
+# first use into data/hunspell_cache/.
+for tool in hunspell unmunch xz; do
     command -v "$tool" >/dev/null 2>&1 && continue
     echo "Installing $tool (data pipeline)..."
+    pkg="$tool"; [ "$tool" = "unmunch" ] && pkg="hunspell"
     if [ "$(uname -s)" = "Darwin" ]; then
-        command -v brew >/dev/null 2>&1 && brew install "$tool" \
-            || echo "Warning: install $tool manually (brew install $tool)."
+        command -v brew >/dev/null 2>&1 && brew install "$pkg" \
+            || echo "Warning: install $tool manually (brew install $pkg)."
     elif command -v apt-get >/dev/null 2>&1; then
-        pkg="$tool"; [ "$tool" = "xz" ] && pkg="xz-utils"
+        [ "$tool" = "xz" ] && pkg="xz-utils"
+        [ "$tool" = "unmunch" ] && pkg="hunspell-tools"
         sudo apt-get install -y "$pkg" || echo "Warning: 'apt-get install $pkg' failed — install it manually."
     elif command -v dnf >/dev/null 2>&1; then
-        sudo dnf install -y "$tool" || echo "Warning: 'dnf install $tool' failed — install it manually."
+        sudo dnf install -y "$pkg" || echo "Warning: 'dnf install $pkg' failed — install it manually."
     elif command -v pacman >/dev/null 2>&1; then
-        sudo pacman -S --noconfirm "$tool" || echo "Warning: 'pacman -S $tool' failed — install it manually."
+        sudo pacman -S --noconfirm "$pkg" || echo "Warning: 'pacman -S $pkg' failed — install it manually."
     else
         echo "Warning: no supported package manager found — install $tool manually."
     fi

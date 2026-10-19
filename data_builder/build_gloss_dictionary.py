@@ -86,10 +86,13 @@ def _target_lemmas(lang):
     """Every canonical form (lemma) this project's own dictionaries for
     `lang` actually need a gloss for — the CANONICAL column (one or more
     per word, semicolon-separated) of data/wordlist_<lang>_freq.tsv (4th
-    column, build_wordlist_freq.py) and of data/wordlist_<lang>_scrabble.
-    tsv (3rd column, build_wordlist_scrabble.py) when it exists."""
+    column, build_wordlist_freq.py), of data/wordlist_<lang>_scrabble.
+    tsv (3rd column, build_wordlist_scrabble.py) and of data/wordlist_
+    <lang>_hunspell.tsv (3rd column, build_wordlist_hunspell.py) when they
+    exist."""
     lemmas = set()
-    for name, column in ((f"wordlist_{lang}_freq.tsv", 3), (f"wordlist_{lang}_scrabble.tsv", 2)):
+    for name, column in ((f"wordlist_{lang}_freq.tsv", 3), (f"wordlist_{lang}_scrabble.tsv", 2),
+                         (f"wordlist_{lang}_hunspell.tsv", 2)):
         path = DATA_DIR / name
         if not path.exists():
             continue
