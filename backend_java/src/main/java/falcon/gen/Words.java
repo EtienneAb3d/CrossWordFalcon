@@ -303,10 +303,10 @@ public final class Words {
         return out;
     }
 
-    /** Minimum usage score of the Scrabble words a lexicon keeps, per difficulty, for a language with a usage-score
-     * file (Generator.load), combined with the freq wordlist's own DIFFICULTY_PRESETS cut (a union, a word of that cut
-     * needing FREQ_CUT_USAGE_LENIENCY point less): "easy" the Scrabble words rated 3 and more plus the words of the
-     * "easy" cut (definition required, likely proper nouns excluded) rated 2 and more, "medium" the Scrabble words
+    /** Minimum usage score of the words a lexicon keeps (any word of the freq or Scrabble wordlist), per difficulty,
+     * for a language with a usage-score file (Generator.load), combined with the freq wordlist's own DIFFICULTY_PRESETS cut (a union, a word of that cut
+     * needing FREQ_CUT_USAGE_LENIENCY point less): "easy" the words rated 3 and more plus the words of the
+     * "easy" cut (definition required, likely proper nouns excluded) rated 2 and more, "medium" the words
      * rated 2 and more plus the words of the "medium" cut rated 1 and more, an unrated word dropped, "hard" (absent:
      * no cut) every word of the freq and Scrabble wordlists. The "easy" inflection filter and quotas are not applied;
      * the "medium" and "hard" quotas are (mirrors USAGE_DIFFICULTY_MIN_SCORE). */

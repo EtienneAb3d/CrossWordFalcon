@@ -138,12 +138,12 @@ Quand la langue a un fichier de scores d'usage
 (`data/usage_score_<langue>_scrabble.tsv`), la difficulté **combine le
 score d'usage et la coupe de fréquence** : les deux dictionnaires sont
 versés en entier, puis un mot est gardé s'il remplit l'un des deux
-critères — mot Scrabble noté au moins le seuil du niveau
+critères — mot (Scrabble ou non) noté au moins le seuil du niveau
 (`USAGE_DIFFICULTY_MIN_SCORE` : 3 en facile, 2 en moyen), ou mot de la
 coupe de fréquence du niveau (`DIFFICULTY_PRESETS`, 75 % avec définition
 exigée et noms propres probables exclus en facile, 85 % en moyen) noté au
 moins `FREQ_CUT_USAGE_LENIENCY` (1) point de moins (2 en facile, 1 en
-moyen). Le score de ce second critère vient de l'un ou l'autre fichier de
+moyen). Le score vient de l'un ou l'autre fichier de
 scores (le mot du corpus absent du Scrabble est noté dans
 `data/usage_score_<langue>_scrabble_out.tsv`). Le niveau difficile garde
 tous les mots, Scrabble et corpus (`backend/crossword_gen.py`,

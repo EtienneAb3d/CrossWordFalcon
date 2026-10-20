@@ -295,7 +295,7 @@ plusieurs signaux) :
   simple aux 1re et 2e personnes…), 2 terme technique, 1 mot vieilli,
   0 mot pratiquement inconnu. Un mot hors de ce fichier n'a pas de score
   connu. Il sert à quatre endroits : la **sélection du lexique** par
-  niveau de difficulté (un mot Scrabble noté au moins 3 en facile, 2 en
+  niveau de difficulté (un mot, Scrabble ou non, noté au moins 3 en facile, 2 en
   moyen, ou un mot de la coupe de fréquence du niveau noté un point de
   moins — voir `ReadMe.md`, « Le lexique d'une grille » ; `_select_lexicon`), le **filtre d'usage** du tirage des mots
   (seuls les `USAGE_KEEP_PERCENT` (60) % des candidats au score connu les

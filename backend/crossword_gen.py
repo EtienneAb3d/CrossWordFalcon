@@ -3288,19 +3288,19 @@ _LEXICON_CACHE_LOCK = threading.Lock()
 LEXICON_CACHE_MAX = 8
 
 
-# Minimum usage score of the Scrabble words a lexicon keeps, per
-# difficulty, for a language with a usage-score file (`load_lexicon`). The
-# usage criterion is combined with the freq wordlist's own cut (a union): a
-# word of that cut needs `FREQ_CUT_USAGE_LENIENCY` (1) point less. "easy"
-# keeps the Scrabble words rated 3 and more plus the words of the
-# `DIFFICULTY_PRESETS["easy"]` cut (definition required, likely proper
-# nouns excluded) rated 2 and more; "medium" the Scrabble words rated 2 and
-# more plus the words of the `DIFFICULTY_PRESETS["medium"]` cut rated 1 and
-# more; an unrated word is dropped; "hard" (`None`)
-# every word of the freq and Scrabble wordlists. The inflection filter of
-# the "easy" Scrabble words is not applied, nor are the "easy"
-# `MAX_PROPER_NOUNS`/`MAX_NON_GLOSS_WORDS` quotas (no such word enters);
-# the "medium" and "hard" quotas apply.
+# Minimum usage score of the words a lexicon keeps, per difficulty, for a
+# language with a usage-score file (`load_lexicon`). The usage criterion
+# (any word of the freq or Scrabble wordlist, rated in either usage-score
+# file) is combined with the freq wordlist's own cut (a union): a word of
+# that cut needs `FREQ_CUT_USAGE_LENIENCY` (1) point less. "easy" keeps the
+# words rated 3 and more plus the words of the `DIFFICULTY_PRESETS["easy"]`
+# cut (definition required, likely proper nouns excluded) rated 2 and more;
+# "medium" the words rated 2 and more plus the words of the
+# `DIFFICULTY_PRESETS["medium"]` cut rated 1 and more; an unrated word is
+# dropped; "hard" (`None`) every word of the freq and Scrabble wordlists.
+# The inflection filter of the "easy" Scrabble words is not applied, nor
+# are the "easy" `MAX_PROPER_NOUNS`/`MAX_NON_GLOSS_WORDS` quotas; the
+# "medium" and "hard" quotas apply.
 USAGE_DIFFICULTY_MIN_SCORE = {"easy": 3, "medium": 2, "hard": None}
 FREQ_CUT_USAGE_LENIENCY = 1
 
@@ -3341,8 +3341,8 @@ def _select_lexicon(wordlist_path, max_words, difficulty):
 
     With no explicit `max_words` and a language that has a usage-score
     file (`usage_lexicon_active`), the whole freq and Scrabble wordlists
-    are loaded and cut to the union of two criteria: the Scrabble words
-    rated at least `USAGE_DIFFICULTY_MIN_SCORE[difficulty]`, and the words
+    are loaded and cut to the union of two criteria: the words rated at
+    least `USAGE_DIFFICULTY_MIN_SCORE[difficulty]`, and the words
     kept by the freq wordlist's own `DIFFICULTY_PRESETS[difficulty]` cut
     (`load_wordlist`; at "easy" with the definition requirement and likely
     proper nouns excluded) rated at least `FREQ_CUT_USAGE_LENIENCY` less
@@ -3373,7 +3373,6 @@ def _select_lexicon(wordlist_path, max_words, difficulty):
                 if (kept := [
                     w for w in words
                     if (score := usage_scores.get(w, USAGE_SCORE_UNKNOWN)) >= min_score
-                    and w in scrabble
                     or score >= min_score - FREQ_CUT_USAGE_LENIENCY and w in freq_cut
                 ])
             }

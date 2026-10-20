@@ -150,7 +150,7 @@ public final class Generator {
 
     /** The words of {@code path}'s lexicon for {@code difficulty} (mirrors _select_lexicon): with no explicit
      * {@code maxWords} and a language with a usage-score file, the whole freq and Scrabble wordlists cut to the union
-     * of the Scrabble words rated at least USAGE_DIFFICULTY_MIN_SCORE and the words kept by the freq wordlist's own
+     * of the words rated at least USAGE_DIFFICULTY_MIN_SCORE and the words kept by the freq wordlist's own
      * DIFFICULTY_PRESETS cut ("easy": definition required, likely proper nouns excluded) rated at least
      * FREQ_CUT_USAGE_LENIENCY less (an unrated word dropped either way); no cut at "hard"; no
      * quota word set at "easy". Otherwise cut to {@code maxWords}, else to DIFFICULTY_PRESETS, "easy" filters on at
@@ -170,7 +170,7 @@ public final class Generator {
         if (byUsage) {
             Integer minScore = Words.USAGE_DIFFICULTY_MIN_SCORE.get(difficulty);
             if (minScore != null) {
-                // Usage criterion (Scrabble words), or the freq wordlist's own cut with one point less.
+                // Usage criterion (any word), or the freq wordlist's own cut with one point less.
                 boolean freqEasy = "easy".equals(difficulty);
                 Set<String> freqCut = new HashSet<>();
                 for (List<String> ws : Words.loadWordlist(path, Words.DIFFICULTY_PRESETS.get(difficulty),
@@ -180,7 +180,7 @@ public final class Generator {
                     List<String> k = new ArrayList<>();
                     for (String w : words) {
                         int score = usageScores.getOrDefault(w, Words.USAGE_SCORE_UNKNOWN);
-                        if ((score >= minScore && scrabble.contains(w))
+                        if (score >= minScore
                                 || (score >= minScore - Words.FREQ_CUT_USAGE_LENIENCY && freqCut.contains(w))) k.add(w);
                     }
                     if (!k.isEmpty()) kept.put(len, k);

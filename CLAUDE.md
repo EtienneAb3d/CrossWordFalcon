@@ -280,14 +280,17 @@ given (`usage_lexicon_active`, Java `Words.usageLexiconActive`),
 maxWords, difficulty)`), through `_select_lexicon` (Java `Generator.
 select`), loads the whole freq and Scrabble wordlists, then keeps the union
 of two criteria (a word with no usage score is dropped at easy/medium):
-a Scrabble word rated at least `USAGE_DIFFICULTY_MIN_SCORE[difficulty]`
-(easy 3, medium 2, hard `None` = every word), or a word kept by the freq
+a word of either wordlist rated at least `USAGE_DIFFICULTY_MIN_SCORE
+[difficulty]` in either usage-score file (easy 3, medium 2, hard `None` =
+every word), or a word kept by the freq
 wordlist's own `DIFFICULTY_PRESETS[difficulty]` cut (a second
 `load_wordlist`) rated at least `FREQ_CUT_USAGE_LENIENCY` (1) point less
 (easy 2, medium 1; its score from either usage-score file):
 - easy: the freq cut is `load_wordlist(path, 0.75, require_gloss=True,
   exclude_proper_nouns=True)`; no quota set (`proper_nouns`/`non_gloss`
-  empty) — the Scrabble inflection filter above is ignored;
+  empty), so a word rated 3 or more enters whether or not it has a
+  definition or looks like a proper noun — the Scrabble inflection filter
+  above is ignored;
 - medium: the freq cut is `load_wordlist(path, 0.85)`; the
   `MAX_PROPER_NOUNS`/`MAX_NON_GLOSS_WORDS` medium quotas (2) apply;
 - hard: every word, the hard quotas (5) apply.

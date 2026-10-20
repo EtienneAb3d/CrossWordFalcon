@@ -1823,18 +1823,19 @@ the current defaults/behavior to know before touching this code.
   exclure)", and "si un mot est dans le lot des mots acceptés par la règle
   Freq, accepter un niveau Usage de moins que la règle actuelle (en niveau
   facile, un mot Usage=2 passe, s'il est dans la sélection Freq>=0.66, mais
-  pas un mot Usage=1 ou 0)". A word is kept when it is a Scrabble word
-  rated at least the level's threshold (Easy 3, Medium 2), or a word of
+  pas un mot Usage=1 ou 0)". A word is kept when it is rated at least the
+  level's threshold (Easy 3, Medium 2) — the user's rule: "garder tous les
+  mots Scrabble et Out ayant une note >=3" (Medium: >= 2) — or a word of
   the freq wordlist's own `DIFFICULTY_PRESETS` cut (the rules applied with
   no usage score: Easy 75 % with a definition and no likely proper noun,
   Medium 85 %) rated one point less; Hard keeps every word of both lists.
   Choices made with the rules, to revisit with the user: "combine" is a
-  union (the user's answer); the first criterion stays Scrabble-only, as
-  before; an unrated word is dropped at Easy/Medium in both criteria; a
+  union (the user's answer); an unrated word is dropped at Easy/Medium in both criteria; a
   freq-only word gets its score from `usage_score_<lang>_scrabble_out.tsv`
   (`build_usage_scores.py --source out`, `build_<lang>.sh` step 8); the
   easy inflection filter of the Scrabble words and the Easy quotas are not
-  applied (nothing they would catch enters), the Medium/Hard quotas (2 and
+  applied (a freq word rated 3 or more enters at Easy even without a
+  definition or as a likely proper noun), the Medium/Hard quotas (2 and
   5 proper nouns, words with no definition) apply; the in-search 60 %
   usage filter and the content-score correction stay; an explicit CLI
   `--max-words` keeps the old cut. The localhost-only usage-score

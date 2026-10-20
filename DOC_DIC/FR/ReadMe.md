@@ -557,11 +557,11 @@ ce niveau, avec la référence de leur ligne, hors quotas de noms
 propres et de mots sans définition. Quand la langue a ses scores d'usage
 (`data/usage_score_<langue>_scrabble.tsv`), les deux dictionnaires sont
 versés en entier et la difficulté combine les deux critères : un mot est
-retenu s'il est un mot Scrabble noté au moins 3 en facile, 2 en moyen
+retenu s'il est noté au moins 3 en facile, 2 en moyen
 (`USAGE_DIFFICULTY_MIN_SCORE`), ou s'il est dans la coupe de fréquence du
 niveau (`DIFFICULTY_PRESETS` : 75 % avec définition exigée et noms propres
 probables exclus en facile, 85 % en moyen) et noté un point de moins, 2 en
-facile, 1 en moyen (`FREQ_CUT_USAGE_LENIENCY` ; un mot du corpus absent du
+facile, 1 en moyen (`FREQ_CUT_USAGE_LENIENCY` ; dans les deux critères, un mot du corpus absent du
 Scrabble est noté dans `data/usage_score_<langue>_scrabble_out.tsv`) ; tous
 en difficile (`backend/crossword_gen.py`, `_select_lexicon`). Un mot sans
 score est écarté en facile et en moyen. Le filtre des formes fléchies du

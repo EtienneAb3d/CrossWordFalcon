@@ -65,10 +65,12 @@
 {"form": "abbreviations", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "abbreviation"}]}
 {"form": "abbreviators", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "abbreviator"}]}
 {"form": "abbreviatures", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "abbreviature"}]}
+{"form": "abbrevs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "abbrev"}]}
 {"form": "abbs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "abb"}]}
 {"form": "abbés", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "abbé"}]}
 {"form": "abcees", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "abcee"}]}
 {"form": "abcoulombs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "abcoulomb"}]}
+{"form": "abcs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ABC"}]}
 {"form": "abdicated", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "abdicate"}]}
 {"form": "abdicates", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "abdicate"}]}
 {"form": "abdicating", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "abdicate"}]}
@@ -179,6 +181,7 @@
 {"form": "abluted", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "ablute"}]}
 {"form": "ablutions", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ablution"}]}
 {"form": "abmhos", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "abmho"}]}
+{"form": "abms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ABM"}]}
 {"form": "abnegated", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "abnegate"}]}
 {"form": "abnegates", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "abnegate"}]}
 {"form": "abnegating", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "abnegate"}]}
@@ -1967,6 +1970,7 @@
 {"form": "airinesses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "airiness"}]}
 {"form": "airing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "air"}]}
 {"form": "airings", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "airing"}]}
+{"form": "airletters", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "airletter"}]}
 {"form": "airlifted", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "airlift"}]}
 {"form": "airlifting", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "airlift"}]}
 {"form": "airlifts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "airlift"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "airlift"}]}
@@ -2573,6 +2577,7 @@
 {"form": "alphabetisers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "alphabetiser"}]}
 {"form": "alphabetises", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "alphabetise"}]}
 {"form": "alphabetising", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "alphabetise"}]}
+{"form": "alphabetizations", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "alphabetization"}]}
 {"form": "alphabetized", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "alphabetize"}]}
 {"form": "alphabetizers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "alphabetizer"}]}
 {"form": "alphabetizes", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "alphabetize"}]}
@@ -2813,7 +2818,9 @@
 {"form": "amerciaments", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "amerciament"}]}
 {"form": "amercing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "amerce"}]}
 {"form": "americanisms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Americanism"}]}
+{"form": "americanizations", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Americanization"}, {"pos": "noun", "tags": "plural", "lemma": "americanization"}]}
 {"form": "americanized", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "Americanize"}]}
+{"form": "americanizes", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "Americanize"}]}
 {"form": "americanizing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "Americanize"}]}
 {"form": "americans", "analyses": [{"pos": "name", "tags": "plural", "lemma": "American"}]}
 {"form": "americiums", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "americium"}]}
@@ -3717,6 +3724,7 @@
 {"form": "anthropophytes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "anthropophyte"}]}
 {"form": "anthropotomies", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "anthropotomy"}]}
 {"form": "anthuriums", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "anthurium"}]}
+{"form": "antiabortionists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "antiabortionist"}]}
 {"form": "antiaircrafts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "antiaircraft"}]}
 {"form": "antiarins", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "antiarin"}]}
 {"form": "antiarrhythmics", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "antiarrhythmic"}]}
@@ -4789,6 +4797,7 @@
 {"form": "aridities", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "aridity"}]}
 {"form": "aridnesses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "aridness"}]}
 {"form": "ariels", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ariel"}, {"pos": "name", "tags": "plural", "lemma": "Ariel"}]}
+{"form": "arieses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Aries"}]}
 {"form": "ariettas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "arietta"}]}
 {"form": "ariettes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ariette"}]}
 {"form": "arilli", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "arillus"}]}
@@ -6338,6 +6347,7 @@
 {"form": "awoke", "analyses": [{"pos": "verb", "tags": "past", "lemma": "awake"}, {"pos": "verb", "tags": "past participle", "lemma": "awake"}]}
 {"form": "awoken", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "awake"}]}
 {"form": "awols", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "AWOL"}, {"pos": "noun", "tags": "plural", "lemma": "awol"}]}
+{"form": "aws", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "aw"}]}
 {"form": "axed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "ax"}, {"pos": "verb", "tags": "past participle", "lemma": "axe"}]}
 {"form": "axels", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "axel"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "axel"}, {"pos": "name", "tags": "plural", "lemma": "Axel"}]}
 {"form": "axemen", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "axeman"}]}
@@ -6696,6 +6706,7 @@
 {"form": "backstories", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "backstory"}]}
 {"form": "backstreets", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "backstreet"}]}
 {"form": "backstretches", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "backstretch"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "backstretch"}]}
+{"form": "backstroked", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "backstroke"}]}
 {"form": "backstrokes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "backstroke"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "backstroke"}]}
 {"form": "backstroking", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "backstroke"}]}
 {"form": "backswings", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "backswing"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "backswing"}]}
@@ -7023,6 +7034,7 @@
 {"form": "ballrooms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ballroom"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "ballroom"}]}
 {"form": "balls", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ball"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "ball"}]}
 {"form": "ballsed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "balls"}]}
+{"form": "ballses", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "balls"}]}
 {"form": "ballsier", "analyses": [{"pos": "adj", "tags": "", "lemma": "ballsy"}]}
 {"form": "ballsiest", "analyses": [{"pos": "adj", "tags": "", "lemma": "ballsy"}]}
 {"form": "ballsing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "balls"}]}
@@ -7757,6 +7769,7 @@
 {"form": "battiks", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "battik"}]}
 {"form": "batting", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "bat"}]}
 {"form": "battings", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "batting"}]}
+{"form": "battleaxes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "battleaxe"}]}
 {"form": "battlebuses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "battlebus"}]}
 {"form": "battled", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "battle"}]}
 {"form": "battledoors", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "battledoor"}]}
@@ -7848,6 +7861,8 @@
 {"form": "bazooms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "bazoom"}]}
 {"form": "bazoos", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "bazoo"}]}
 {"form": "bazoukis", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "bazouki"}]}
+{"form": "bbs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "BB"}, {"pos": "noun", "tags": "plural", "lemma": "bb"}]}
+{"form": "bbses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "BBS"}]}
 {"form": "bdelliums", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "bdellium"}]}
 {"form": "beach", "analyses": [{"pos": "noun", "tags": "", "lemma": "bitch"}]}
 {"form": "beachballs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "beachball"}]}
@@ -8133,6 +8148,7 @@
 {"form": "bedfellows", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "bedfellow"}]}
 {"form": "bedframes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "bedframe"}]}
 {"form": "bedgowns", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "bedgown"}]}
+{"form": "bedheads", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "bedhead"}]}
 {"form": "bediapered", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "bediaper"}]}
 {"form": "bediapering", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "bediaper"}]}
 {"form": "bediapers", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "bediaper"}]}
@@ -8906,6 +8922,7 @@
 {"form": "bermes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "berme"}]}
 {"form": "berming", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "berm"}]}
 {"form": "berms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "berm"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "berm"}]}
+{"form": "bermudans", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Bermudan"}]}
 {"form": "bermudians", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Bermudian"}]}
 {"form": "bernicles", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "bernicle"}]}
 {"form": "berobbed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "berob"}]}
@@ -9840,6 +9857,7 @@
 {"form": "birdwatchers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "birdwatcher"}]}
 {"form": "birdwatches", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "birdwatch"}]}
 {"form": "birdwings", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "birdwing"}]}
+{"form": "birdying", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "birdie"}]}
 {"form": "birefringences", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "birefringence"}]}
 {"form": "biremes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "bireme"}]}
 {"form": "birettas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "biretta"}]}
@@ -10368,6 +10386,7 @@
 {"form": "blitzes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "blitz"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "blitz"}]}
 {"form": "blitzing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "blitz"}]}
 {"form": "blitzkriegs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "blitzkrieg"}]}
+{"form": "blivets", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "blivet"}]}
 {"form": "blizzards", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "blizzard"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "blizzard"}, {"pos": "name", "tags": "plural", "lemma": "Blizzard"}]}
 {"form": "bloated", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "bloat"}]}
 {"form": "bloaters", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "bloater"}]}
@@ -10527,6 +10546,7 @@
 {"form": "blowzes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "blowze"}]}
 {"form": "blowzier", "analyses": [{"pos": "adj", "tags": "", "lemma": "blowzy"}]}
 {"form": "blowziest", "analyses": [{"pos": "adj", "tags": "", "lemma": "blowzy"}]}
+{"form": "blts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "BLT"}]}
 {"form": "blubbed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "blub"}]}
 {"form": "blubbered", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "blubber"}]}
 {"form": "blubberers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "blubberer"}]}
@@ -12244,6 +12264,7 @@
 {"form": "brits", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Brit"}, {"pos": "noun", "tags": "plural", "lemma": "brit"}]}
 {"form": "britschkas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "britschka"}]}
 {"form": "britskas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "britska"}]}
+{"form": "brittanies", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Brittany"}]}
 {"form": "brittled", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "brittle"}]}
 {"form": "brittlenesses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "brittleness"}]}
 {"form": "brittler", "analyses": [{"pos": "adj", "tags": "", "lemma": "brittle"}]}
@@ -12582,6 +12603,8 @@
 {"form": "bryophytes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "bryophyte"}]}
 {"form": "bryozoans", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "bryozoan"}]}
 {"form": "brāhmans", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "brāhman"}]}
+{"form": "bs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "b"}, {"pos": "noun", "tags": "plural", "lemma": "B"}]}
+{"form": "bsds", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "BSD"}]}
 {"form": "bubales", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "bubale"}]}
 {"form": "bubals", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "bubal"}]}
 {"form": "bubas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "buba"}]}
@@ -12664,6 +12687,7 @@
 {"form": "budded", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "bud"}]}
 {"form": "budders", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "budder"}]}
 {"form": "buddhas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Buddha"}, {"pos": "noun", "tags": "plural", "lemma": "buddha"}]}
+{"form": "buddhisms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Buddhism"}]}
 {"form": "buddhists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Buddhist"}]}
 {"form": "buddied", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "buddy"}]}
 {"form": "buddies", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "buddy"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "buddy"}]}
@@ -13387,6 +13411,7 @@
 {"form": "buzzkills", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "buzzkill"}]}
 {"form": "buzzwords", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "buzzword"}]}
 {"form": "bwanas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "bwana"}]}
+{"form": "bxs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "bx"}]}
 {"form": "bycatches", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "bycatch"}]}
 {"form": "bycokets", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "bycoket"}]}
 {"form": "byelaws", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "byelaw"}]}
@@ -13993,6 +14018,7 @@
 {"form": "camos", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "camo"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "camo"}]}
 {"form": "camotes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "camote"}]}
 {"form": "camouflaged", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "camouflage"}]}
+{"form": "camouflagers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "camouflager"}]}
 {"form": "camouflages", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "camouflage"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "camouflage"}]}
 {"form": "camouflaging", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "camouflage"}]}
 {"form": "camouflets", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "camouflet"}]}
@@ -14672,6 +14698,7 @@
 {"form": "carcasses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "carcass"}]}
 {"form": "carcels", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "carcel"}]}
 {"form": "carcinogeneses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "carcinogenesis"}]}
+{"form": "carcinogenics", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "carcinogenic"}]}
 {"form": "carcinogens", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "carcinogen"}]}
 {"form": "carcinoids", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "carcinoid"}]}
 {"form": "carcinologists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "carcinologist"}]}
@@ -15054,6 +15081,8 @@
 {"form": "casefies", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "casefy"}]}
 {"form": "casefying", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "casefy"}]}
 {"form": "casehardened", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "caseharden"}]}
+{"form": "casehardening", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "caseharden"}]}
+{"form": "casehardens", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "caseharden"}]}
 {"form": "caseinates", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "caseinate"}]}
 {"form": "caseinogens", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "caseinogen"}]}
 {"form": "caseins", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "casein"}]}
@@ -15568,6 +15597,8 @@
 {"form": "cañadas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cañada"}]}
 {"form": "cañons", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cañon"}]}
 {"form": "cañóns", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cañón"}]}
+{"form": "cbs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "CB"}]}
+{"form": "cds", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "CD"}, {"pos": "noun", "tags": "plural", "lemma": "cD"}]}
 {"form": "ceanothuses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ceanothus"}]}
 {"form": "ceas", "analyses": [{"pos": "name", "tags": "plural", "lemma": "Cea"}, {"pos": "noun", "tags": "plural", "lemma": "CEA"}]}
 {"form": "ceased", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "cease"}]}
@@ -16837,6 +16868,7 @@
 {"form": "childnesses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "childness"}]}
 {"form": "childproofed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "childproof"}]}
 {"form": "childproofing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "childproof"}]}
+{"form": "childproofs", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "childproof"}]}
 {"form": "children", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "child"}, {"pos": "noun", "tags": "plural", "lemma": "childer"}]}
 {"form": "childs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "child"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "child"}]}
 {"form": "chileans", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Chilean"}]}
@@ -17339,6 +17371,7 @@
 {"form": "chrismons", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "chrismon"}]}
 {"form": "chrisms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "chrism"}]}
 {"form": "chrisoms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "chrisom"}]}
+{"form": "christendoms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Christendom"}]}
 {"form": "christened", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "christen"}]}
 {"form": "christeners", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "christener"}]}
 {"form": "christening", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "christen"}]}
@@ -17357,6 +17390,8 @@
 {"form": "christies", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "christie"}]}
 {"form": "christingles", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Christingle"}]}
 {"form": "christmases", "analyses": [{"pos": "name", "tags": "plural", "lemma": "Christmas"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "Christmas"}]}
+{"form": "christmastides", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Christmastide"}]}
+{"form": "christmastimes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Christmastime"}]}
 {"form": "christoms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "christom"}]}
 {"form": "christophanies", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Christophany"}]}
 {"form": "christs", "analyses": [{"pos": "name", "tags": "plural", "lemma": "Christ"}, {"pos": "noun", "tags": "plural", "lemma": "Christ"}, {"pos": "noun", "tags": "plural", "lemma": "christ"}]}
@@ -18634,6 +18669,7 @@
 {"form": "cnidae", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cnida"}]}
 {"form": "cnidarians", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cnidarian"}]}
 {"form": "cnidoblasts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cnidoblast"}]}
+{"form": "cns", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "CN"}]}
 {"form": "coacervates", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "coacervate"}]}
 {"form": "coacervations", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "coacervation"}]}
 {"form": "coachbuilders", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "coachbuilder"}]}
@@ -19110,6 +19146,7 @@
 {"form": "cofeatures", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cofeature"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "cofeature"}]}
 {"form": "cofeaturing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "cofeature"}]}
 {"form": "coffed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "coff"}]}
+{"form": "coffeecakes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "coffeecake"}]}
 {"form": "coffeehouses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "coffeehouse"}]}
 {"form": "coffeemakers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "coffeemaker"}]}
 {"form": "coffeepots", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "coffeepot"}]}
@@ -20833,6 +20870,7 @@
 {"form": "consecrators", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "consecrator"}]}
 {"form": "consectaries", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "consectary"}]}
 {"form": "consecutions", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "consecution"}]}
+{"form": "consed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "cons"}]}
 {"form": "consensions", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "consension"}]}
 {"form": "consensuses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "consensus"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "consensus"}]}
 {"form": "consented", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "consent"}]}
@@ -21194,6 +21232,7 @@
 {"form": "contradictories", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "contradictory"}]}
 {"form": "contradictors", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "contradictor"}]}
 {"form": "contradicts", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "contradict"}]}
+{"form": "contradistinctions", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "contradistinction"}]}
 {"form": "contrafagottos", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "contrafagotto"}]}
 {"form": "contraflows", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "contraflow"}]}
 {"form": "contragestives", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "contragestive"}]}
@@ -21202,6 +21241,7 @@
 {"form": "contraindicants", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "contraindicant"}]}
 {"form": "contraindicated", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "contraindicate"}]}
 {"form": "contraindicates", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "contraindicate"}]}
+{"form": "contraindicating", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "contraindicate"}]}
 {"form": "contraindications", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "contraindication"}]}
 {"form": "contralti", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "contralto"}]}
 {"form": "contraltos", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "contralto"}]}
@@ -21307,6 +21347,7 @@
 {"form": "conventicling", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "conventicle"}]}
 {"form": "conventing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "convent"}]}
 {"form": "conventionalized", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "conventionalize"}]}
+{"form": "conventionalizes", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "conventionalize"}]}
 {"form": "conventionalizing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "conventionalize"}]}
 {"form": "conventionals", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "conventional"}]}
 {"form": "conventioneers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "conventioneer"}]}
@@ -22011,6 +22052,7 @@
 {"form": "corsos", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Corso"}, {"pos": "name", "tags": "plural", "lemma": "Corso"}]}
 {"form": "corteges", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cortege"}, {"pos": "noun", "tags": "plural", "lemma": "cortège"}]}
 {"form": "cortes", "analyses": [{"pos": "name", "tags": "plural", "lemma": "Corte"}]}
+{"form": "corteses", "analyses": [{"pos": "name", "tags": "plural", "lemma": "Cortes"}]}
 {"form": "cortexes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cortex"}]}
 {"form": "cortices", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cortex"}]}
 {"form": "corticoids", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "corticoid"}]}
@@ -22259,6 +22301,7 @@
 {"form": "councilmen", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "councilman"}]}
 {"form": "councilors", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "councilor"}]}
 {"form": "councilorships", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "councilorship"}]}
+{"form": "councilpersons", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "councilperson"}]}
 {"form": "councils", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "council"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "council"}]}
 {"form": "councilwomen", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "councilwoman"}]}
 {"form": "counseled", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "counsel"}]}
@@ -23548,6 +23591,7 @@
 {"form": "croziers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "crozier"}]}
 {"form": "crozzled", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "crozzle"}]}
 {"form": "croûtons", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "croûton"}]}
+{"form": "crts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "CRT"}]}
 {"form": "crubeens", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "crubeen"}]}
 {"form": "cruces", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "crux"}, {"pos": "name", "tags": "plural", "lemma": "Cruce"}]}
 {"form": "crucians", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "crucian"}]}
@@ -23586,6 +23630,7 @@
 {"form": "cruelties", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cruelty"}]}
 {"form": "crues", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "crue"}]}
 {"form": "cruets", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cruet"}]}
+{"form": "crufted", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "cruft"}]}
 {"form": "crufts", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "cruft"}]}
 {"form": "cruised", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "cruise"}]}
 {"form": "cruisers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cruiser"}]}
@@ -23819,6 +23864,7 @@
 {"form": "cudgeled", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "cudgel"}]}
 {"form": "cudgelers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cudgeler"}]}
 {"form": "cudgeling", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "cudgel"}]}
+{"form": "cudgelings", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cudgeling"}]}
 {"form": "cudgelled", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "cudgel"}]}
 {"form": "cudgellers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cudgeller"}]}
 {"form": "cudgelling", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "cudgel"}]}
@@ -24242,6 +24288,7 @@
 {"form": "cuvettes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cuvette"}]}
 {"form": "cuvées", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cuvée"}]}
 {"form": "cuzzes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cuz"}, {"pos": "noun", "tags": "plural", "lemma": "cuzz"}]}
+{"form": "cvs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "CV"}]}
 {"form": "cwms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cwm"}, {"pos": "noun", "tags": "plural", "lemma": "CWM"}]}
 {"form": "cwtched", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "cwtch"}]}
 {"form": "cwtches", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "cwtch"}]}
@@ -24627,6 +24674,7 @@
 {"form": "dairies", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dairy"}]}
 {"form": "dairymaids", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dairymaid"}]}
 {"form": "dairymen", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dairyman"}]}
+{"form": "dairywomen", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dairywoman"}]}
 {"form": "dais", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Dai"}]}
 {"form": "daises", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dais"}, {"pos": "noun", "tags": "plural", "lemma": "daïs"}, {"pos": "name", "tags": "plural", "lemma": "Daise"}]}
 {"form": "daishikis", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "daishiki"}]}
@@ -24866,6 +24914,7 @@
 {"form": "dartling", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "dartle"}]}
 {"form": "dartres", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dartre"}]}
 {"form": "darts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dart"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "dart"}, {"pos": "noun", "tags": "plural", "lemma": "DART"}, {"pos": "noun", "tags": "plural", "lemma": "Dart"}]}
+{"form": "darwinisms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Darwinism"}, {"pos": "noun", "tags": "plural", "lemma": "darwinism"}]}
 {"form": "darzis", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "darzi"}]}
 {"form": "das", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "da"}, {"pos": "noun", "tags": "plural", "lemma": "DA"}]}
 {"form": "dashboards", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dashboard"}]}
@@ -25019,7 +25068,9 @@
 {"form": "dazzling", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "dazzle"}]}
 {"form": "dazzlings", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dazzling"}]}
 {"form": "daïses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "daïs"}]}
+{"form": "dbms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "DBM"}]}
 {"form": "dds", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "DD"}]}
+{"form": "ddts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "DDT"}]}
 {"form": "deacidified", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "deacidify"}]}
 {"form": "deacidifies", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "deacidify"}]}
 {"form": "deacidifying", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "deacidify"}]}
@@ -25787,6 +25838,7 @@
 {"form": "deeryards", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "deeryard"}]}
 {"form": "dees", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dee"}]}
 {"form": "deescalated", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "deescalate"}]}
+{"form": "deescalates", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "deescalate"}]}
 {"form": "deescalating", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "deescalate"}]}
 {"form": "deevs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "deev"}]}
 {"form": "deewans", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "deewan"}]}
@@ -26334,6 +26386,8 @@
 {"form": "delineators", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "delineator"}]}
 {"form": "delinquencies", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "delinquency"}]}
 {"form": "delinquents", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "delinquent"}]}
+{"form": "delinted", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "delint"}]}
+{"form": "delinting", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "delint"}]}
 {"form": "deliquesced", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "deliquesce"}]}
 {"form": "deliquescences", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "deliquescence"}]}
 {"form": "deliquesces", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "deliquesce"}]}
@@ -26875,6 +26929,8 @@
 {"form": "departing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "depart"}]}
 {"form": "departings", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "departing"}]}
 {"form": "departmentalized", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "departmentalize"}]}
+{"form": "departmentalizes", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "departmentalize"}]}
+{"form": "departmentalizing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "departmentalize"}]}
 {"form": "departments", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "department"}]}
 {"form": "departs", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "depart"}]}
 {"form": "departures", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "departure"}]}
@@ -27086,6 +27142,7 @@
 {"form": "deputizes", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "deputize"}]}
 {"form": "deputizing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "deputize"}]}
 {"form": "dequeued", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "dequeue"}]}
+{"form": "dequeues", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dequeue"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "dequeue"}]}
 {"form": "deracialised", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "deracialise"}]}
 {"form": "deracialises", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "deracialise"}]}
 {"form": "deracialising", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "deracialise"}]}
@@ -27450,6 +27507,7 @@
 {"form": "desquamating", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "desquamate"}]}
 {"form": "desquamations", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "desquamation"}]}
 {"form": "desserts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dessert"}]}
+{"form": "dessertspoonfuls", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dessertspoonful"}]}
 {"form": "dessertspoons", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dessertspoon"}]}
 {"form": "desses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dess"}]}
 {"form": "dessiatines", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dessiatine"}]}
@@ -27892,6 +27950,7 @@
 {"form": "dhootis", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dhooti"}]}
 {"form": "dhotis", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dhoti"}]}
 {"form": "dhows", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dhow"}]}
+{"form": "dhs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "DH"}]}
 {"form": "dhurries", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dhurrie"}, {"pos": "noun", "tags": "plural", "lemma": "dhurry"}]}
 {"form": "dhutis", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dhuti"}]}
 {"form": "diabases", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "diabase"}]}
@@ -28257,6 +28316,7 @@
 {"form": "dietists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dietist"}]}
 {"form": "dietitians", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dietitian"}]}
 {"form": "diets", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "diet"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "diet"}, {"pos": "noun", "tags": "plural", "lemma": "diët"}]}
+{"form": "diffed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "diff"}]}
 {"form": "differed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "differ"}]}
 {"form": "differenced", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "difference"}]}
 {"form": "differences", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "difference"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "difference"}]}
@@ -29082,6 +29142,7 @@
 {"form": "discounted", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "discount"}]}
 {"form": "discountenanced", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "discountenance"}]}
 {"form": "discountenances", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "discountenance"}]}
+{"form": "discountenancing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "discountenance"}]}
 {"form": "discounters", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "discounter"}]}
 {"form": "discounting", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "discount"}]}
 {"form": "discounts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "discount"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "discount"}]}
@@ -31168,6 +31229,7 @@
 {"form": "dozing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "doze"}]}
 {"form": "dozings", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dozing"}]}
 {"form": "doúlas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "doúla"}]}
+{"form": "dps", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "DP"}]}
 {"form": "drabbed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "drab"}]}
 {"form": "drabber", "analyses": [{"pos": "adj", "tags": "", "lemma": "drab"}]}
 {"form": "drabbers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "drabber"}]}
@@ -31747,6 +31809,7 @@
 {"form": "dueled", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "duel"}]}
 {"form": "duelers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dueler"}]}
 {"form": "dueling", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "duel"}]}
+{"form": "duelings", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dueling"}]}
 {"form": "duelists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "duelist"}]}
 {"form": "duelled", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "duel"}]}
 {"form": "duellers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dueller"}]}
@@ -32038,7 +32101,9 @@
 {"form": "duxes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dux"}]}
 {"form": "duykers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "duyker"}]}
 {"form": "dvandvas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dvandva"}]}
+{"form": "dvds", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "DVD"}]}
 {"form": "dvorniks", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dvornik"}]}
+{"form": "dvrs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "DVR"}]}
 {"form": "dwaals", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "dwaal"}]}
 {"form": "dwales", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "dwale"}, {"pos": "noun", "tags": "plural", "lemma": "dwale"}]}
 {"form": "dwalmed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "dwalm"}]}
@@ -32931,6 +32996,7 @@
 {"form": "electrodialyses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "electrodialysis"}]}
 {"form": "electroed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "electro"}]}
 {"form": "electroencephalograms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "electroencephalogram"}]}
+{"form": "electroencephalographs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "electroencephalograph"}]}
 {"form": "electroforms", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "electroform"}]}
 {"form": "electrogeneses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "electrogenesis"}]}
 {"form": "electrogens", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "electrogen"}]}
@@ -33126,6 +33192,7 @@
 {"form": "elvans", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "elvan"}]}
 {"form": "elvers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "elver"}]}
 {"form": "elves", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "elf"}, {"pos": "noun", "tags": "plural", "lemma": "elve"}]}
+{"form": "elysiums", "analyses": [{"pos": "name", "tags": "plural", "lemma": "Elysium"}]}
 {"form": "elytra", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "elytron"}]}
 {"form": "emaciated", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "emaciate"}]}
 {"form": "emaciates", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "emaciate"}]}
@@ -33720,6 +33787,7 @@
 {"form": "enameled", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "enamel"}]}
 {"form": "enamelers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "enameler"}]}
 {"form": "enameling", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "enamel"}]}
+{"form": "enamelings", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "enameling"}]}
 {"form": "enamelists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "enamelist"}]}
 {"form": "enamelled", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "enamel"}]}
 {"form": "enamellers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "enameller"}]}
@@ -34467,6 +34535,7 @@
 {"form": "enplanes", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "enplane"}]}
 {"form": "enplaning", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "enplane"}]}
 {"form": "enprints", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "enprint"}]}
+{"form": "enqueued", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "enqueue"}]}
 {"form": "enqueues", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "enqueue"}]}
 {"form": "enquired", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "enquire"}]}
 {"form": "enquirers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "enquirer"}]}
@@ -34834,6 +34903,7 @@
 {"form": "entrustments", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "entrustment"}]}
 {"form": "entrusts", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "entrust"}]}
 {"form": "entryists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "entryist"}]}
+{"form": "entryphones", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Entryphone"}, {"pos": "noun", "tags": "plural", "lemma": "entryphone"}]}
 {"form": "entryways", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "entryway"}]}
 {"form": "entrées", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "entrée"}]}
 {"form": "entwined", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "entwine"}]}
@@ -35914,6 +35984,7 @@
 {"form": "eucaryotes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "eucaryote"}]}
 {"form": "eucaryots", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "eucaryot"}]}
 {"form": "eucharises", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "eucharis"}]}
+{"form": "eucharists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Eucharist"}, {"pos": "noun", "tags": "plural", "lemma": "eucharist"}]}
 {"form": "euchologia", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "euchologion"}]}
 {"form": "euchologies", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "euchology"}]}
 {"form": "euchred", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "euchre"}]}
@@ -35960,6 +36031,7 @@
 {"form": "euks", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "euk"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "euk"}]}
 {"form": "eulachans", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "eulachan"}]}
 {"form": "eulachons", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "eulachon"}]}
+{"form": "eulas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "EULA"}]}
 {"form": "eulogia", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "eulogium"}]}
 {"form": "eulogiae", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "eulogia"}]}
 {"form": "eulogies", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "eulogy"}]}
@@ -36971,6 +37043,7 @@
 {"form": "externalisms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "externalism"}]}
 {"form": "externalists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "externalist"}]}
 {"form": "externalities", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "externality"}]}
+{"form": "externalizations", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "externalization"}]}
 {"form": "externalized", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "externalize"}]}
 {"form": "externalizes", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "externalize"}]}
 {"form": "externalizing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "externalize"}]}
@@ -37222,6 +37295,7 @@
 {"form": "facemasks", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "facemask"}]}
 {"form": "facemen", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "faceman"}]}
 {"form": "facepalmed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "facepalm"}]}
+{"form": "facepalming", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "facepalm"}]}
 {"form": "facepalms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "facepalm"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "facepalm"}]}
 {"form": "faceplates", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "faceplate"}]}
 {"form": "faceprints", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "faceprint"}]}
@@ -37582,6 +37656,7 @@
 {"form": "fanworts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "fanwort"}]}
 {"form": "fanzines", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "fanzine"}]}
 {"form": "faqirs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "faqir"}]}
+{"form": "faqs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "FAQ"}, {"pos": "noun", "tags": "plural", "lemma": "faq"}]}
 {"form": "faquirs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "faquir"}]}
 {"form": "faradays", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "faraday"}]}
 {"form": "faradisations", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "faradisation"}]}
@@ -38461,6 +38536,7 @@
 {"form": "fictionalises", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "fictionalise"}]}
 {"form": "fictionalising", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "fictionalise"}]}
 {"form": "fictionalities", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "fictionality"}]}
+{"form": "fictionalizations", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "fictionalization"}]}
 {"form": "fictionalized", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "fictionalize"}]}
 {"form": "fictionalizes", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "fictionalize"}]}
 {"form": "fictionalizing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "fictionalize"}]}
@@ -39458,6 +39534,7 @@
 {"form": "flipped", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "flip"}]}
 {"form": "flippers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "flipper"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "flipper"}]}
 {"form": "flippest", "analyses": [{"pos": "adj", "tags": "", "lemma": "flip"}]}
+{"form": "flippies", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "flippy"}]}
 {"form": "flipping", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "flip"}]}
 {"form": "flips", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "flip"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "flip"}, {"pos": "noun", "tags": "plural", "lemma": "Flip"}, {"pos": "noun", "tags": "plural", "lemma": "FLIP"}]}
 {"form": "flirs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "FLIR"}]}
@@ -39876,6 +39953,7 @@
 {"form": "flèches", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "flèche"}]}
 {"form": "fléchettes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "fléchette"}]}
 {"form": "flügelhorns", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "flügelhorn"}]}
+{"form": "fms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "FM"}]}
 {"form": "foaled", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "foal"}]}
 {"form": "foalfoots", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "foalfoot"}]}
 {"form": "foaling", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "foal"}]}
@@ -40330,6 +40408,7 @@
 {"form": "forepaws", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "forepaw"}]}
 {"form": "forepayments", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "forepayment"}]}
 {"form": "forepeaks", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "forepeak"}]}
+{"form": "forepersons", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "foreperson"}]}
 {"form": "foreplanned", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "foreplan"}]}
 {"form": "foreplanning", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "foreplan"}]}
 {"form": "foreplans", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "foreplan"}]}
@@ -40809,6 +40888,7 @@
 {"form": "fourpences", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "fourpence"}]}
 {"form": "fourpennies", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "fourpenny"}]}
 {"form": "fourplexes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "fourplex"}]}
+{"form": "fourposters", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "fourposter"}]}
 {"form": "fourrageres", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "fourragère"}, {"pos": "noun", "tags": "plural", "lemma": "fourragere"}]}
 {"form": "fourragères", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "fourragère"}]}
 {"form": "fours", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "four"}]}
@@ -42045,6 +42125,7 @@
 {"form": "galactosyls", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "galactosyl"}]}
 {"form": "galages", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "galage"}]}
 {"form": "galagos", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "galago"}]}
+{"form": "galahads", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Galahad"}]}
 {"form": "galahs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "galah"}]}
 {"form": "galangals", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "galangal"}]}
 {"form": "galangas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "galanga"}]}
@@ -43008,6 +43089,7 @@
 {"form": "genuinenesses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "genuineness"}]}
 {"form": "genuses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "genus"}]}
 {"form": "geobotanists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "geobotanist"}]}
+{"form": "geocached", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "geocache"}]}
 {"form": "geocaches", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "geocache"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "geocache"}]}
 {"form": "geocaching", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "geocache"}]}
 {"form": "geochemistries", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "geochemistry"}]}
@@ -43262,6 +43344,7 @@
 {"form": "gibes", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "gibe"}]}
 {"form": "gibing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "gibe"}]}
 {"form": "giblis", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "gibli"}]}
+{"form": "gibraltars", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Gibraltar"}]}
 {"form": "gibs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "gib"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "gib"}, {"pos": "noun", "tags": "plural", "lemma": "GIB"}]}
 {"form": "gibsons", "analyses": [{"pos": "name", "tags": "plural", "lemma": "Gibson"}, {"pos": "noun", "tags": "plural", "lemma": "Gibson"}]}
 {"form": "gibuses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "gibus"}]}
@@ -44120,6 +44203,7 @@
 {"form": "golcondas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Golconda"}]}
 {"form": "goldbeaters", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "goldbeater"}]}
 {"form": "goldbricked", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "goldbrick"}]}
+{"form": "goldbrickers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "goldbricker"}]}
 {"form": "goldbricking", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "goldbrick"}]}
 {"form": "goldbricks", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "goldbrick"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "goldbrick"}]}
 {"form": "goldbugs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "goldbug"}]}
@@ -44300,6 +44384,7 @@
 {"form": "goosenecks", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "gooseneck"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "gooseneck"}]}
 {"form": "gooseries", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "goosery"}]}
 {"form": "gooses", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "goose"}, {"pos": "noun", "tags": "plural", "lemma": "goose"}, {"pos": "name", "tags": "plural", "lemma": "Goos"}]}
+{"form": "goosestepped", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "goosestep"}]}
 {"form": "goosestepping", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "goosestep"}]}
 {"form": "goosesteps", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "goosestep"}]}
 {"form": "gooseys", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "goosey"}]}
@@ -44476,6 +44561,7 @@
 {"form": "goyim", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "goy"}, {"pos": "noun", "tags": "plural", "lemma": "Goy"}]}
 {"form": "goys", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "goy"}, {"pos": "name", "tags": "plural", "lemma": "Goy"}]}
 {"form": "gozzans", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "gozzan"}]}
+{"form": "gps", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "GP"}, {"pos": "noun", "tags": "plural", "lemma": "gp"}]}
 {"form": "graals", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "graal"}]}
 {"form": "grabbed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "grab"}]}
 {"form": "grabbers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "grabber"}]}
@@ -44999,6 +45085,8 @@
 {"form": "grenned", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "gren"}]}
 {"form": "grenning", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "gren"}]}
 {"form": "grens", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "gren"}]}
+{"form": "grepped", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "grep"}]}
+{"form": "grepping", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "grep"}]}
 {"form": "greps", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "grep"}]}
 {"form": "grevilleas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "grevillea"}]}
 {"form": "grew", "analyses": [{"pos": "verb", "tags": "past", "lemma": "grow"}, {"pos": "verb", "tags": "past participle", "lemma": "grow"}]}
@@ -45257,6 +45345,7 @@
 {"form": "groundbreakers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "groundbreaker"}]}
 {"form": "groundbreakings", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "groundbreaking"}]}
 {"form": "groundbursts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "groundburst"}]}
+{"form": "groundcloths", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "groundcloth"}]}
 {"form": "grounded", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "ground"}]}
 {"form": "grounden", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "grind"}]}
 {"form": "grounders", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "grounder"}]}
@@ -46583,6 +46672,7 @@
 {"form": "hanting", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "hant"}]}
 {"form": "hantles", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hantle"}]}
 {"form": "hants", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hant"}]}
+{"form": "hanukkahs", "analyses": [{"pos": "name", "tags": "plural", "lemma": "Hanukkah"}]}
 {"form": "hanumans", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hanuman"}]}
 {"form": "haoles", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "haole"}]}
 {"form": "haomas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "haoma"}]}
@@ -47486,6 +47576,7 @@
 {"form": "hellenised", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "Hellenise"}, {"pos": "verb", "tags": "past participle", "lemma": "hellenise"}]}
 {"form": "hellenises", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "Hellenise"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "hellenise"}]}
 {"form": "hellenising", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "Hellenise"}, {"pos": "verb", "tags": "present participle gerund", "lemma": "hellenise"}]}
+{"form": "hellenisms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Hellenism"}]}
 {"form": "hellenizations", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Hellenization"}]}
 {"form": "hellenized", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "Hellenize"}]}
 {"form": "hellenizes", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "Hellenize"}]}
@@ -48016,6 +48107,7 @@
 {"form": "heydeys", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "heydey"}]}
 {"form": "heyducks", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "heyduck"}]}
 {"form": "heys", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hey"}, {"pos": "name", "tags": "plural", "lemma": "Hey"}]}
+{"form": "hhs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "HH"}]}
 {"form": "hiatuses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hiatus"}]}
 {"form": "hibachis", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hibachi"}]}
 {"form": "hibakushas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hibakusha"}]}
@@ -48223,6 +48315,7 @@
 {"form": "hindrances", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hindrance"}]}
 {"form": "hinds", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hind"}]}
 {"form": "hindsights", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hindsight"}]}
+{"form": "hinduisms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Hinduism"}]}
 {"form": "hindus", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Hindu"}]}
 {"form": "hindustanis", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Hindustani"}]}
 {"form": "hindwings", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hindwing"}]}
@@ -48379,6 +48472,7 @@
 {"form": "hitting", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "hit"}]}
 {"form": "hittites", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Hittite"}]}
 {"form": "hived", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "hive"}]}
+{"form": "hiveminds", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hivemind"}]}
 {"form": "hivers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hiver"}]}
 {"form": "hives", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hive"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "hive"}]}
 {"form": "hiving", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "hive"}]}
@@ -48386,6 +48480,7 @@
 {"form": "hizzes", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "hizz"}]}
 {"form": "hizzing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "hizz"}]}
 {"form": "hizzoners", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hizzoner"}]}
+{"form": "hms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "HM"}]}
 {"form": "hoactzins", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hoactzin"}]}
 {"form": "hoagies", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hoagie"}]}
 {"form": "hoarded", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "hoard"}]}
@@ -49337,6 +49432,7 @@
 {"form": "hrs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hr"}, {"pos": "noun", "tags": "plural", "lemma": "HR"}]}
 {"form": "hryvnias", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hryvnia"}]}
 {"form": "hryvnyas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "hryvnya"}]}
+{"form": "hs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "H"}, {"pos": "noun", "tags": "plural", "lemma": "h"}]}
 {"form": "hts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "HT"}, {"pos": "noun", "tags": "plural", "lemma": "ht"}]}
 {"form": "huanacos", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "huanaco"}]}
 {"form": "huaqueros", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "huaquero"}]}
@@ -50269,6 +50365,7 @@
 {"form": "ibises", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ibis"}]}
 {"form": "ibogaines", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ibogaine"}]}
 {"form": "ibuprofens", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ibuprofen"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "ibuprofen"}]}
+{"form": "icbms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ICBM"}]}
 {"form": "iceballs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "iceball"}]}
 {"form": "icebergs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "iceberg"}]}
 {"form": "iceblinks", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "iceblink"}]}
@@ -52813,6 +52910,7 @@
 {"form": "intercommuned", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "intercommune"}]}
 {"form": "intercommunes", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "intercommune"}]}
 {"form": "intercommunicated", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "intercommunicate"}]}
+{"form": "intercommunicates", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "intercommunicate"}]}
 {"form": "intercommunicating", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "intercommunicate"}]}
 {"form": "intercommuning", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "intercommune"}]}
 {"form": "intercommunions", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "intercommunion"}]}
@@ -53647,6 +53745,7 @@
 {"form": "irades", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "irade"}]}
 {"form": "iranians", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Iranian"}]}
 {"form": "iraqis", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Iraqi"}]}
+{"form": "iras", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "IRA"}]}
 {"form": "irascibilities", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "irascibility"}]}
 {"form": "irater", "analyses": [{"pos": "adj", "tags": "", "lemma": "irate"}]}
 {"form": "iratest", "analyses": [{"pos": "adj", "tags": "", "lemma": "irate"}]}
@@ -53769,6 +53868,7 @@
 {"form": "irrupting", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "irrupt"}]}
 {"form": "irruptions", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "irruption"}]}
 {"form": "irrupts", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "irrupt"}]}
+{"form": "irs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "IR"}]}
 {"form": "is", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "be"}, {"pos": "verb", "tags": "present indicative", "lemma": "be"}, {"pos": "noun", "tags": "plural", "lemma": "I"}]}
 {"form": "isabellas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Isabella"}]}
 {"form": "isagoges", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "isagoge"}]}
@@ -53992,6 +54092,7 @@
 {"form": "ivories", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ivory"}]}
 {"form": "ivorists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ivorist"}]}
 {"form": "ivorybills", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ivorybill"}]}
+{"form": "ivs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "IV"}]}
 {"form": "iwis", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "iwi"}]}
 {"form": "ixias", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ixia"}]}
 {"form": "ixodids", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ixodid"}]}
@@ -55118,6 +55219,7 @@
 {"form": "kaddishim", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "kaddish"}, {"pos": "noun", "tags": "plural", "lemma": "Kaddish"}]}
 {"form": "kades", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "kade"}, {"pos": "name", "tags": "plural", "lemma": "Kade"}]}
 {"form": "kadis", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "kadi"}]}
+{"form": "kaffeeklatches", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "kaffeeklatch"}]}
 {"form": "kaffeeklatsches", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "kaffeeklatsch"}]}
 {"form": "kaffirbooms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "kaffirboom"}]}
 {"form": "kaffirs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "kaffir"}, {"pos": "noun", "tags": "plural", "lemma": "Kaffir"}]}
@@ -55981,6 +56083,7 @@
 {"form": "kissers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "kisser"}]}
 {"form": "kisses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "kiss"}, {"pos": "noun", "tags": "plural", "lemma": "kisse"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "kiss"}]}
 {"form": "kissing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "kiss"}]}
+{"form": "kissoffs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "kissoff"}]}
 {"form": "kissograms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "kissogram"}]}
 {"form": "kissy", "analyses": [{"pos": "noun", "tags": "", "lemma": "kiss"}]}
 {"form": "kist", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "kiss"}]}
@@ -56258,6 +56361,7 @@
 {"form": "knurls", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "knurl"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "knurl"}]}
 {"form": "knurrs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "knurr"}]}
 {"form": "knurs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "knur"}]}
+{"form": "knuths", "analyses": [{"pos": "name", "tags": "plural", "lemma": "Knuth"}]}
 {"form": "knuts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "knut"}]}
 {"form": "koalas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "koala"}, {"pos": "name", "tags": "plural", "lemma": "Koala"}]}
 {"form": "koans", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "koan"}, {"pos": "noun", "tags": "plural", "lemma": "kōan"}]}
@@ -56492,6 +56596,7 @@
 {"form": "kvetchiest", "analyses": [{"pos": "adj", "tags": "", "lemma": "kvetchy"}]}
 {"form": "kvetching", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "kvetch"}]}
 {"form": "kwachas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "kwacha"}]}
+{"form": "kwanzaas", "analyses": [{"pos": "name", "tags": "plural", "lemma": "Kwanzaa"}]}
 {"form": "kwanzas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "kwanza"}]}
 {"form": "kwashiorkors", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "kwashiorkor"}]}
 {"form": "kyacks", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "kyack"}]}
@@ -57967,6 +58072,7 @@
 {"form": "lethes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "lethe"}]}
 {"form": "lets", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "let"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "let"}]}
 {"form": "letted", "analyses": [{"pos": "verb", "tags": "past", "lemma": "let"}]}
+{"form": "letterbombs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "letterbomb"}]}
 {"form": "letterboxed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "letterbox"}]}
 {"form": "letterboxes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "letterbox"}]}
 {"form": "letterboxing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "letterbox"}]}
@@ -59539,6 +59645,7 @@
 {"form": "lozells", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "lozell"}]}
 {"form": "lozenged", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "lozenge"}]}
 {"form": "lozenges", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "lozenge"}]}
+{"form": "lpns", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "LPN"}]}
 {"form": "ls", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "l"}, {"pos": "noun", "tags": "plural", "lemma": "L"}]}
 {"form": "luaus", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "luau"}]}
 {"form": "lubbards", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "lubbard"}]}
@@ -60281,6 +60388,7 @@
 {"form": "maihems", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "maihem"}]}
 {"form": "maikos", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "maiko"}]}
 {"form": "mailbags", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "mailbag"}]}
+{"form": "mailbombed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "mailbomb"}]}
 {"form": "mailbombing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "mailbomb"}]}
 {"form": "mailbombs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "mailbomb"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "mailbomb"}]}
 {"form": "mailboxes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "mailbox"}]}
@@ -60862,6 +60970,7 @@
 {"form": "manèged", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "manège"}]}
 {"form": "manèges", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "manège"}]}
 {"form": "manèging", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "manège"}]}
+{"form": "maoisms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Maoism"}]}
 {"form": "maoists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Maoist"}]}
 {"form": "maoris", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Maori"}, {"pos": "noun", "tags": "plural", "lemma": "Māori"}]}
 {"form": "maormors", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "maormor"}]}
@@ -61857,6 +61966,7 @@
 {"form": "megalosaurians", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "megalosaurian"}]}
 {"form": "megalosaurs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "megalosaur"}]}
 {"form": "megalosauruses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "megalosaurus"}]}
+{"form": "megameters", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "megameter"}]}
 {"form": "meganewtons", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "meganewton"}]}
 {"form": "megaparsecs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "megaparsec"}]}
 {"form": "megapascals", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "megapascal"}]}
@@ -62690,6 +62800,7 @@
 {"form": "micellae", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "micella"}]}
 {"form": "micelles", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "micelle"}]}
 {"form": "micells", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "micell"}]}
+{"form": "michaelmases", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Michaelmas"}]}
 {"form": "miched", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "mich"}]}
 {"form": "michers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "micher"}]}
 {"form": "michiganders", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Michigander"}]}
@@ -65400,6 +65511,7 @@
 {"form": "morkins", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "morkin"}]}
 {"form": "morlings", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "morling"}]}
 {"form": "mormaors", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "mormaor"}]}
+{"form": "mormonisms", "analyses": [{"pos": "name", "tags": "plural", "lemma": "Mormonism"}]}
 {"form": "mormons", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Mormon"}, {"pos": "noun", "tags": "plural", "lemma": "mormon"}]}
 {"form": "morned", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "morne"}]}
 {"form": "mornes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "morne"}]}
@@ -65966,6 +66078,7 @@
 {"form": "mulesed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "mules"}]}
 {"form": "muleses", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "mules"}]}
 {"form": "mulesing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "mules"}]}
+{"form": "muleskinners", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "muleskinner"}]}
 {"form": "muletas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "muleta"}]}
 {"form": "muleteers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "muleteer"}]}
 {"form": "muleys", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "muley"}]}
@@ -66658,6 +66771,7 @@
 {"form": "nagors", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nagor"}]}
 {"form": "nags", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nag"}]}
 {"form": "nahals", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nahal"}]}
+{"form": "nahuatls", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Nahuatl"}]}
 {"form": "naiades", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "naiad"}]}
 {"form": "naiads", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "naiad"}]}
 {"form": "naifer", "analyses": [{"pos": "adj", "tags": "", "lemma": "naif"}]}
@@ -67006,6 +67120,7 @@
 {"form": "naïves", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "naïve"}]}
 {"form": "naïvest", "analyses": [{"pos": "adj", "tags": "", "lemma": "naïve"}]}
 {"form": "naïvetés", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "naïveté"}]}
+{"form": "nbs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "NB"}]}
 {"form": "nealed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "neal"}]}
 {"form": "nealing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "neal"}]}
 {"form": "neals", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "neal"}]}
@@ -68122,6 +68237,7 @@
 {"form": "noncollectors", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "noncollector"}]}
 {"form": "noncolors", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "noncolor"}]}
 {"form": "noncombatants", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "noncombatant"}]}
+{"form": "noncommercials", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "noncommercial"}]}
 {"form": "noncommitments", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "noncommitment"}]}
 {"form": "noncommunists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "noncommunist"}]}
 {"form": "noncompetitors", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "noncompetitor"}]}
@@ -68229,6 +68345,7 @@
 {"form": "noninfluences", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "noninfluence"}]}
 {"form": "noninitiates", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "noninitiate"}]}
 {"form": "noninsects", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "noninsect"}]}
+{"form": "nonintellectuals", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nonintellectual"}]}
 {"form": "nonintoxicants", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nonintoxicant"}]}
 {"form": "noninvolvements", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "noninvolvement"}]}
 {"form": "nonirritants", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nonirritant"}]}
@@ -68263,6 +68380,7 @@
 {"form": "nonmusicals", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nonmusical"}]}
 {"form": "nonmusicians", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nonmusician"}]}
 {"form": "nonmutants", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nonmutant"}]}
+{"form": "nonnarcotics", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nonnarcotic"}]}
 {"form": "nonnationals", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nonnational"}]}
 {"form": "nonnatives", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nonnative"}]}
 {"form": "nonnecessities", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nonnecessity"}]}
@@ -68280,6 +68398,7 @@
 {"form": "nonparents", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nonparent"}]}
 {"form": "nonparticipants", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nonparticipant"}]}
 {"form": "nonparties", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nonparty"}]}
+{"form": "nonpartisans", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nonpartisan"}]}
 {"form": "nonpayments", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nonpayment"}]}
 {"form": "nonperformances", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nonperformance"}]}
 {"form": "nonperformers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nonperformer"}]}
@@ -68587,6 +68706,7 @@
 {"form": "notoungulates", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "notoungulate"}]}
 {"form": "notturni", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "notturno"}]}
 {"form": "notungulates", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "notungulate"}]}
+{"form": "notworks", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "notwork"}]}
 {"form": "nougats", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nougat"}]}
 {"form": "noughts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nought"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "nought"}]}
 {"form": "noumena", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "noumenon"}]}
@@ -68662,6 +68782,7 @@
 {"form": "noëses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "noësis"}]}
 {"form": "noöspheres", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "noösphere"}]}
 {"form": "noötropics", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "noötropic"}]}
+{"form": "ns", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "n"}, {"pos": "noun", "tags": "plural", "lemma": "N"}]}
 {"form": "nuanced", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "nuance"}]}
 {"form": "nuances", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "nuance"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "nuance"}]}
 {"form": "nuancing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "nuance"}]}
@@ -69579,10 +69700,13 @@
 {"form": "okaying", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "okay"}]}
 {"form": "okays", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "okay"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "okay"}]}
 {"form": "oke", "analyses": [{"pos": "verb", "tags": "past", "lemma": "ache"}, {"pos": "verb", "tags": "past", "lemma": "ake"}]}
+{"form": "oked", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "OK"}]}
 {"form": "okehs", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "okeh"}]}
 {"form": "okes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "oke"}]}
 {"form": "okimonos", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "okimono"}]}
+{"form": "oking", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "OK"}]}
 {"form": "okras", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "okra"}]}
+{"form": "oks", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "OK"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "OK"}]}
 {"form": "oktas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "okta"}]}
 {"form": "oldened", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "olden"}]}
 {"form": "oldening", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "olden"}]}
@@ -71901,6 +72025,7 @@
 {"form": "overcapacities", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "overcapacity"}]}
 {"form": "overcapitalized", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "overcapitalize"}]}
 {"form": "overcapitalizes", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "overcapitalize"}]}
+{"form": "overcapitalizing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "overcapitalize"}]}
 {"form": "overcarried", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "overcarry"}]}
 {"form": "overcarries", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "overcarry"}]}
 {"form": "overcarrying", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "overcarry"}]}
@@ -72808,6 +72933,7 @@
 {"form": "overspecialises", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "overspecialise"}]}
 {"form": "overspecialized", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "overspecialize"}]}
 {"form": "overspecializes", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "overspecialize"}]}
+{"form": "overspecializing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "overspecialize"}]}
 {"form": "overspeculated", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "overspeculate"}]}
 {"form": "overspeculates", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "overspeculate"}]}
 {"form": "overspeculating", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "overspeculate"}]}
@@ -74260,6 +74386,7 @@
 {"form": "parchmentizing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "parchmentize"}]}
 {"form": "parchments", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "parchment"}, {"pos": "name", "tags": "plural", "lemma": "Parchment"}]}
 {"form": "parcloses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "parclose"}]}
+{"form": "parcs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "parc"}]}
 {"form": "pardahs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "pardah"}]}
 {"form": "pardales", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "pardale"}]}
 {"form": "pardalotes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "pardalote"}]}
@@ -74326,6 +74453,7 @@
 {"form": "parians", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Parian"}]}
 {"form": "parietals", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "parietal"}]}
 {"form": "parietes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "paries"}]}
+{"form": "parimutuels", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "parimutuel"}]}
 {"form": "paring", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "pare"}]}
 {"form": "parings", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "paring"}]}
 {"form": "paris", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "pari"}]}
@@ -74619,6 +74747,9 @@
 {"form": "passivisms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "passivism"}]}
 {"form": "passivists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "passivist"}]}
 {"form": "passivities", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "passivity"}]}
+{"form": "passivized", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "passivize"}]}
+{"form": "passivizes", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "passivize"}]}
+{"form": "passivizing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "passivize"}]}
 {"form": "passkeys", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "passkey"}]}
 {"form": "passmen", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "passman"}]}
 {"form": "passments", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "passment"}]}
@@ -74955,6 +75086,8 @@
 {"form": "paysagists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "paysagist"}]}
 {"form": "payslips", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "payslip"}]}
 {"form": "paywalls", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "paywall"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "paywall"}]}
+{"form": "pbs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "PB"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "PB"}]}
+{"form": "pcs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "PC"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "PC"}, {"pos": "noun", "tags": "plural", "lemma": "pc"}]}
 {"form": "peaberries", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "peaberry"}]}
 {"form": "peaced", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "peace"}]}
 {"form": "peacefuller", "analyses": [{"pos": "adj", "tags": "", "lemma": "peaceful"}]}
@@ -75275,6 +75408,8 @@
 {"form": "pekans", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "pekan"}]}
 {"form": "pekepoos", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "pekepoo"}]}
 {"form": "pekes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Peke"}, {"pos": "noun", "tags": "plural", "lemma": "peke"}]}
+{"form": "pekineses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Pekinese"}]}
+{"form": "pekingeses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Pekingese"}]}
 {"form": "pekins", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Pekin"}]}
 {"form": "pekoes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "pekoe"}]}
 {"form": "pelages", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "pelage"}]}
@@ -78413,6 +78548,9 @@
 {"form": "plyers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "plyer"}]}
 {"form": "plying", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "ply"}]}
 {"form": "plywoods", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "plywood"}]}
+{"form": "pmed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "PM"}]}
+{"form": "pming", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "PM"}]}
+{"form": "pms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "PM"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "PM"}]}
 {"form": "pneumas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "pneuma"}]}
 {"form": "pneumaticities", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "pneumaticity"}]}
 {"form": "pneumatologies", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "pneumatology"}]}
@@ -78806,6 +78944,7 @@
 {"form": "polyalcohols", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "polyalcohol"}]}
 {"form": "polyamides", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "polyamide"}]}
 {"form": "polyamines", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "polyamine"}]}
+{"form": "polyamories", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "polyamory"}]}
 {"form": "polyandries", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "polyandry"}]}
 {"form": "polyanthas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "polyantha"}]}
 {"form": "polyanthi", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "polyanthus"}]}
@@ -79769,6 +79908,7 @@
 {"form": "poëms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "poëm"}]}
 {"form": "poëtries", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "poëtrie"}]}
 {"form": "poëts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "poët"}]}
+{"form": "pps", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "pp"}, {"pos": "noun", "tags": "plural", "lemma": "PP"}]}
 {"form": "praams", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "praam"}]}
 {"form": "pracharaks", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "pracharak"}]}
 {"form": "practicalists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "practicalist"}]}
@@ -81987,6 +82127,7 @@
 {"form": "proteomes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "proteome"}]}
 {"form": "proteoses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "proteose"}]}
 {"form": "protervities", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "protervity"}]}
+{"form": "protestantisms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Protestantism"}]}
 {"form": "protestants", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Protestant"}, {"pos": "noun", "tags": "plural", "lemma": "protestant"}]}
 {"form": "protestations", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "protestation"}]}
 {"form": "protested", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "protest"}]}
@@ -82222,6 +82363,7 @@
 {"form": "précised", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "précis"}]}
 {"form": "précises", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "précis"}]}
 {"form": "précising", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "précis"}]}
+{"form": "ps", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "p"}, {"pos": "noun", "tags": "plural", "lemma": "P"}]}
 {"form": "psalmbooks", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "psalmbook"}]}
 {"form": "psalmed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "psalm"}]}
 {"form": "psalming", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "psalm"}]}
@@ -84181,6 +84323,7 @@
 {"form": "ralphed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "ralph"}]}
 {"form": "ralphing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "ralph"}]}
 {"form": "ralphs", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "ralph"}]}
+{"form": "ramadans", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Ramadan"}]}
 {"form": "ramadas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ramada"}]}
 {"form": "ramakins", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ramakin"}]}
 {"form": "ramapithecines", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ramapithecine"}]}
@@ -84654,6 +84797,7 @@
 {"form": "razzing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "razz"}]}
 {"form": "razzles", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "razzle"}]}
 {"form": "razzmatazzes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "razzmatazz"}]}
+{"form": "rds", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "rd"}, {"pos": "noun", "tags": "plural", "lemma": "RD"}]}
 {"form": "reabsorbed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "reabsorb"}]}
 {"form": "reabsorbing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "reabsorb"}]}
 {"form": "reabsorbs", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "reabsorb"}]}
@@ -86325,6 +86469,7 @@
 {"form": "refacing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "reface"}]}
 {"form": "refactored", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "refactor"}]}
 {"form": "refactoring", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "refactor"}]}
+{"form": "refactors", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "refactor"}]}
 {"form": "refallen", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "refall"}]}
 {"form": "refalling", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "refall"}]}
 {"form": "refalls", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "refall"}]}
@@ -87850,6 +87995,9 @@
 {"form": "reorganizers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "reorganizer"}]}
 {"form": "reorganizes", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "reorganize"}]}
 {"form": "reorganizing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "reorganize"}]}
+{"form": "reorged", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "reorg"}]}
+{"form": "reorging", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "reorg"}]}
+{"form": "reorgs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "reorg"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "reorg"}]}
 {"form": "reorientated", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "reorientate"}]}
 {"form": "reorientates", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "reorientate"}]}
 {"form": "reorientating", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "reorientate"}]}
@@ -89025,6 +89173,8 @@
 {"form": "resubmitted", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "resubmit"}]}
 {"form": "resubmitting", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "resubmit"}]}
 {"form": "resubscribed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "resubscribe"}]}
+{"form": "resubscribes", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "resubscribe"}]}
+{"form": "resubscribing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "resubscribe"}]}
 {"form": "resultants", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "resultant"}]}
 {"form": "resulted", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "result"}]}
 {"form": "resulting", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "result"}]}
@@ -89812,6 +89962,7 @@
 {"form": "reëxamining", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "reëxamine"}]}
 {"form": "reëxpressed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "reëxpress"}]}
 {"form": "reünions", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "reünion"}]}
+{"form": "rfcs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "RFC"}]}
 {"form": "rhabdocoeles", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "rhabdocoele"}]}
 {"form": "rhabdoids", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "rhabdoid"}]}
 {"form": "rhabdoliths", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "rhabdolith"}]}
@@ -90513,6 +90664,7 @@
 {"form": "robinias", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "robinia"}]}
 {"form": "robins", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "robin"}, {"pos": "noun", "tags": "plural", "lemma": "Robin"}]}
 {"form": "robles", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "roble"}, {"pos": "name", "tags": "plural", "lemma": "Robl"}]}
+{"form": "robocalled", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "robocall"}]}
 {"form": "robocalling", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "robocall"}]}
 {"form": "robocalls", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "robocall"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "robocall"}]}
 {"form": "roborants", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "roborant"}]}
@@ -91498,6 +91650,7 @@
 {"form": "ruttiest", "analyses": [{"pos": "adj", "tags": "", "lemma": "rutty"}]}
 {"form": "rutting", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "rut"}]}
 {"form": "ruttings", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "rutting"}]}
+{"form": "rvs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "RV"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "RV"}]}
 {"form": "rwandans", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Rwandan"}]}
 {"form": "ryals", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ryal"}]}
 {"form": "ryas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "rya"}]}
@@ -91768,6 +91921,7 @@
 {"form": "saginations", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "sagination"}]}
 {"form": "sagittarians", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Sagittarian"}]}
 {"form": "sagittaries", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "sagittary"}]}
+{"form": "sagittariuses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Sagittarius"}]}
 {"form": "sagittas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "sagitta"}]}
 {"form": "sagoins", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "sagoin"}]}
 {"form": "sagos", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "sago"}, {"pos": "name", "tags": "plural", "lemma": "Sago"}]}
@@ -93394,6 +93548,7 @@
 {"form": "scotches", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "scotch"}, {"pos": "noun", "tags": "plural", "lemma": "scotch"}, {"pos": "noun", "tags": "plural", "lemma": "Scotch"}]}
 {"form": "scotching", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "scotch"}]}
 {"form": "scotchmen", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Scotchman"}]}
+{"form": "scotchwomen", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Scotchwoman"}]}
 {"form": "scoters", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "scoter"}]}
 {"form": "scotias", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "scotia"}]}
 {"form": "scotomas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "scotoma"}]}
@@ -93403,6 +93558,7 @@
 {"form": "scotomies", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "scotomy"}]}
 {"form": "scots", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Scot"}, {"pos": "noun", "tags": "plural", "lemma": "scot"}]}
 {"form": "scotsmen", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Scotsman"}]}
+{"form": "scotswomen", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Scotswoman"}]}
 {"form": "scotties", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Scottie"}]}
 {"form": "scouged", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "scoug"}]}
 {"form": "scouging", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "scoug"}]}
@@ -94643,6 +94799,7 @@
 {"form": "septs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "sept"}]}
 {"form": "septuagenarians", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "septuagenarian"}]}
 {"form": "septuagenaries", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "septuagenary"}]}
+{"form": "septuagints", "analyses": [{"pos": "name", "tags": "plural", "lemma": "Septuagint"}, {"pos": "noun", "tags": "plural", "lemma": "septuagint"}]}
 {"form": "septums", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "septum"}]}
 {"form": "septuors", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "septuor"}]}
 {"form": "septupled", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "septuple"}]}
@@ -95799,6 +95956,7 @@
 {"form": "shopbreakers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "shopbreaker"}]}
 {"form": "shopbreakings", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "shopbreaking"}]}
 {"form": "shope", "analyses": [{"pos": "verb", "tags": "past", "lemma": "shape"}]}
+{"form": "shopfitters", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "shopfitter"}]}
 {"form": "shopfronts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "shopfront"}]}
 {"form": "shopfuls", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "shopful"}]}
 {"form": "shopgirls", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "shopgirl"}]}
@@ -96282,6 +96440,7 @@
 {"form": "sidlers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "sidler"}]}
 {"form": "sidles", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "sidle"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "sidle"}, {"pos": "name", "tags": "plural", "lemma": "Sidle"}]}
 {"form": "sidling", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "sidle"}]}
+{"form": "sids", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "SID"}]}
 {"form": "sieged", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "siege"}]}
 {"form": "siegers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "sieger"}]}
 {"form": "sieges", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "siege"}]}
@@ -97238,6 +97397,7 @@
 {"form": "slaggier", "analyses": [{"pos": "adj", "tags": "", "lemma": "slaggy"}]}
 {"form": "slaggiest", "analyses": [{"pos": "adj", "tags": "", "lemma": "slaggy"}]}
 {"form": "slagging", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "slag"}]}
+{"form": "slagheaps", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "slagheap"}]}
 {"form": "slags", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "slag"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "slag"}]}
 {"form": "slain", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "slay"}]}
 {"form": "slaistered", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "slaister"}]}
@@ -98404,6 +98564,7 @@
 {"form": "snowmakers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "snowmaker"}]}
 {"form": "snowmelts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "snowmelt"}]}
 {"form": "snowmen", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "snowman"}]}
+{"form": "snowmobiled", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "snowmobile"}]}
 {"form": "snowmobilers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "snowmobiler"}]}
 {"form": "snowmobiles", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "snowmobile"}]}
 {"form": "snowmobilists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "snowmobilist"}]}
@@ -99128,6 +99289,7 @@
 {"form": "sorts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "sort"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "sort"}]}
 {"form": "sos", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "so"}, {"pos": "noun", "tags": "plural", "lemma": "SO"}]}
 {"form": "sosaties", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "sosatie"}]}
+{"form": "soses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "SOS"}]}
 {"form": "sossed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "soss"}]}
 {"form": "sosses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "soss"}]}
 {"form": "sossing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "soss"}]}
@@ -100682,6 +100844,7 @@
 {"form": "squeegeeing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "squeegee"}]}
 {"form": "squeegees", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "squeegee"}]}
 {"form": "squeezabilities", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "squeezability"}]}
+{"form": "squeezeboxes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "squeezebox"}]}
 {"form": "squeezed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "squeeze"}]}
 {"form": "squeezers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "squeezer"}]}
 {"form": "squeezes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "squeeze"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "squeeze"}]}
@@ -101368,6 +101531,7 @@
 {"form": "stegocephalians", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "stegocephalian"}]}
 {"form": "stegodons", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "stegodon"}]}
 {"form": "stegodonts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "stegodont"}]}
+{"form": "stegosauri", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "stegosaurus"}]}
 {"form": "stegosaurs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "stegosaur"}]}
 {"form": "stegosauruses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "stegosaurus"}]}
 {"form": "steils", "analyses": [{"pos": "name", "tags": "plural", "lemma": "Steil"}]}
@@ -102422,8 +102586,10 @@
 {"form": "strippings", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "stripping"}]}
 {"form": "strips", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "strip"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "strip"}]}
 {"form": "stript", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "strip"}]}
+{"form": "stripteased", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "striptease"}]}
 {"form": "stripteasers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "stripteaser"}]}
 {"form": "stripteases", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "striptease"}]}
+{"form": "stripteasing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "striptease"}]}
 {"form": "strived", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "strive"}]}
 {"form": "striven", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "strive"}]}
 {"form": "strivers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "striver"}]}
@@ -103140,6 +103306,7 @@
 {"form": "subproblems", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "subproblem"}]}
 {"form": "subprocesses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "subprocess"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "subprocess"}]}
 {"form": "subproducts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "subproduct"}]}
+{"form": "subprofessionals", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "subprofessional"}]}
 {"form": "subprograms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "subprogram"}]}
 {"form": "subprojects", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "subproject"}]}
 {"form": "subproletariats", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "subproletariat"}]}
@@ -105401,6 +105568,7 @@
 {"form": "tabanids", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "tabanid"}]}
 {"form": "tabards", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "tabard"}]}
 {"form": "tabarets", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "tabaret"}]}
+{"form": "tabascos", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "tabasco"}]}
 {"form": "tabasheers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "tabasheer"}]}
 {"form": "tabbed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "tab"}]}
 {"form": "tabbied", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "tabby"}]}
@@ -105927,6 +106095,7 @@
 {"form": "tanzanians", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Tanzanian"}]}
 {"form": "tanzanites", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "tanzanite"}]}
 {"form": "taoiseachs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "taoiseach"}, {"pos": "noun", "tags": "plural", "lemma": "Taoiseach"}]}
+{"form": "taoisms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Taoism"}]}
 {"form": "taoists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Taoist"}]}
 {"form": "taongas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "taonga"}]}
 {"form": "taos", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "tao"}]}
@@ -106918,6 +107087,7 @@
 {"form": "teraohms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "teraohm"}]}
 {"form": "teraphim", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "teraph"}]}
 {"form": "teraphims", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "teraphim"}]}
+{"form": "terapixels", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "terapixel"}]}
 {"form": "terata", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "teras"}]}
 {"form": "teratisms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "teratism"}]}
 {"form": "teratogeneses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "teratogenesis"}]}
@@ -108285,6 +108455,7 @@
 {"form": "tintinnabula", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "tintinnabulum"}]}
 {"form": "tintinnabulated", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "tintinnabulate"}]}
 {"form": "tintinnabulates", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "tintinnabulate"}]}
+{"form": "tintinnabulations", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "tintinnabulation"}]}
 {"form": "tintometers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "tintometer"}]}
 {"form": "tints", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "tint"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "tint"}]}
 {"form": "tintypes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "tintype"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "tintype"}]}
@@ -108298,6 +108469,9 @@
 {"form": "tippees", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "tippee"}]}
 {"form": "tippers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "tipper"}, {"pos": "name", "tags": "plural", "lemma": "Tipper"}]}
 {"form": "tippets", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "tippet"}, {"pos": "name", "tags": "plural", "lemma": "Tippet"}]}
+{"form": "tippexed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "Tippex"}, {"pos": "verb", "tags": "past participle", "lemma": "tippex"}]}
+{"form": "tippexes", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "Tippex"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "tippex"}]}
+{"form": "tippexing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "Tippex"}, {"pos": "verb", "tags": "present participle gerund", "lemma": "tippex"}]}
 {"form": "tippier", "analyses": [{"pos": "adj", "tags": "", "lemma": "tippy"}]}
 {"form": "tippiest", "analyses": [{"pos": "adj", "tags": "", "lemma": "tippy"}]}
 {"form": "tipping", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "tip"}]}
@@ -110649,6 +110823,8 @@
 {"form": "trusting", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "trust"}]}
 {"form": "trustors", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "trustor"}]}
 {"form": "trusts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "trust"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "trust"}]}
+{"form": "trustworthier", "analyses": [{"pos": "adj", "tags": "", "lemma": "trustworthy"}]}
+{"form": "trustworthiest", "analyses": [{"pos": "adj", "tags": "", "lemma": "trustworthy"}]}
 {"form": "truthers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "truther"}]}
 {"form": "truthfulnesses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "truthfulness"}]}
 {"form": "truthier", "analyses": [{"pos": "adj", "tags": "", "lemma": "truthy"}]}
@@ -111110,6 +111286,7 @@
 {"form": "tuyers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "tuyer"}]}
 {"form": "tuyères", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "tuyère"}]}
 {"form": "tuzzes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "tuz"}, {"pos": "noun", "tags": "plural", "lemma": "tuzz"}]}
+{"form": "tvs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "TV"}, {"pos": "noun", "tags": "plural", "lemma": "tv"}]}
 {"form": "twaddled", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "twaddle"}]}
 {"form": "twaddlers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "twaddler"}]}
 {"form": "twaddles", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "twaddle"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "twaddle"}, {"pos": "name", "tags": "plural", "lemma": "Twaddle"}]}
@@ -111426,6 +111603,7 @@
 {"form": "ubiquities", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ubiquity"}]}
 {"form": "ubiquitinations", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ubiquitination"}]}
 {"form": "ubiquitins", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ubiquitin"}]}
+{"form": "ubs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "UB"}]}
 {"form": "udallers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "udaller"}]}
 {"form": "udals", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "udal"}]}
 {"form": "udders", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "udder"}]}
@@ -111585,6 +111763,7 @@
 {"form": "unabbreviated", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "unabbreviate"}]}
 {"form": "unabolished", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "unabolish"}]}
 {"form": "unaborted", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "unabort"}]}
+{"form": "unabridgeds", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "unabridged"}]}
 {"form": "unabsolved", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "unabsolve"}]}
 {"form": "unaccepted", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "unaccept"}]}
 {"form": "unaccustomed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "unaccustom"}]}
@@ -112844,6 +113023,7 @@
 {"form": "uninitiates", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "uninitiate"}]}
 {"form": "uninspired", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "uninspire"}]}
 {"form": "uninstalled", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "uninstall"}]}
+{"form": "uninstallers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "uninstaller"}]}
 {"form": "uninstalling", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "uninstall"}]}
 {"form": "uninstalls", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "uninstall"}, {"pos": "noun", "tags": "plural", "lemma": "uninstall"}]}
 {"form": "uninsureds", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "uninsured"}]}
@@ -114092,6 +114272,7 @@
 {"form": "uppercases", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "uppercase"}]}
 {"form": "uppercasing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "uppercase"}]}
 {"form": "upperclassmen", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "upperclassman"}]}
+{"form": "upperclasswomen", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "upperclasswoman"}]}
 {"form": "uppercuts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "uppercut"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "uppercut"}]}
 {"form": "uppercutting", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "uppercut"}]}
 {"form": "upperparts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "upperpart"}]}
@@ -114394,6 +114575,7 @@
 {"form": "urinometers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "urinometer"}]}
 {"form": "uris", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "URI"}]}
 {"form": "urites", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "urite"}]}
+{"form": "urls", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "URL"}]}
 {"form": "urmans", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "urman"}, {"pos": "name", "tags": "plural", "lemma": "Urman"}]}
 {"form": "urnfields", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "urnfield"}]}
 {"form": "urnfuls", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "urnful"}]}
@@ -114459,8 +114641,10 @@
 {"form": "usherships", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ushership"}]}
 {"form": "using", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "use"}]}
 {"form": "usneas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "usnea"}]}
+{"form": "usps", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "USP"}]}
 {"form": "usquebaughs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "usquebaugh"}]}
 {"form": "usques", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "usque"}]}
+{"form": "uss", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "US"}]}
 {"form": "ustions", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ustion"}]}
 {"form": "ustulations", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "ustulation"}]}
 {"form": "usualnesses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "usualness"}]}
@@ -115007,6 +115191,7 @@
 {"form": "vavs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "vav"}]}
 {"form": "vawards", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "vaward"}]}
 {"form": "vaws", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "vaw"}]}
+{"form": "vaxes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "vax"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "vax"}]}
 {"form": "vealed", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "veal"}]}
 {"form": "vealers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "vealer"}]}
 {"form": "veales", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "veale"}, {"pos": "name", "tags": "plural", "lemma": "Veale"}]}
@@ -115514,6 +115699,7 @@
 {"form": "vext", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "vex"}]}
 {"form": "vezirs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "vezir"}, {"pos": "noun", "tags": "plural", "lemma": "vezîr"}]}
 {"form": "vezîrs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "vezîr"}]}
+{"form": "vhs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "VH"}]}
 {"form": "viabilities", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "viability"}]}
 {"form": "viaducts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "viaduct"}]}
 {"form": "viae", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "via"}]}
@@ -115793,6 +115979,7 @@
 {"form": "violents", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "violent"}]}
 {"form": "violers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "violer"}]}
 {"form": "violets", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "violet"}]}
+{"form": "violincellos", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "violincello"}]}
 {"form": "violinists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "violinist"}]}
 {"form": "violins", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "violin"}]}
 {"form": "violists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "violist"}]}
@@ -115805,6 +115992,7 @@
 {"form": "viosterols", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "viosterol"}]}
 {"form": "viperfishes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "viperfish"}]}
 {"form": "vipers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "viper"}]}
+{"form": "vips", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "VIP"}]}
 {"form": "viraemias", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "viraemia"}]}
 {"form": "viragoes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "virago"}]}
 {"form": "viragos", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "virago"}]}
@@ -117240,6 +117428,7 @@
 {"form": "weatherproofing", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "weatherproof"}]}
 {"form": "weatherproofs", "analyses": [{"pos": "verb", "tags": "third-person singular present indicative", "lemma": "weatherproof"}]}
 {"form": "weathers", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "weather"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "weather"}]}
+{"form": "weatherstripped", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "weatherstrip"}]}
 {"form": "weatherstripping", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "weatherstrip"}]}
 {"form": "weatherstrips", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "weatherstrip"}]}
 {"form": "weaved", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "weave"}]}
@@ -117269,6 +117458,7 @@
 {"form": "weblogs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "weblog"}]}
 {"form": "webmails", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "webmail"}]}
 {"form": "webmasters", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "webmaster"}, {"pos": "noun", "tags": "plural", "lemma": "Webmaster"}]}
+{"form": "webmistresses", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "webmistress"}]}
 {"form": "webpages", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "webpage"}]}
 {"form": "webs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "web"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "web"}]}
 {"form": "websites", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "website"}]}
@@ -118011,6 +118201,7 @@
 {"form": "wideouts", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "wideout"}]}
 {"form": "wider", "analyses": [{"pos": "adj", "tags": "", "lemma": "wide"}, {"pos": "adv", "tags": "", "lemma": "wide"}]}
 {"form": "wides", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "wide"}]}
+{"form": "widescreens", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "widescreen"}]}
 {"form": "widest", "analyses": [{"pos": "adj", "tags": "", "lemma": "wide"}]}
 {"form": "widgeons", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "widgeon"}]}
 {"form": "widgets", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "widget"}]}
@@ -119148,7 +119339,9 @@
 {"form": "xiphosurans", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "xiphosuran"}]}
 {"form": "xis", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "xi"}, {"pos": "name", "tags": "plural", "lemma": "Xi"}, {"pos": "noun", "tags": "plural", "lemma": "Xi"}, {"pos": "noun", "tags": "plural", "lemma": "XI"}]}
 {"form": "xmas", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "XMA"}]}
+{"form": "xmases", "analyses": [{"pos": "name", "tags": "plural", "lemma": "Xmas"}, {"pos": "noun", "tags": "plural", "lemma": "xmas"}]}
 {"form": "xoana", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "xoanon"}]}
+{"form": "xs", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "X"}, {"pos": "verb", "tags": "third-person singular present indicative", "lemma": "X"}, {"pos": "noun", "tags": "plural", "lemma": "x"}]}
 {"form": "xylans", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "xylan"}]}
 {"form": "xylems", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "xylem"}]}
 {"form": "xylenes", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "xylene"}]}
@@ -119880,6 +120073,7 @@
 {"form": "zinking", "analyses": [{"pos": "verb", "tags": "present participle gerund", "lemma": "zinc"}]}
 {"form": "zinnias", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "zinnia"}]}
 {"form": "zins", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "zin"}]}
+{"form": "zionisms", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Zionism"}]}
 {"form": "zionists", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "Zionist"}, {"pos": "noun", "tags": "plural", "lemma": "zionist"}]}
 {"form": "zions", "analyses": [{"pos": "noun", "tags": "plural", "lemma": "zion"}]}
 {"form": "zipped", "analyses": [{"pos": "verb", "tags": "past participle", "lemma": "zip"}]}

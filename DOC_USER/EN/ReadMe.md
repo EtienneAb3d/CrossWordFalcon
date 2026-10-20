@@ -1863,9 +1863,9 @@ vocabulary (keeping its most frequent words); the Scrabble list is kept
 whole at Medium and Hard, and limited to its words with a known
 inflection at Easy. When the language has its usage scores, the
 difficulty combines that score with the frequency selection: Easy keeps
-the Scrabble words rated 3 and more, plus the words of its frequency
+every word rated 3 and more (Scrabble or not), plus the words of its frequency
 selection (75 % most frequent, with a definition, no likely proper noun)
-rated 2 and more; Medium the Scrabble words rated 2 and more, plus the
+rated 2 and more; Medium every word rated 2 and more, plus the
 words of the 85 % most frequent rated 1 and more; Hard every word of both
 lists. A word is never
 used twice in a grid, and neither are two words sharing a base form (their

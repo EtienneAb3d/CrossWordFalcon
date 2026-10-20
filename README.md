@@ -312,9 +312,9 @@ On the page:
    the chosen difficulty keeps; at Easy, only its words whose inflected
    forms are known are used. Once a language's usage scores are built
    (how common each word is, rated 0 to 5), the difficulty combines that
-   score with word frequency: Easy keeps the Scrabble words rated 3 and
+   score with word frequency: Easy keeps every word rated 3 and
    more, plus the frequent everyday words (with a definition, no proper
-   noun) rated 2 and more; Medium the Scrabble words rated 2 and more,
+   noun) rated 2 and more; Medium every word rated 2 and more,
    plus the frequent everyday words rated 1 and more; Hard every word. A grid never holds two forms of the same word: once "est" is
    placed, "été" or "était" (forms of "être") are left out, and "elms"
    once "elm" is in. A word you list this way never
