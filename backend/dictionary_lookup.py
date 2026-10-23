@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Accent- and case-insensitive dictionary search for the web UI's
 "Dictionnaire" panel, at the user's explicit request: given a word, list
-every word of the same root (same canonical form) from
-`data/wordlist_<lang>_freq.tsv`, each with its real definitions pulled
+every word of the same root (same canonical form) from the wordlists
+(`data/wordlist_<lang>_freq.tsv`, then `_scrabble`, `_hunspell` and
+`_multi`, see WORDLIST_SOURCES), each with its real definitions pulled
 from `data/gloss_dictionary/<lang>_glosses.jsonl`. The root is also
-resolved through the inflection table (`data/inflection/<lang>.jsonl`),
+resolved through the inflection table (`data/inflection/<lang>_inflect.jsonl`),
 so a form the wordlist lacks still finds its lemma's definitions.
 
 Distinct from `backend/gloss_lookup.py` (which only ever looks a single
@@ -26,6 +27,10 @@ WORDLIST_DIR = Path(__file__).resolve().parent.parent / "data"
 # a very productive root, could otherwise match thousands of inflected
 # forms and flood the panel).
 MAX_ROWS = 300
+
+# Characters separating the words of a multi-word expression's spelling: a
+# form holding one takes its usage score from the multi-word file first.
+WORD_SEPARATORS = " -'’"
 
 _index_cache = {}  # language -> _LangIndex | None
 
@@ -58,41 +63,71 @@ class _LangIndex:
         self.rows = []
         # normalized(MOT) / normalized(accented) -> [row index, ...]
         self.by_key = {}
-        # normalized(canonical) -> {row index, ...}  (the whole root family)
+        # normalized(canonical) -> [row index, ...] ascending (the whole root family)
         self.by_canon = {}
 
 
+# The wordlists read, in this order, with the index of their CANONIQUE
+# column: the corpus wordlist (one spelling per row), then the Scrabble,
+# Hunspell and multi-word wordlists (ACCENTUE lists every spelling of the
+# MOT, `;`-separated) — together every accented spelling a grid form can
+# stand for. A language without one of them just skips it.
+WORDLIST_SOURCES = (("freq", 3), ("scrabble", 2), ("hunspell", 2), ("multi", 2))
+
+
 def _build_index(language):
-    path = WORDLIST_DIR / f"wordlist_{language}_freq.tsv"
-    if not path.exists():
+    """One row per (spelling, lemmas) of every wordlist of WORDLIST_SOURCES,
+    in file order, the corpus wordlist first; a spelling already given a row
+    by an earlier wordlist gets none from a later one. None when the
+    language has no corpus wordlist."""
+    if not (WORDLIST_DIR / f"wordlist_{language}_freq.tsv").exists():
         return None
     idx = _LangIndex()
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                stripped = line.rstrip("\n")
-                if not stripped or stripped.startswith("#"):
-                    continue
-                parts = stripped.split("\t")
-                if len(parts) < 2:
-                    continue
-                mot = parts[0]
-                accented = parts[1] or mot
-                canon_field = parts[3] if len(parts) >= 4 and parts[3] else accented
-                canonicals = tuple(c for c in (p.strip() for p in canon_field.split(";")) if c)
-                if not canonicals:
-                    canonicals = (accented,)
-                row_i = len(idx.rows)
-                idx.rows.append((accented, canonicals))
-                for key in {_norm(mot), _norm(accented)}:
-                    if key:
-                        idx.by_key.setdefault(key, []).append(row_i)
-                for c in canonicals:
-                    ck = _norm(c)
-                    if ck:
-                        idx.by_canon.setdefault(ck, set()).add(row_i)
-    except OSError:
-        return None
+    spelled = set()
+    # Rows of one lemma family share one lemma tuple, and equal lemma keys
+    # one string — the index holds ~600k rows for French.
+    shared = {}
+
+    def add_row(mot, accented, canonicals):
+        canonicals = shared.setdefault(canonicals, canonicals)
+        row_i = len(idx.rows)
+        idx.rows.append((accented, canonicals))
+        for key in {_norm(mot), _norm(accented)}:
+            if key:
+                idx.by_key.setdefault(key, []).append(row_i)
+        for ck in {_norm(c) for c in canonicals}:
+            if ck:
+                idx.by_canon.setdefault(shared.setdefault(ck, ck), []).append(row_i)
+
+    for source, canon_col in WORDLIST_SOURCES:
+        path = WORDLIST_DIR / f"wordlist_{language}_{source}.tsv"
+        if not path.exists():
+            continue
+        several = source != "freq"
+        added = set()
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    stripped = line.rstrip("\n")
+                    if not stripped or stripped.startswith("#"):
+                        continue
+                    parts = stripped.split("\t")
+                    if len(parts) < 2:
+                        continue
+                    mot = parts[0]
+                    spellings = [p.strip() for p in parts[1].split(";")] if several else [parts[1]]
+                    spellings = [p for p in spellings if p] or [mot]
+                    canon_field = parts[canon_col] if len(parts) > canon_col and parts[canon_col] else ""
+                    lemmas = tuple(c for c in (p.strip() for p in canon_field.split(";")) if c)
+                    for accented in spellings:
+                        if accented in spelled:
+                            continue
+                        added.add(accented)
+                        add_row(mot, accented, lemmas or (accented,))
+        except OSError:
+            if source == "freq":
+                return None
+        spelled |= added
     return idx
 
 
@@ -141,8 +176,9 @@ def _definitions_for(canonicals, gloss_index, show_lemma):
 
 
 def grid_form(form):
-    """The grid form (MOT column: bare, uppercase) of a row's form."""
-    return _norm(form.replace("ß", "ss")).upper()
+    """The grid form (MOT column: bare, uppercase, A-Z only — a multi-word
+    expression's separators dropped, "a Arnoia" -> AARNOIA) of a row's form."""
+    return "".join(c for c in _norm(form.replace("ß", "ss")).upper() if "A" <= c <= "Z")
 
 
 def search(query, language):
@@ -181,7 +217,7 @@ def search(query, language):
     # link the two.
     roots = set()
     # A third way in: the inflection table's lemmas of the exact form
-    # (`data/inflection/<lang>.jsonl`), which also covers a form the freq
+    # (`data/inflection/<lang>_inflect.jsonl`), which also covers a form the freq
     # wordlist lacks ("foehna", a Scrabble-only word -> "foehner").
     inflection_lemmas = inflection_lookup.lemmas_of(q, language)
     for lemma in inflection_lemmas:
@@ -202,7 +238,7 @@ def search(query, language):
 
     family = set()
     for r in roots:
-        family |= idx.by_canon.get(r, set())
+        family.update(idx.by_canon.get(r, ()))
 
     rows = []
     for i in sorted(family):
@@ -260,6 +296,7 @@ def search(query, language):
         result["truncated"] = True
     for row in rows:
         row.pop("_canon_norm", None)
-        row["usage"] = usage_score(grid_form(row["form"]), language)
+        row["usage"] = usage_score(grid_form(row["form"]), language,
+                                   multi=any(c in WORD_SEPARATORS for c in row["form"]))
     result["rows"] = rows
     return result

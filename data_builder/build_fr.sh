@@ -16,32 +16,38 @@ LANG_CODE=fr
 
 step() { echo; echo "=== $(date '+%F %T')  $*"; }
 
-step "1/10  build_sentence_corpus $LANG_CODE"
+step "1/11  build_sentence_corpus $LANG_CODE"
 $PY data_builder/build_sentence_corpus.py "$LANG_CODE" || { echo "FAILED at build_sentence_corpus"; exit 1; }
 
-step "2/10  build_wordlist_freq $LANG_CODE"
+step "2/11  build_wordlist_freq $LANG_CODE"
 $PY data_builder/build_wordlist_freq.py "$LANG_CODE" || { echo "FAILED at build_wordlist_freq"; exit 1; }
 
-step "3/10  build_unaccented_lemmas $LANG_CODE"
+step "3/11  build_unaccented_lemmas $LANG_CODE"
 $PY data_builder/build_unaccented_lemmas.py "$LANG_CODE" || { echo "FAILED at build_unaccented_lemmas"; exit 1; }
 
-step "4/10  build_wordlist_scrabble $LANG_CODE"
+step "4/11  build_wordlist_scrabble $LANG_CODE"
 $PY data_builder/download_scrabble_dictionaries.py "$LANG_CODE" || { echo "FAILED at download_scrabble_dictionaries"; exit 1; }
 $PY data_builder/build_wordlist_scrabble.py "$LANG_CODE" || { echo "FAILED at build_wordlist_scrabble"; exit 1; }
 
-step "5/10  build_wordlist_hunspell $LANG_CODE"
+step "5/11  build_wordlist_hunspell $LANG_CODE"
 $PY data_builder/build_wordlist_hunspell.py "$LANG_CODE" || { echo "FAILED at build_wordlist_hunspell"; exit 1; }
 
-step "6/10  build_gloss_dictionary $LANG_CODE"
-$PY data_builder/build_gloss_dictionary.py "$LANG_CODE" || { echo "FAILED at build_gloss_dictionary"; exit 1; }
+step "6/11  build_wordlist_multi $LANG_CODE"
+$PY data_builder/build_wordlist_multi.py "$LANG_CODE" || { echo "FAILED at build_wordlist_multi"; exit 1; }
+$PY data_builder/build_wordlist_freq_multi.py "$LANG_CODE" || { echo "FAILED at build_wordlist_freq_multi"; exit 1; }
 
-step "7/10  compress_reference_corpus $LANG_CODE"
+step "7/11  build_gloss_dictionary $LANG_CODE"
+$PY data_builder/build_gloss_dictionary.py "$LANG_CODE" || { echo "FAILED at build_gloss_dictionary"; exit 1; }
+$PY data_builder/build_gloss_dictionary.py "$LANG_CODE" --multi || { echo "FAILED at build_gloss_dictionary --multi"; exit 1; }
+
+step "8/11  compress_reference_corpus $LANG_CODE"
 $PY data_builder/compress_reference_corpus.py "$LANG_CODE" || { echo "FAILED at compress_reference_corpus"; exit 1; }
 
-step "8/10  build_inflections $LANG_CODE"
+step "9/11  build_inflections $LANG_CODE"
 $PY data_builder/build_inflections.py "$LANG_CODE" || { echo "FAILED at build_inflections"; exit 1; }
+$PY data_builder/build_inflections.py "$LANG_CODE" --multi || { echo "FAILED at build_inflections --multi"; exit 1; }
 
-step "9/10  build_usage_scores $LANG_CODE  (best effort — needs the local LLM, ./run_llm.sh; resumable, many hours)"
+step "10/11  build_usage_scores $LANG_CODE  (best effort — needs the local LLM, ./run_llm.sh; resumable, many hours)"
 # Non-fatal: the usage scores refine word choice and grid scoring, but every
 # other artefact works without them. Interrupted, it resumes where it stopped.
 $PY data_builder/build_usage_scores.py "$LANG_CODE" \
@@ -49,7 +55,7 @@ $PY data_builder/build_usage_scores.py "$LANG_CODE" \
 $PY data_builder/build_usage_scores.py "$LANG_CODE" --source out \
     || echo "WARNING: build_usage_scores --source out skipped/failed — start the LLM (./run_llm.sh), then: $PY data_builder/build_usage_scores.py $LANG_CODE --source out"
 
-step "10/10  qdrant_populate $LANG_CODE  (best effort — needs ./run_qdrant.sh + ./run_embed.sh running)"
+step "11/11  qdrant_populate $LANG_CODE  (best effort — needs ./run_qdrant.sh + ./run_embed.sh running)"
 # Non-fatal: the wordlist/gloss artefacts above are the real deliverables; feeding
 # the Qdrant "words" collection is a downstream nicety. --recreate wipes this
 # language's tenant first, since the wordlist it mirrors was just rebuilt.
@@ -57,5 +63,5 @@ $PY -m data_builder.qdrant_populate "$LANG_CODE" --recreate \
     || echo "WARNING: qdrant_populate skipped/failed — start Qdrant (./run_qdrant.sh) and the embed server (./run_embed.sh), then: $PY -m data_builder.qdrant_populate $LANG_CODE --recreate"
 
 step "DONE — French data pipeline complete"
-ls -la data/wordlist_fr_freq.tsv data/wordlist_fr_scrabble.tsv data/wordlist_fr_hunspell.tsv data/gloss_dictionary/fr_glosses.jsonl \
-       data/reference_corpus_fr.tar.xz data/reference_corpus/fr_sentences.txt data/inflection/fr.jsonl data/usage_score_fr_scrabble.tsv data/usage_score_fr_scrabble_out.tsv 2>&1
+ls -la data/wordlist_fr_freq.tsv data/wordlist_fr_scrabble.tsv data/wordlist_fr_hunspell.tsv data/wordlist_fr_multi.tsv data/wordlist_fr_freq_multi.tsv data/gloss_dictionary/fr_glosses_multi.jsonl data/inflection/fr_inflect_multi.jsonl data/gloss_dictionary/fr_glosses.jsonl \
+       data/reference_corpus_fr.tar.xz data/reference_corpus/fr_sentences.txt data/inflection/fr_inflect.jsonl data/usage_score_fr_scrabble.tsv data/usage_score_fr_scrabble_out.tsv 2>&1

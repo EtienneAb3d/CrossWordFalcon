@@ -113,6 +113,12 @@ public final class Filler {
     // <= 1 places a single word per node. The default of Generator.Params.wordsPerNode/Fill.FillArgs.wordsPerNode,
     // which the web UI's "Mots par pose" field overrides (GenReq.wordsPerNode).
     public static final int WORDS_PER_NODE = 2;
+    // Maximum share (percent) of multi-word expressions (rows of the multi-word wordlist, Words.ROW_SOURCE_MULTI)
+    // among the words placed (mirrors MULTI_WORD_PERCENT): while the expressions placed exceed it, orderedCandidates
+    // drops every expression from a slot's candidates (multiWordsBlocked); 0 forbids them, 100 (or null) sets no
+    // limit; a "Mots Défi" word is never limited. The default of Generator.Params.multiWordPercent/
+    // Interactive.placeWord, which the web UI's "Multi-mots" field overrides (GenReq.multiWordPercent).
+    public static final int MULTI_WORD_PERCENT = 15;
     // Fill rate (percent) of the attention zone at which a node is down to one word per node (mirrors
     // GROUP_SIZE_MIN_FILL_PERCENT, groupSize): the group shrinks linearly from wordsPerNode on an empty zone to 1
     // at this rate, and stays at 1 above it.
@@ -294,6 +300,8 @@ public final class Filler {
     public int sameWordLimit;
     /** Words placed per node (WORDS_PER_NODE), set by Fill.tryFill (mirrors Filler.words_per_node). */
     public int wordsPerNode = WORDS_PER_NODE;
+    /** Multi-word expression cap (MULTI_WORD_PERCENT), null = no limit (mirrors Filler.multi_word_percent). */
+    public Integer multiWordPercent;
     final Map<String, String> lastWord = new HashMap<>();
     final Map<String, Integer> lastWordCount = new HashMap<>();
     public Map<Integer, Character> permanentLockedLetters = Map.of();
@@ -920,6 +928,18 @@ public final class Filler {
         return head;
     }
 
+    /** Whether {@code word}, on a slot of cells {@code cells}, is a multi-word expression of the lexicon (mirrors
+     * Filler._is_multi_word). */
+    boolean isMultiWord(int[] cells, String word) {
+        return Fill.isMultiWord(index, cells, word);
+    }
+
+    /** Whether a new multi-word expression may not be chosen: the cap is 0, or the expressions among the words
+     * placed exceed multiWordPercent % of them (mirrors Filler._multi_words_blocked). */
+    boolean multiWordsBlocked() {
+        return Fill.multiWordsBlocked(slots, index, assignment, multiWordPercent);
+    }
+
     /** {@code cands} (shuffled) minus the candidates outside the USAGE_KEEP_PERCENT % with the highest usage score,
      * among those whose score is known, order kept; {@code cands} itself when slot i's language has no usage-score
      * file or no candidate has a known score (mirrors Filler._usage_filtered). */
@@ -945,6 +965,12 @@ public final class Filler {
     public List<String> orderedCandidates(int i, Collection<String> candsIn) {
         List<String> cands = new ArrayList<>(candsIn);
         rng.shuffle(cands);
+        if (multiWordsBlocked()) {
+            int[] cells = slots.get(i);
+            List<String> kept = new ArrayList<>(cands.size());
+            for (String w : cands) if (challengeWords.contains(w) || !isMultiWord(cells, w)) kept.add(w);
+            cands = kept;
+        }
         cands = usageFiltered(i, cands);
         if (letterScores.isEmpty()) return cands;
         int n = cands.size();

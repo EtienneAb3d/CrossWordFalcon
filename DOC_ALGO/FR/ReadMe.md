@@ -125,7 +125,7 @@ Le lexique réunit deux dictionnaires par langue :
 - `data/wordlist_<langue>_scrabble.tsv`, le dictionnaire Scrabble, versé
   **en entier** aux niveaux moyen et difficile ; au niveau facile, seuls
   ses mots dont la forme accentuée figure dans la table des formes
-  fléchies (`data/inflection/<langue>.jsonl`, comme forme ou comme lemme)
+  fléchies (`data/inflection/<langue>_inflect.jsonl`, comme forme ou comme lemme)
   le sont (`load_inflection_keys`, `_scrabble_entries`). Un mot versé
   absent du premier dictionnaire y est ajouté avec la référence de sa
   ligne du dictionnaire Scrabble ; aucun mot Scrabble ne compte dans les quotas de noms propres
@@ -149,13 +149,35 @@ scores (le mot du corpus absent du Scrabble est noté dans
 tous les mots, Scrabble et corpus (`backend/crossword_gen.py`,
 `_select_lexicon`, `usage_lexicon_active`, `load_lexicon`). Un mot sans
 score est retiré aux niveaux facile et moyen. Le filtre des formes
-fléchies et les quotas du niveau facile ne s'appliquent pas (aucun nom
-propre probable ni mot sans définition n'y entre par la coupe de
-fréquence, et un mot Scrabble en est exempt) ; ceux des niveaux moyen et
-difficile (2 et 5 noms propres et mots sans définition au plus) restent
-appliqués. Le jeu de mots Scrabble d'une telle langue
+fléchies et le quota de mots sans définition du niveau facile ne
+s'appliquent pas ; le quota de noms propres s'applique à tous les niveaux :
+en facile (aucun nom propre, `MAX_PROPER_NOUNS`) chaque nom propre probable
+est retiré du lexique, sauf un mot Scrabble, qui en est exempt ; en moyen et
+difficile, 2 et 5 noms propres et mots sans définition au plus. Un nom
+propre probable est un mot à majuscule initiale (sauf en allemand) ou un
+mot dont toutes les entrées du dictionnaire de définitions (la sienne et
+celles de ses lemmes) n'ont que le type « name », sans autre type possible
+(`_proper_noun_check`, `gloss_lookup.only_proper_noun_glosses`). Le jeu de mots Scrabble d'une telle langue
 n'est alors jamais restreint aux formes fléchies connues
 (`scrabble_easy_filter`, `scrabble_words_for_languages`).
+
+Une telle langue y verse aussi ses **expressions de plusieurs mots**,
+quand elle en a la liste (`data/wordlist_<langue>_multi.tsv`, « arc-en-
+ciel », « screw cap », écrites sans séparateurs : ARCENCIEL ;
+`merge_multi_lexicon`, appelé par `_select_lexicon`) : une expression dont
+la forme grille n'est pas déjà un mot du lexique y entre avec la référence
+de sa ligne, et suit la même sélection — son score dans
+`data/usage_score_<langue>_multi.tsv`, sa coupe de fréquence dans
+`data/wordlist_<langue>_freq_multi.tsv` (sans score, elle n'entre donc
+qu'au niveau difficile). Contrairement à un mot Scrabble, elle compte dans
+les quotas de noms propres et de mots sans définition. Dans la recherche,
+c'est un mot comme un autre, soumis seulement au plafond « Multi-mots max »
+(voir « Choisir quel mot essayer »). Ses séparations de mots (les nombres de
+lettres après lesquels sa graphie principale sépare deux mots :
+`word_breaks`, « arc-en-ciel » → 3 et 5) sont gardées par langue
+(`load_multi_breaks`) et dessinées comme un trait plus épais entre deux
+cases de la grille (`word_break_edges` pour une grille, `placed_word_
+break_edges` pour le mot placé par « Suivant »).
 
 La construction de la grille n'utilise que la forme nue des mots (26
 lettres sans accent). Le lexique chargé ne garde donc en mémoire, par
@@ -177,8 +199,12 @@ Même démarrage, en cliquant sur **Interactif** (ligne **Générer la
 grille :**) au lieu d'**Automatique**. Le guide ci-dessous
 s'ouvre aussi dans l'interface par le bouton **?** à gauche de **Mots**.
 
-- Placer ses lettres dans la grille ; Espace ajoute ou supprime une case
-  noire.
+- Placer ses lettres dans la grille ; « . » (ou toute autre ponctuation)
+  ajoute ou supprime une case noire ; Espace, « - » ou « _ » ajoute ou
+  supprime une séparation de mots (un trait plus épais) juste avant la case
+  sélectionnée, dans le sens de saisie (`frontend/static/script.js`,
+  `interactiveToggleBreak`) — un mot de plusieurs mots placé par « Suivant »
+  apporte les siennes.
 - **Suivant** pose automatiquement **un** mot de plus, en tenant compte
   d'abord de la liste **Mots Défi**, puis du glossaire thématique (« Le
   mode Interactif : poser un seul mot », chapitre 4). **Précédent** revient
@@ -1349,8 +1375,25 @@ d'attention du remplissage incrémental (voir « Les emplacements
 
 ### Choisir quel mot essayer
 
-Les candidats de l'emplacement sont **mélangés**, puis **filtrés par
-leur score d'usage** (`Filler._usage_filtered`) : parmi les candidats dont
+Les candidats de l'emplacement sont **mélangés**, puis soumis au
+**plafond « Multi-mots max »** (`Filler._multi_words_blocked`, champ du
+formulaire, `MULTI_WORD_PERCENT` = 15 % par défaut) : tant que les
+expressions de plusieurs mots (mots issus de `data/wordlist_<langue>_
+multi.tsv`, `_is_multi_word`) représentent plus de ce pourcentage des mots
+déjà posés, aucune nouvelle expression n'est retenue parmi les candidats —
+poser d'autres mots simples fait redescendre la proportion et les autorise
+à nouveau ; à 0 %, aucune expression n'est choisie, à 100 %, aucune limite.
+Un Mot Défi n'est jamais concerné. Le plafond s'applique partout où un mot
+est choisi : aux tentatives de la recherche (`try_fill(multi_word_
+percent=)`, transmis par `generate_grid`), à la fermeture des emplacements
+implicites (un emplacement dont le seul candidat est une expression
+interdite reste ouvert, `_close_implied_slots`), à l'optimisation avant
+nettoyage (`_optimize_before_cleanup`), aux mots plus courts ou plus longs
+des réparations de la reprise « telle quelle »
+(`_find_shorter_word_for_zone`, `_find_longer_word_for_zone`), à la
+minimisation finale (`minimize_black_squares`) et à « Suivant »
+(`interactive_place_word`). Ils sont
+ensuite **filtrés par leur score d'usage** (`Filler._usage_filtered`) : parmi les candidats dont
 le score d'usage est connu (`data/usage_score_<langue>_scrabble.tsv`, voir
 `DOC_DIC/FR/ReadMe.md` ; `index[longueur]["usage"]`), seuls les
 `USAGE_KEEP_PERCENT` (60) % aux scores les plus élevés sont gardés

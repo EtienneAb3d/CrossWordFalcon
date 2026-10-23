@@ -488,7 +488,7 @@ def _slugify_pseudo(pseudo):
 def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme,
                     priority_words, seed, pseudo=None, resumed_from=None, origin=None,
                     bilingual_language=None, generation_params=None, challenge_words=None,
-                    diagnostics=None):
+                    diagnostics=None, breaks=None):
     """Autosaves (or updates) the in-progress state of one "Interactif"
     session. The very first call for a given `job_id` creates
     `GRID_WORK/<timestamp>_<pseudo slug>_<job_id>.json`; every later call
@@ -661,6 +661,10 @@ def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme
         # list shown in the order it was typed in, so that order must
         # survive a save/resume round trip unchanged.
         "challenge_words": list(challenge_words or ()),
+        # Word breaks of the grid ([row, col, direction]: a thicker line
+        # between that cell and the next one in `direction`), typed by the
+        # author or set by a placed multi-word expression.
+        "breaks": [list(b) for b in breaks or ()],
         "diagnostics": diagnostics,
         "previous": previous,
         "created_at": created_at or now,

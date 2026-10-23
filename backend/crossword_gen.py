@@ -269,6 +269,13 @@ MAX_NON_GLOSS_WORDS = {"easy": 0, "medium": 2, "hard": 5}
 PROPER_NOUN_EXCLUDED_LANGS = {"de"}
 
 
+def _is_grid_word(word):
+    """Whether `word` is a plain run of A-Z letters — the only words a grid
+    can hold: a wordlist row whose MOT holds any other character (a Unicode
+    letter included, a Greek "Μ" for instance) is ignored."""
+    return bool(word) and all("A" <= c <= "Z" for c in word)
+
+
 def _lang_from_path(path):
     match = re.search(r"wordlist_([a-z]{2})_freq\.tsv$", os.path.basename(str(path)))
     return match.group(1) if match else None
@@ -289,7 +296,27 @@ def _try_import_gloss_lookup():
         return None, None
 
 
-def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_nouns=False):
+def _proper_noun_check(language):
+    """`is_proper(accented, lemmas)` of `language`: a likely proper noun —
+    a capitalized spelling (outside `PROPER_NOUN_EXCLUDED_LANGS`), or a word
+    whose gloss-dictionary entries (its spelling's and its lemmas') have
+    only proper-noun ("name") senses (`gloss_lookup.
+    only_proper_noun_glosses`, every language)."""
+    check_case = bool(language) and language not in PROPER_NOUN_EXCLUDED_LANGS
+    try:
+        from .gloss_lookup import has_gloss_dictionary, only_proper_noun_glosses
+        check_gloss = bool(language) and has_gloss_dictionary(language)
+    except ImportError:
+        check_gloss = False
+
+    def is_proper(accented, lemmas):
+        return ((check_case and accented[:1].isupper())
+                or (check_gloss and only_proper_noun_glosses([accented, *lemmas], language)))
+    return is_proper
+
+
+def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_nouns=False,
+                  language=None):
     """Loads a lexicon in the `MOT<TAB>ACCENTUE<TAB>FREQUENCE<TAB>CANONIQUE`
     format (build_wordlist_freq.py), or, as a fallback, a 3- or 2-column
     format (no CANONIQUE), or plain free text (one or more words per
@@ -299,7 +326,8 @@ def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_noun
     canonical forms (see backend/gloss_lookup.py — frequency alone isn't
     enough to catch a common but undefinable word, e.g. the abbreviation
     "ABD"), falling back silently if the language can't be inferred from
-    the filename or if no gloss dictionary has been built for it.
+    the filename (or given as `language`) or if no gloss dictionary has
+    been built for it.
 
     If `exclude_proper_nouns` is true, a word that's potentially a proper
     noun is excluded outright, rather than merely demoted in the
@@ -315,12 +343,14 @@ def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_noun
     when Hunspell only validated the word under its title-cased form,
     exactly the "likely proper noun" signal; a word correctly spelled in
     lowercase (an ordinary noun/adjective/verb) keeps a lowercase
-    ACCENTUE value and is never touched by this filter. Falls back
-    silently (like `require_gloss`) if the language can't be inferred
-    from the filename; has no effect for German
-    (`PROPER_NOUN_EXCLUDED_LANGS`), where this same signal means nothing
-    (every noun is capitalized there, proper or not — see that
-    module-level constant). `max_words` accepts two types, with
+    ACCENTUE value and is never touched by that signal. A word whose
+    gloss-dictionary entries have only proper-noun ("name") senses is a
+    likely proper noun too, in every language (`_proper_noun_check`). Falls
+    back silently (like `require_gloss`) if the language can't be inferred
+    from the filename; the capitalization signal has no effect for German
+    (`PROPER_NOUN_EXCLUDED_LANGS`), where it means nothing (every noun is
+    capitalized there, proper or not — see that module-level constant).
+    `max_words` accepts two types, with
     different meanings: an `int` is an absolute word count to keep
     (historical behavior, used by `--max-words` on the command line); a
     `float` (0 < x <= 1, see DIFFICULTY_PRESETS) is a *fraction* of the
@@ -336,7 +366,7 @@ def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_noun
       words *globally* (across every length combined), if given, are
       kept, then grouped by length for the CSP solver;
     - refs = {MOT: row reference}, for the words kept in by_length: the
-      byte offset of the word's row in `path`, shifted left by one bit
+      byte offset of the word's row in `path`, shifted left by two bits
       (`_freq_row_ref`). The accented/natural form and the canonical
       form(s)/lemma(s) are not kept in memory — the grid only ever uses
       the bare A-Z form — and are read back from that row when a
@@ -346,9 +376,9 @@ def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_noun
       THRESHOLD`/`_noise_slot_cells`), to tell a statistically credible
       candidate apart from a near-zero dictionary entry (corpus noise,
       an acronym, a foreign fragment);
-    - proper_nouns = the kept words whose ACCENTUE is capitalized (empty
-      for a language of `PROPER_NOUN_EXCLUDED_LANGS`), counted against
-      `MAX_PROPER_NOUNS`;
+    - proper_nouns = the kept likely proper nouns (`_proper_noun_check`:
+      capitalized ACCENTUE outside `PROPER_NOUN_EXCLUDED_LANGS`, or only
+      "name" gloss senses), counted against `MAX_PROPER_NOUNS`;
     - non_gloss = the kept words with no gloss-dictionary entry under
       their ACCENTUE nor any CANONIQUE (empty when the language has no
       gloss dictionary), counted against `MAX_NON_GLOSS_WORDS`."""
@@ -366,7 +396,7 @@ def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_noun
             except ValueError:
                 freq = 0.0
             canonical = [c for c in parts[3].split(";") if c]
-            if word.isalpha():
+            if _is_grid_word(word):
                 entries.append((word, accented, freq, canonical or [accented], ref))
         elif len(parts) == 3:
             word = parts[0].upper()
@@ -375,7 +405,7 @@ def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_noun
                 freq = float(parts[2])
             except ValueError:
                 freq = 0.0
-            if word.isalpha():
+            if _is_grid_word(word):
                 entries.append((word, accented, freq, [accented], ref))
         elif len(parts) == 2:
             word = parts[0].upper()
@@ -383,11 +413,11 @@ def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_noun
                 freq = float(parts[1])
             except ValueError:
                 freq = 0.0
-            if word.isalpha():
+            if _is_grid_word(word):
                 entries.append((word, word, freq, [word], ref))
         else:
             for tok in line.upper().split():
-                if tok.isalpha():
+                if _is_grid_word(tok):
                     entries.append((tok, tok, 0.0, [tok], ref))
 
     best = {}  # word -> (accented, best_freq, canonical, ref)
@@ -396,7 +426,7 @@ def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_noun
             best[word] = (accented, freq, canonical, ref)
     del entries
 
-    lang = _lang_from_path(path)
+    lang = language or _lang_from_path(path)
     has_any_gloss, has_gloss_dictionary = _try_import_gloss_lookup()
     gloss_available = bool(has_any_gloss and lang and has_gloss_dictionary(lang))
     if require_gloss:
@@ -414,12 +444,12 @@ def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_noun
                 if has_any_gloss([v[0], *v[2]], lang)
             }
 
+    is_proper = _proper_noun_check(lang)
     if exclude_proper_nouns:
-        if lang and lang not in PROPER_NOUN_EXCLUDED_LANGS:
-            best = {
-                word: v for word, v in best.items()
-                if not v[0][:1].isupper()
-            }
+        best = {
+            word: v for word, v in best.items()
+            if not is_proper(v[0], v[2])
+        }
 
     # Global frequency ranking (see DIFFICULTY_PRESETS above for why this
     # replaced a per-length cap) — then group into by_length for the CSP
@@ -440,26 +470,37 @@ def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_noun
     frequencies = {}
     proper_nouns = set()
     non_gloss = set()
-    check_proper = lang not in PROPER_NOUN_EXCLUDED_LANGS
     for word, (accented, freq, canonical, ref) in ranked:
         result[len(word)].append(word)
         refs[word] = ref
         frequencies[word] = freq
-        if check_proper and accented[:1].isupper():
+        if is_proper(accented, canonical):
             proper_nouns.add(word)
         if gloss_available and not has_any_gloss([accented, *canonical], lang):
             non_gloss.add(word)
     return dict(result), refs, frequencies, proper_nouns, non_gloss
 
 
+# A row reference is the byte offset of a word's wordlist row shifted left
+# by two bits, the low bits naming its wordlist — the index of its path in a
+# lexicon's `sources`: 0 the freq wordlist, 1 the Scrabble wordlist, 2 the
+# multi-word wordlist (`data/wordlist_<lang>_multi.tsv`).
+ROW_SOURCE_FREQ, ROW_SOURCE_SCRABBLE, ROW_SOURCE_MULTI = 0, 1, 2
+
+
 def _freq_row_ref(offset):
     """Row reference of a freq-wordlist row starting at byte `offset`."""
-    return offset << 1
+    return offset << 2 | ROW_SOURCE_FREQ
 
 
 def _scrabble_row_ref(offset):
     """Row reference of a Scrabble-wordlist row starting at byte `offset`."""
-    return (offset << 1) | 1
+    return offset << 2 | ROW_SOURCE_SCRABBLE
+
+
+def _multi_row_ref(offset):
+    """Row reference of a multi-word-wordlist row starting at byte `offset`."""
+    return offset << 2 | ROW_SOURCE_MULTI
 
 
 def _row_forms(line, word, scrabble):
@@ -467,7 +508,8 @@ def _row_forms(line, word, scrabble):
     `line` — the same parsing as `load_wordlist` (freq wordlist) or
     `merge_scrabble_lexicon` (Scrabble wordlist, `scrabble` true, whose
     ACCENTUE column lists every possible spelling, `;`-separated, the
-    main one first: `accented` is that one)."""
+    main one first: `accented` is that one; the multi-word wordlist has
+    the same format)."""
     parts = line.split("\t")
     if scrabble:
         if len(parts) < 3:
@@ -2959,6 +3001,12 @@ def usage_score_out_path(language):
     return os.path.join(DATA_DIR, f"usage_score_{language}_scrabble_out.tsv")
 
 
+def usage_score_multi_path(language):
+    """The usage scores of the multi-word expressions (`build_usage_scores.py
+    --source multi`)."""
+    return os.path.join(DATA_DIR, f"usage_score_{language}_multi.tsv")
+
+
 def _read_usage_file(path, result):
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -2969,7 +3017,8 @@ def _read_usage_file(path, result):
 
 def load_usage_scores(language):
     """{MOT: usage score} of `language`'s usage-score file, plus those of
-    its file for the freq words absent from the Scrabble wordlist (`usage_score_out_path`, when it exists);
+    its file for the freq words absent from the Scrabble wordlist (`usage_score_out_path`) and of its
+    multi-word expressions (`usage_score_multi_path`), when they exist;
     `None` when the language has no usage-score file. Transient: only read
     while a lexicon is being indexed (`build_index` keeps the values as an
     `array('b')`)."""
@@ -2980,9 +3029,9 @@ def load_usage_scores(language):
         return None
     result = {}
     _read_usage_file(path, result)
-    out_path = usage_score_out_path(language)
-    if os.path.exists(out_path):
-        _read_usage_file(out_path, result)
+    for extra in (usage_score_out_path(language), usage_score_multi_path(language)):
+        if os.path.exists(extra):
+            _read_usage_file(extra, result)
     return result
 
 
@@ -3001,7 +3050,7 @@ def _scrabble_entries(language, easy):
         return entries
     for offset, line in iter_lines_with_offsets(path):
         parts = line.split("\t")
-        if len(parts) >= 3 and parts[0].isalpha():
+        if len(parts) >= 3 and _is_grid_word(parts[0]):
             entries[parts[0]] = (_scrabble_row_ref(offset), parts[1])
     if easy:
         known = load_inflection_keys(language)
@@ -3012,13 +3061,13 @@ def _scrabble_entries(language, easy):
 
 def load_inflection_keys(language):
     """Frozenset of every form and every lemma of `language`'s inflection
-    table (`data/inflection/<lang>.jsonl`), lowercased with ligatures
+    table (`data/inflection/<lang>_inflect.jsonl`), lowercased with ligatures
     folded — the words with a known inflection. Not cached: only read
     while an "easy" lexicon's Scrabble words are being selected."""
     if not language:
         return frozenset()
     keys = set()
-    path = os.path.join(DATA_DIR, "inflection", f"{language}.jsonl")
+    path = os.path.join(DATA_DIR, "inflection", f"{language}_inflect.jsonl")
     if os.path.exists(path):
         import json
         with open(path, encoding="utf-8") as f:
@@ -3129,6 +3178,169 @@ def scrabble_word_cells(grid, scrabble_words):
     return [[r, c] for r, c in sorted(found)]
 
 
+# ---------- Multi-word expressions ----------
+#
+# `data/wordlist_<lang>_multi.tsv` (data_builder/build_wordlist_multi.py,
+# the Scrabble wordlist's format) lists the expressions of several words
+# ("arc-en-ciel", "screw cap") under their grid form (ARCENCIEL). A lexicon
+# selected by usage score merges them in (`merge_multi_lexicon`), selected
+# like every other word (`_select_lexicon`), their frequency read from
+# `data/wordlist_<lang>_freq_multi.tsv`; a grid form the freq or Scrabble
+# wordlist already holds stays a single word. A placed expression's word
+# breaks (`word_breaks`) are drawn as a thicker line between its words.
+
+# Characters that separate the words of an expression's spelling.
+_WORD_SEPARATORS = frozenset(" -'’")
+
+_MULTI_BREAKS_CACHE = {}
+_MULTI_BREAKS_LOCK = threading.Lock()
+
+
+def multi_wordlist_path(language):
+    return os.path.join(DATA_DIR, f"wordlist_{language}_multi.tsv")
+
+
+def freq_multi_wordlist_path(language):
+    return os.path.join(DATA_DIR, f"wordlist_{language}_freq_multi.tsv")
+
+
+def word_breaks(spelling):
+    """The letter counts after which `spelling` (an expression's natural
+    spelling) separates two words, in grid letters ("arc-en-ciel" ->
+    (3, 5), "c'est-à-dire" -> (1, 4, 5)); () for a single word."""
+    breaks = []
+    n = 0
+    for ch in spelling:
+        if ch in _WORD_SEPARATORS:
+            if n and (not breaks or breaks[-1] != n):
+                breaks.append(n)
+            continue
+        n += len(challenge_word_grid_form(ch))
+    return tuple(b for b in breaks if b < n)
+
+
+def _single_word_mots(language):
+    """MOTs of `language`'s freq and Scrabble wordlists — transient."""
+    mots = set()
+    for path in (os.path.join(DATA_DIR, f"wordlist_{language}_freq.tsv"),
+                 scrabble_wordlist_path(language)):
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                mots.update(line.split("\t", 1)[0] for line in f)
+    return mots
+
+
+def load_multi_breaks(language):
+    """{MOT: word breaks} of every expression of `language`'s multi-word
+    wordlist whose grid form no freq or Scrabble word has (`word_breaks`
+    of its main spelling), once per language and process; {} when the
+    language has none."""
+    if not language:
+        return {}
+    with _MULTI_BREAKS_LOCK:
+        cached = _MULTI_BREAKS_CACHE.get(language)
+        if cached is not None:
+            return cached
+        result = {}
+        path = multi_wordlist_path(language)
+        if os.path.exists(path):
+            single = _single_word_mots(language)
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) < 2 or parts[0] in single:
+                        continue
+                    breaks = word_breaks(parts[1].split(";")[0])
+                    if breaks:
+                        result[parts[0]] = breaks
+        _MULTI_BREAKS_CACHE[language] = result
+        return result
+
+
+def multi_breaks_for_languages(language, bilingual_language=None):
+    """The grid's expression breaks (`load_multi_breaks`): a dict on a
+    monolingual grid, a DualSet of dicts (across = `language`, down =
+    `bilingual_language`) on a bilingual one."""
+    across = load_multi_breaks(language)
+    if bilingual_language and bilingual_language != language:
+        return DualSet(across, load_multi_breaks(bilingual_language))
+    return across
+
+
+def merge_multi_lexicon(language, by_length, refs, frequencies, proper_nouns, non_gloss):
+    """Adds `language`'s multi-word wordlist to a lexicon (in place): every
+    expression whose grid form is not in it yet joins `by_length` with the
+    reference of its own row (`_multi_row_ref`), a frequency of at least
+    `NOISE_FREQUENCY_THRESHOLD`, `proper_nouns` when it is a likely proper
+    noun (`_proper_noun_check`) and `non_gloss` when
+    no gloss-dictionary entry defines it or its lemmas."""
+    path = multi_wordlist_path(language) if language else None
+    if not path or not os.path.exists(path):
+        return
+    has_any_gloss, has_gloss_dictionary = _try_import_gloss_lookup()
+    gloss_available = bool(has_any_gloss and has_gloss_dictionary(language))
+    is_proper = _proper_noun_check(language)
+    for offset, line in iter_lines_with_offsets(path):
+        parts = line.rstrip("\n").split("\t")
+        word = parts[0]
+        if len(parts) < 3 or not _is_grid_word(word) or word in refs:
+            continue
+        refs[word] = _multi_row_ref(offset)
+        by_length.setdefault(len(word), []).append(word)
+        frequencies[word] = max(frequencies.get(word, 0.0), float(NOISE_FREQUENCY_THRESHOLD))
+        accented = parts[1].split(";")[0] or word
+        lemmas = [c for c in parts[2].split(";") if c] or [accented]
+        if is_proper(accented, lemmas):
+            proper_nouns.add(word)
+        if gloss_available and not has_any_gloss([accented, *lemmas], language):
+            non_gloss.add(word)
+
+
+def word_break_edges(grid, multi_breaks):
+    """[row, col, direction] of every word break of `grid`: for each fully
+    lettered run (2 letters or more, across or down) spelling an
+    expression of `multi_breaks` (`multi_breaks_for_languages`, that run's
+    own direction's dict on a bilingual grid), the cell right before each
+    of its breaks — the break lies between that cell and the next one in
+    `direction`. Sorted."""
+    if not multi_breaks or not grid:
+        return []
+    rows, cols = len(grid), len(grid[0])
+    found = set()
+    for direction in ("across", "down"):
+        breaks_of = (multi_breaks.for_direction(direction)
+                     if isinstance(multi_breaks, DualSet) else multi_breaks)
+        if not breaks_of:
+            continue
+        outer, inner = (rows, cols) if direction == "across" else (cols, rows)
+        for a in range(outer):
+            run = []
+            for b in range(inner + 1):
+                cell = (a, b) if direction == "across" else (b, a)
+                ch = grid[cell[0]][cell[1]] if b < inner else BLACK
+                if ch != BLACK:
+                    run.append((cell, ch))
+                    continue
+                if len(run) >= 2 and all(c != WHITE for _, c in run):
+                    for k in breaks_of.get("".join(c for _, c in run), ()):
+                        r, c = run[k - 1][0]
+                        found.add((r, c, direction))
+                run = []
+    return [[r, c, d] for r, c, d in sorted(found)]
+
+
+def placed_word_break_edges(cells, word, multi_breaks):
+    """[row, col, direction] of the word breaks of `word` placed on slot
+    `cells` (`word_break_edges`' convention); [] for a single word."""
+    if not multi_breaks or len(cells) < 2:
+        return []
+    direction = slot_direction(cells)
+    breaks_of = (multi_breaks.for_direction(direction)
+                 if isinstance(multi_breaks, DualSet) else multi_breaks)
+    return [[cells[k - 1][0], cells[k - 1][1], direction]
+            for k in (breaks_of or {}).get(word, ())]
+
+
 def _priority_words_for(priority_words, cells):
     """The frozenset of priority theme words applicable to slot `cells`'s
     own direction — see `generate_grid`'s `priority_words`. On a bilingual
@@ -3215,7 +3427,7 @@ def build_index(by_length, frequencies=None, dictionary_frequencies=None, refs=N
     {letter: set of words} map), `freq`/`dict_freq` (float32 columns,
     `_WordColumn`), `refs` (each word's row reference, an `array('I')`
     indexed by id, `None` when `refs` is not given) and `sources` (the
-    `(freq wordlist path, Scrabble wordlist path)` pair these references
+    `(freq, Scrabble, multi-word wordlist path)` triple these references
     point into, read back by `word_forms`). A word is held only as its
     bare A-Z grid form: its accented form and lemmas stay on disk.
 
@@ -3340,15 +3552,19 @@ def _select_lexicon(wordlist_path, max_words, difficulty):
     scrabble, usage_scores)`.
 
     With no explicit `max_words` and a language that has a usage-score
-    file (`usage_lexicon_active`), the whole freq and Scrabble wordlists
-    are loaded and cut to the union of two criteria: the words rated at
-    least `USAGE_DIFFICULTY_MIN_SCORE[difficulty]`, and the words
-    kept by the freq wordlist's own `DIFFICULTY_PRESETS[difficulty]` cut
+    file (`usage_lexicon_active`), the whole freq, Scrabble and multi-word
+    wordlists are loaded (`merge_multi_lexicon`) and cut to the union of
+    two criteria: the words rated at least
+    `USAGE_DIFFICULTY_MIN_SCORE[difficulty]`, and the words kept by the
+    freq wordlist's own `DIFFICULTY_PRESETS[difficulty]` cut, or by the
+    same cut of the expressions' freq wordlist (`freq_multi_wordlist_path`)
     (`load_wordlist`; at "easy" with the definition requirement and likely
     proper nouns excluded) rated at least `FREQ_CUT_USAGE_LENIENCY` less
     (an unrated word is dropped either way); no cut
-    at "hard"; no quota word set (`proper_nouns`/`non_gloss` empty) at
-    "easy". Otherwise the lexicon is cut to `max_words`, else to
+    at "hard"; the proper-noun quota applies at every difficulty (at
+    "easy", `MAX_PROPER_NOUNS` 0, every likely proper noun but a Scrabble
+    word is dropped), the no-gloss one only at "medium"/"hard"
+    (`non_gloss` empty at "easy"). Otherwise the lexicon is cut to `max_words`, else to
     `DIFFICULTY_PRESETS[difficulty]` (`load_wordlist`), "easy" filters on
     at "easy"."""
     language, by_usage, mw, easy, key = _lexicon_params(wordlist_path, max_words, difficulty)
@@ -3358,6 +3574,8 @@ def _select_lexicon(wordlist_path, max_words, difficulty):
     scrabble = merge_scrabble_lexicon(language, by_length, refs, frequencies, easy=easy)
     usage_scores = load_usage_scores(language)
     if by_usage:
+        proper_nouns, non_gloss = set(proper_nouns), set(non_gloss)
+        merge_multi_lexicon(language, by_length, refs, frequencies, proper_nouns, non_gloss)
         min_score = USAGE_DIFFICULTY_MIN_SCORE[difficulty]
         if min_score is not None:
             freq_easy = difficulty == "easy"
@@ -3368,6 +3586,16 @@ def _select_lexicon(wordlist_path, max_words, difficulty):
                 )[0].values()
                 for w in words
             }
+            freq_multi = freq_multi_wordlist_path(language)
+            if os.path.exists(freq_multi):
+                # The expressions' own freq cut, the same way.
+                freq_cut.update(
+                    w for words in load_wordlist(
+                        freq_multi, DIFFICULTY_PRESETS[difficulty], require_gloss=freq_easy,
+                        exclude_proper_nouns=freq_easy, language=language,
+                    )[0].values()
+                    for w in words if (refs.get(w, 0) & 3) == ROW_SOURCE_MULTI
+                )
             by_length = {
                 length: kept for length, words in by_length.items()
                 if (kept := [
@@ -3377,7 +3605,14 @@ def _select_lexicon(wordlist_path, max_words, difficulty):
                 ])
             }
         if difficulty == "easy":
-            proper_nouns = non_gloss = frozenset()
+            non_gloss = frozenset()
+        if MAX_PROPER_NOUNS.get(difficulty) == 0:
+            # A zero quota: no proper noun can ever be placed, so none is
+            # offered to the search (a Scrabble word is exempt).
+            by_length = {
+                length: kept for length, words in by_length.items()
+                if (kept := [w for w in words if w not in proper_nouns or w in scrabble])
+            }
     return by_length, refs, frequencies, proper_nouns, non_gloss, scrabble, usage_scores
 
 
@@ -3395,10 +3630,15 @@ def load_lexicon(wordlist_path, max_words, difficulty):
             return loaded
         (by_length, refs, frequencies, proper_nouns, non_gloss, scrabble,
          usage_scores) = _select_lexicon(wordlist_path, max_words, difficulty)
-        sources = (str(wordlist_path), scrabble_wordlist_path(language) if language else None)
+        sources = (str(wordlist_path), scrabble_wordlist_path(language) if language else None,
+                   multi_wordlist_path(language) if language else None)
+        dictionary_frequencies = load_dictionary_frequencies(wordlist_path)
+        freq_multi = freq_multi_wordlist_path(language) if language else None
+        if freq_multi and os.path.exists(freq_multi):
+            for word, freq in load_dictionary_frequencies(freq_multi).items():
+                dictionary_frequencies.setdefault(word, freq)
         index = build_index(
-            by_length, frequencies, load_dictionary_frequencies(wordlist_path), refs, sources,
-            usage_scores,
+            by_length, frequencies, dictionary_frequencies, refs, sources, usage_scores,
         )
         _attach_lemmas(index, refs, sources)
         del refs, frequencies, usage_scores
@@ -3495,6 +3735,49 @@ def lexicon_words(pairs):
         return {p: _LEXICON_WORDS[p] for p in pairs}
 
 
+_MULTI_ONLY_MOTS = {}
+_MULTI_ONLY_MOTS_LOCK = threading.Lock()
+_MULTI_LEXICON_COUNTS = {}
+
+
+def multi_only_mots(language):
+    """(number of distinct MOTs of `language`'s multi-word wordlist, frozenset
+    of those no freq or Scrabble word has — the expressions
+    `merge_multi_lexicon` can add to a lexicon), once per language and
+    process; `None` when the language has no multi-word wordlist."""
+    with _MULTI_ONLY_MOTS_LOCK:
+        if language not in _MULTI_ONLY_MOTS:
+            result = None
+            path = multi_wordlist_path(language)
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    mots = {line.split("\t", 1)[0] for line in f if line.strip()}
+                result = (len(mots), frozenset(mots - _single_word_mots(language)))
+            _MULTI_ONLY_MOTS[language] = result
+        return _MULTI_ONLY_MOTS[language]
+
+
+def multi_lexicon_length_counts(pairs):
+    """{(wordlist path, difficulty): {word length: number of multi-word
+    expressions of the pair's lexicon (`lexicon_words`)}}, `None` for a
+    language without a multi-word wordlist; the language is read from the
+    wordlist path. Each pair is counted once per process."""
+    words = lexicon_words(pairs)
+    out = {}
+    for p, lexicon in words.items():
+        if p not in _MULTI_LEXICON_COUNTS:
+            multi = multi_only_mots(_lang_from_path(p[0]))
+            counts = None
+            if multi is not None:
+                counts = {}
+                for m in multi[1]:
+                    if m in lexicon:
+                        counts[len(m)] = counts.get(len(m), 0) + 1
+            _MULTI_LEXICON_COUNTS[p] = counts
+        out[p] = _MULTI_LEXICON_COUNTS[p]
+    return out
+
+
 def lexicon_length_counts(pairs):
     """{(wordlist path, difficulty): {word length: number of words}} of the
     lexicon of each pair of `pairs` (`lexicon_words`)."""
@@ -3513,13 +3796,15 @@ def word_forms(length_index, word):
     if i is None or refs is None or not sources:
         return word, [word]
     ref = refs[i]
-    scrabble = bool(ref & 1)
-    path = sources[1] if scrabble else sources[0]
+    source = ref & 3
+    path = sources[source] if source < len(sources) else None
+    if not path:
+        return word, [word]
     try:
-        line = read_line_at(path, ref >> 1)
+        line = read_line_at(path, ref >> 2)
     except OSError:
         return word, [word]
-    return _row_forms(line, word, scrabble)
+    return _row_forms(line, word, source != ROW_SOURCE_FREQ)
 
 
 # ---------- Canonical forms ----------
@@ -3545,7 +3830,7 @@ def _lemma_key(lemma):
 def _attach_lemmas(index, refs, sources):
     """Adds to every length entry of `index` (`build_index`) the lemma ids
     of its words, read from each word's own wordlist row (`refs`, the
-    `(freq, Scrabble)` wordlist paths `sources`): `lemma_off`/`lemma_ids`
+    `(freq, Scrabble, multi-word)` wordlist paths `sources`): `lemma_off`/`lemma_ids`
     (word id -> its lemma ids, `lemma_ids[lemma_off[i]:lemma_off[i + 1]]`)
     and `lemma_keys`/`lemma_key_off`/`lemma_words` (sorted lemma ids ->
     the ids of the words of that length carrying them), all `array('I')`.
@@ -3566,7 +3851,7 @@ def _attach_lemma_arrays(index, refs, sources):
     """`_attach_lemmas`'s work, the garbage collector off."""
     interned = {}
     per_word = {}
-    for path, flag in ((sources[0], 0), (sources[1], 1)):
+    for flag, path in enumerate(sources):
         if not path or not os.path.exists(path):
             continue
         for offset, line in iter_lines_with_offsets(path):
@@ -3574,7 +3859,7 @@ def _attach_lemma_arrays(index, refs, sources):
             if tab <= 0:
                 continue
             word = line[:tab]
-            if refs.get(word) != ((offset << 1) | flag) or word in per_word:
+            if refs.get(word) != (offset << 2 | flag) or word in per_word:
                 continue
             entry = index.get(len(word))
             if entry is None or word not in entry["ids"]:
@@ -4295,6 +4580,18 @@ MAX_BACKGHOSTS_PER_DESCENT = 10
 # web UI's "Mots par pose" field overrides (`GenerateRequest.words_per_node`).
 WORDS_PER_NODE = 2
 
+# Maximum share (percent) of multi-word expressions (words whose row lives in
+# `data/wordlist_<lang>_multi.tsv`, `ROW_SOURCE_MULTI`) among the words
+# placed on a grid: while the expressions already placed exceed it, no new
+# expression is chosen — `Filler.ordered_candidates` drops them from a
+# slot's candidates (`Filler._multi_words_blocked`), so placing more
+# single words allows expressions again. 0 forbids every expression, 100
+# (or `None`) sets no limit. "Mots Défi" are never limited. The default of
+# `generate_grid(multi_word_percent=)`/`try_fill(multi_word_percent=)`/
+# `interactive_place_word(multi_word_percent=)`, which the web UI's
+# "Multi-mots" field overrides (`GenerateRequest.multi_word_percent`).
+MULTI_WORD_PERCENT = 15
+
 # Fill rate (percent) of the attention zone at which a node is down
 # to one word per node (`Filler._group_size`): the group shrinks linearly
 # from `words_per_node` on an empty zone to 1 at this rate, and stays at 1
@@ -4771,6 +5068,9 @@ class Filler:
         self._last_word_streak = {}
         # Words placed per node (see WORDS_PER_NODE); set by try_fill.
         self.words_per_node = WORDS_PER_NODE
+        # Multi-word expression cap (see MULTI_WORD_PERCENT); `None` = no
+        # limit, the default for every caller that does not set it.
+        self.multi_word_percent = None
         # Set when a `_backtrack` call returned because the check budget
         # ran out (see `_deadline_reached_without_extension`), so `solve()`
         # can tell a strict search cut short from one genuinely exhausted.
@@ -5819,13 +6119,19 @@ class Filler:
            the pick is drawn at random among its `CANDIDATE_FREQ_WINDOW`
            most frequent words. See both constants' own docstrings.
 
-        Between the shuffle and the sort, only the `USAGE_KEEP_PERCENT` %
-        of the candidates with the highest usage score are kept, among the
-        candidates whose score is known (`_usage_filtered`).
+        Between the shuffle and the sort, every multi-word expression is
+        dropped while the cap on them is reached (`_multi_words_blocked`,
+        see MULTI_WORD_PERCENT; a "Mots Défi" word is kept), then only the
+        `USAGE_KEEP_PERCENT` % of the candidates with the highest usage
+        score are kept, among the candidates whose score is known
+        (`_usage_filtered`).
 
         `cands` is never modified: the returned list is a fresh one."""
         cands = list(cands)
         self.rng.shuffle(cands)
+        if self._multi_words_blocked():
+            cands = [w for w in cands
+                     if w in self.challenge_words or not self._is_multi_word(self.slots[i], w)]
         cands = self._usage_filtered(i, cands)
         if not self.letter_scores:
             return cands
@@ -5850,6 +6156,15 @@ class Filler:
             idx = self.rng.randrange(min(CANDIDATE_FREQ_WINDOW, len(window)))
             reordered.append(window.pop(idx)[2])
         return reordered
+
+    def _is_multi_word(self, cells, word):
+        """See `_is_multi_word_in`."""
+        return _is_multi_word_in(self.index, cells, word)
+
+    def _multi_words_blocked(self):
+        """See `_multi_words_blocked_in`, on the current assignment."""
+        return _multi_words_blocked_in(self.slots, self.index, self.assignment,
+                                       self.multi_word_percent)
 
     def _usage_filtered(self, i, cands):
         """`cands` (shuffled) minus the candidates outside the
@@ -8543,7 +8858,37 @@ def _force_single_candidate_slots(slots, index, known_letters, excluded_slots=No
     return known
 
 
-def _close_implied_slots(slots, index, assignment, used_words, excluded_slots=None):
+def _is_multi_word_in(index, cells, word):
+    """Whether `word`, on a slot of cells `cells`, is a multi-word
+    expression of the lexicon `index` (its row reference points into the
+    multi-word wordlist, `ROW_SOURCE_MULTI`)."""
+    entry = index.for_cells(cells).get(len(cells))
+    if entry is None or entry.get("refs") is None:
+        return False
+    k = entry["ids"].get(word)
+    return k is not None and (entry["refs"][k] & 3) == ROW_SOURCE_MULTI
+
+
+def _multi_words_blocked_in(slots, index, assignment, cap):
+    """Whether a new multi-word expression may not be chosen (see
+    MULTI_WORD_PERCENT) on `assignment`: the cap is 0, or the expressions
+    among the words placed exceed `cap` % of them; never for a `None` cap
+    or one of 100 and more."""
+    if cap is None or cap >= 100:
+        return False
+    if cap <= 0:
+        return True
+    placed = multi = 0
+    for j, w in enumerate(assignment):
+        if w is not None:
+            placed += 1
+            if _is_multi_word_in(index, slots[j], w):
+                multi += 1
+    return multi * 100 > cap * placed
+
+
+def _close_implied_slots(slots, index, assignment, used_words, excluded_slots=None,
+                         multi_word_percent=None):
     """Closes, in one cheap final pass, every slot the search left with
     every letter already determined by genuinely assigned crossing words —
     but which `_backtrack` itself never explicitly confirmed (it simply
@@ -8589,7 +8934,11 @@ def _close_implied_slots(slots, index, assignment, used_words, excluded_slots=No
     used words): removing at most `len(used_words)` words can never bring
     a set larger than `len(used_words) + 1` down to exactly 1, so such a
     slot could never close here anyway — no point paying for the filter to
-    verify it."""
+    verify it.
+
+    `multi_word_percent` (see MULTI_WORD_PERCENT, `None` = no limit): a
+    slot whose single candidate is a multi-word expression is left open
+    while the cap forbids a new one (`_multi_words_blocked_in`)."""
     excluded = excluded_slots or set()
     known = {}
     for i, cells in enumerate(slots):
@@ -8620,6 +8969,9 @@ def _close_implied_slots(slots, index, assignment, used_words, excluded_slots=No
             if len(real_candidates) != 1:
                 continue
             word = real_candidates[0]
+            if (_is_multi_word_in(index, cells, word)
+                    and _multi_words_blocked_in(slots, index, assignment, multi_word_percent)):
+                continue
             # Same absolute rule as `Filler._backtrack`'s own crossing
             # check: a word is never written where it would leave a still-
             # open slot it crosses with no available word at all. Without
@@ -8938,10 +9290,14 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
              permanent_black_cells=None, scrabble_words=None,
              early_hardclean_percent=100, permanent_locked_letters=None,
              incremental_fill=False, same_word_limit=None,
-             words_per_node=WORDS_PER_NODE, reshape_symmetry=None):
+             words_per_node=WORDS_PER_NODE, reshape_symmetry=None,
+             multi_word_percent=None):
     """`incremental_fill`: see INCREMENTAL_FILL_ENABLED.
 
     `words_per_node`: see WORDS_PER_NODE (`Filler._descend_group`).
+
+    `multi_word_percent`: see MULTI_WORD_PERCENT (`None` = no limit, the
+    default; the generation attempts pass the grid's own value).
 
     `same_word_limit`: see MAX_SAME_WORD_PLACEMENTS (None = off), run inside
     the search (`Filler._repeat_hardclean`, then `Filler._restart_from_
@@ -9210,6 +9566,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     filler.early_hardclean_percent = early_hardclean_percent
     filler.same_word_limit = same_word_limit
     filler.words_per_node = words_per_node
+    filler.multi_word_percent = multi_word_percent
     filler.incremental_fill = incremental_fill
     filler.permanent_locked_letters = dict(permanent_locked_letters or {})
     filler.permanent_black_cells = frozenset(permanent_black_cells or ())
@@ -9384,7 +9741,8 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     # failure) — this is also the state, never `filler.assignment`
     # directly, that the rest of this file (diagnostics, `_build_retry_
     # seed`, the displayed preview) already reads further below.
-    _close_implied_slots(slots, index, filler.best_assignment, filler.used_words, filler.excluded_slots)
+    _close_implied_slots(slots, index, filler.best_assignment, filler.used_words, filler.excluded_slots,
+                         multi_word_percent=filler.multi_word_percent)
     # `filler.assignment` resynchronized from `best_assignment` once this
     # closure has been applied: on a native success (`solved_internally`
     # with no excluded slot), the two already coincided, so this line
@@ -9529,8 +9887,11 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
                             cancel_event=None, proper_noun_words=None, max_proper_nouns=None,
                             non_gloss_words=None, max_non_gloss=None, priority_words=None,
                             permanent_locked_letters=None, permanent_black_cells=None,
-                            challenge_words=None, symmetry=None):
-    """`symmetry` (`BLACK_SYMMETRIES`, `None`/"none" = none): a black cell
+                            challenge_words=None, symmetry=None, multi_word_percent=None):
+    """`multi_word_percent` (see MULTI_WORD_PERCENT, `None` = no limit):
+    the cap every trial's `try_fill` applies.
+
+    `symmetry` (`BLACK_SYMMETRIES`, `None`/"none" = none): a black cell
     is only removed together with every black image of it (`_black_group`),
     none of them in `permanent_black_cells`, the whole group tried at once.
 
@@ -9723,7 +10084,8 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
                                        max_non_gloss=max_non_gloss,
                                        priority_words=priority_words,
                                        locked_letters=merged_locked_letters or None,
-                                       preseed_assignment=permanent_preseed)
+                                       preseed_assignment=permanent_preseed,
+                                       multi_word_percent=multi_word_percent)
                 if new_result is not None:
                     new_slots, new_assignment = new_result
                     if all(
@@ -10137,7 +10499,7 @@ def _try_reshape_for_word(base_pattern, rows, cols, rng, word, locked_letters, i
 
 
 def _build_interactive_filler(pattern, rows, cols, index, rng, known, priority_words, challenge_words,
-                              scrabble_words=None):
+                              scrabble_words=None, multi_word_percent=None):
     """Builds a fresh `Filler` (plus its own `extract_slots` list) purely
     from `pattern` — the one and only place `interactive_place_word`
     constructs a `Filler`, called once for the grid's own base pattern and
@@ -10156,6 +10518,7 @@ def _build_interactive_filler(pattern, rows, cols, index, rng, known, priority_w
         priority_words=priority_words, challenge_words=challenge_words,
         rows=rows, cols=cols, scrabble_words=scrabble_words,
     )
+    filler.multi_word_percent = multi_word_percent
     for i, cells in enumerate(slots):
         if all(cell in known for cell in cells):
             word = "".join(known[cell] for cell in cells)
@@ -10458,7 +10821,8 @@ def _general_dictionary_pick(filler, viable, i, exclude, baselines, level):
 
 
 def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
-                            challenge_words=None, last_placed_cells=None, scrabble_words=None):
+                            challenge_words=None, last_placed_cells=None, scrabble_words=None,
+                            multi_word_percent=MULTI_WORD_PERCENT):
     """Place EXACTLY ONE additional word into `grid`, honouring every letter
     already present, with NO backtracking — the single-step primitive behind
     the web UI's "Interactif" authoring mode (see backend/app.py's
@@ -10477,6 +10841,10 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
     in the lexicon can therefore still be placed automatically, though it
     then shows up flagged as invalid by this same function's own
     diagnostics below, same as a hand-typed one.
+
+    `multi_word_percent`: the cap on multi-word expressions (see
+    MULTI_WORD_PERCENT), applied to every candidate this call draws
+    through `Filler.ordered_candidates`.
 
     `last_placed_cells` (`[[row, col], ...]`) are the cells of the last
     word a previous "Suivant" placed: the origin of the cascade's level-6
@@ -10524,7 +10892,7 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
     }
     filler, slots = _build_interactive_filler(
         pattern, rows, cols, index, rng, known, priority_words, challenge_words,
-        scrabble_words=scrabble_words,
+        scrabble_words=scrabble_words, multi_word_percent=multi_word_percent,
     )
     if not slots:
         return {"impossible": True}
@@ -12371,9 +12739,19 @@ def _new_crossing_impossibility(cur_slots, cell_to_slots, own_idx, sub, word, kn
     return False
 
 
+def _known_assignment(slots, known):
+    """The words `known` (cell -> letter) spells: per slot, its word when
+    every cell of it is known, else `None`."""
+    return ["".join(known[c] for c in s) if all(c in known for c in s) else None
+            for s in slots]
+
+
 def _find_shorter_word_for_zone(grid, rows, cols, cells, cur_slots, cell_to_slots, own_idx,
-                                 index, known, used_words, rng):
-    """For ONE slot deemed impossible (`cells`, index `own_idx` in
+                                 index, known, used_words, rng, multi_word_percent=None):
+    """`multi_word_percent` (see MULTI_WORD_PERCENT): no multi-word
+    expression is a candidate while the cap forbids a new one.
+
+    For ONE slot deemed impossible (`cells`, index `own_idx` in
     `cur_slots`), looks for a shorter word to place at the head or tail of
     the zone, leaving at least one empty cell on the other side — so a
     maximum length of `len(cells) - 1`, never the slot's own full length,
@@ -12427,6 +12805,8 @@ def _find_shorter_word_for_zone(grid, rows, cols, cells, cur_slots, cell_to_slot
     word."""
     length = len(cells)
     options = []
+    multi_blocked = _multi_words_blocked_in(
+        cur_slots, index, _known_assignment(cur_slots, known), multi_word_percent)
     for m in range(length - 1, 2, -1):
         for side in (0, 1):
             if side == 0:
@@ -12454,7 +12834,7 @@ def _find_shorter_word_for_zone(grid, rows, cols, cells, cur_slots, cell_to_slot
             sub_known = {c: known[c] for c in sub if c in known}
             candidates = [
                 w for w in _slot_candidates(index, m, sub, sub_known)
-                if w not in used_words
+                if w not in used_words and not (multi_blocked and _is_multi_word_in(index, sub, w))
             ]
             for w in candidates:
                 options.append((w, sub, boundary))
@@ -12557,8 +12937,10 @@ def _new_boundary_crossing_impossible(grid, rows, cols, boundary, letter, own_dr
 
 
 def _find_longer_word_for_zone(grid, rows, cols, cells, cur_slots, cell_to_slots, own_idx,
-                                protected, index, known, used_words, rng):
-    """For ONE slot deemed impossible (`cells`, index `own_idx` in
+                                protected, index, known, used_words, rng, multi_word_percent=None):
+    """`multi_word_percent`: see `_find_shorter_word_for_zone`.
+
+    For ONE slot deemed impossible (`cells`, index `own_idx` in
     `cur_slots`), at the user's explicit request: "si un emplacement ne
     trouve pas de mot... mais qu'au moins une des cases noires limitant la
     zone peut être supprimée ou déplacée (parce qu'il y a de la place
@@ -12613,6 +12995,8 @@ def _find_longer_word_for_zone(grid, rows, cols, cells, cur_slots, cell_to_slots
     (r0, c0), (r1, c1) = cells[0], cells[-1]
 
     options = []
+    multi_blocked = _multi_words_blocked_in(
+        cur_slots, index, _known_assignment(cur_slots, known), multi_word_percent)
     for side, boundary, extend_dr, extend_dc in (
         ("head", (r0 - dr, c0 - dc), -dr, -dc),
         ("tail", (r1 + dr, c1 + dc), dr, dc),
@@ -12662,6 +13046,7 @@ def _find_longer_word_for_zone(grid, rows, cols, cells, cur_slots, cell_to_slots
             candidates = [
                 w for w in _slot_candidates(index, new_length, new_cells, sub_known)
                 if w not in used_words
+                and not (multi_blocked and _is_multi_word_in(index, new_cells, w))
             ]
             for w in candidates:
                 options.append((w, tuple(new_cells), boundary, new_boundary))
@@ -12710,8 +13095,11 @@ PER_CYCLE_OPTIMIZATION_SAMPLE_SIZE = 50
 def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
                               deadline_checks=6_000, cancel_event=None,
                               permanent_locked_letters=None, permanent_black_cells=None,
-                              challenge_words=None, symmetry=None):
-    """A new step inserted BEFORE even `_shorten_impossible_zones`/
+                              challenge_words=None, symmetry=None, multi_word_percent=None):
+    """`multi_word_percent` (see MULTI_WORD_PERCENT, `None` = no limit):
+    the cap both of its `try_fill` calls apply.
+
+    A new step inserted BEFORE even `_shorten_impossible_zones`/
     `_clean_blocked_slots` (so before any cleanup at all), at the user's
     explicit request: "verrouiller tous les emplacements entièrement vides
     et les éventuelles cases noires avant/après ces emplacements vides
@@ -12848,7 +13236,8 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
         return try_fill(g, rows, cols, index, rng, deadline_checks,
                          preseed_assignment=preseed, excluded_slots=excluded,
                          cancel_event=cancel_event,
-                         locked_letters=permanent_locked_letters or None)
+                         locked_letters=permanent_locked_letters or None,
+                         multi_word_percent=multi_word_percent)
 
     def _absorb(result):
         result_slots, result_assignment = result
@@ -12954,6 +13343,7 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
         cancel_event=cancel_event,
         locked_letters=permanent_locked_letters or None,
         diagnostics=last_chance_diag,
+        multi_word_percent=multi_word_percent,
     )
     if last_chance_diag.get("assignment"):
         _absorb((last_chance_slots, last_chance_diag["assignment"]))
@@ -13065,8 +13455,10 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
 
 def _shorten_impossible_zones(grid, rows, cols, slots, assignment, impossible_slots,
                                index, rng, permanent_locked_letters=None,
-                               challenge_words=None):
-    """A new step inserted BEFORE the ordinary blocked-slot cleanup
+                               challenge_words=None, multi_word_percent=None):
+    """`multi_word_percent`: see `_find_shorter_word_for_zone`.
+
+    A new step inserted BEFORE the ordinary blocked-slot cleanup
     (`_clean_blocked_slots` below), at the user's explicit request,
     reserved for "reprise telle quelle" (see `_clean_continue_candidate`)
     — never for a full nettoyage, which regenerates a brand-new pattern
@@ -13191,7 +13583,7 @@ def _shorten_impossible_zones(grid, rows, cols, slots, assignment, impossible_sl
             ))
             result = _find_shorter_word_for_zone(
                 new_grid, rows, cols, cells, cur_slots, cell_to_slots, own_idx,
-                index, known, used_words, rng,
+                index, known, used_words, rng, multi_word_percent=multi_word_percent,
             )
             if result is None:
                 continue
@@ -13248,8 +13640,10 @@ def _shorten_impossible_zones(grid, rows, cols, slots, assignment, impossible_sl
 def _lengthen_impossible_zones(grid, rows, cols, slots, assignment, impossible_slots,
                                 index, rng, permanent_locked_letters=None,
                                 permanent_black_cells=None, challenge_words=None,
-                                black_cell_links=None):
-    """A new step, the exact complement of `_shorten_impossible_zones`
+                                black_cell_links=None, multi_word_percent=None):
+    """`multi_word_percent`: see `_find_shorter_word_for_zone`.
+
+    A new step, the exact complement of `_shorten_impossible_zones`
     above, at the user's explicit request: "si un emplacement ne trouve
     pas de mot dans le glossaire thématique (ou le glossaire normal si ce
     n'est pas une grille thématique, donc emplacement devenu impossible),
@@ -13360,7 +13754,7 @@ def _lengthen_impossible_zones(grid, rows, cols, slots, assignment, impossible_s
                 protected = protected | permanent_black_cells
             result = _find_longer_word_for_zone(
                 new_grid, rows, cols, cells, cur_slots, cell_to_slots, own_idx,
-                protected, index, known, used_words, rng,
+                protected, index, known, used_words, rng, multi_word_percent=multi_word_percent,
             )
             if result is None:
                 continue
@@ -14613,8 +15007,12 @@ def _reassign_lineage_numbers(raw_lineage, previous_lineage, next_lineage_number
 # (same objects, same indices) as long as neither one changed anything.
 def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng,
                                permanent_locked_letters=None, permanent_black_cells=None,
-                               challenge_words=None, symmetry=None, grouped=False):
-    """Cleans up a single failed attempt of a "reprise telle quelle"
+                               challenge_words=None, symmetry=None, grouped=False,
+                               multi_word_percent=None):
+    """`multi_word_percent` (see MULTI_WORD_PERCENT): the cap of the
+    shorter/longer words the repairs place.
+
+    Cleans up a single failed attempt of a "reprise telle quelle"
     palier (see `_continue_seed_pool`) — removes whatever crosses an
     impossible slot (`_clean_blocked_slots`), after first trying to
     shorten (`_shorten_impossible_zones`) then lengthen (`_lengthen_
@@ -14681,6 +15079,7 @@ def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng,
             cand_diag["impossible_slots"], index, rng,
             permanent_locked_letters=permanent_locked_letters,
             challenge_words=challenge_words,
+            multi_word_percent=multi_word_percent,
         )
     )
     cand_grid, cand_slots, cand_assignment, cand_impossible, cand_black_cell_links = (
@@ -14690,6 +15089,7 @@ def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng,
             permanent_black_cells=permanent_black_cells,
             challenge_words=challenge_words,
             black_cell_links=cand_black_cell_links,
+            multi_word_percent=multi_word_percent,
         )
     )
     # Recomputed here, fresh, from `cand_slots`/`cand_assignment` — not
@@ -14810,6 +15210,9 @@ _worker_scrabble_words = None
 # Words placed per search node (generate_grid's `words_per_node`, see
 # WORDS_PER_NODE), shared the same way.
 _worker_words_per_node = WORDS_PER_NODE
+# Multi-word expression cap (generate_grid's `multi_word_percent`, see
+# MULTI_WORD_PERCENT), shared the same way.
+_worker_multi_word_percent = MULTI_WORD_PERCENT
 # Black-cell symmetry of the ratio draw (generate_grid's `black_symmetry`,
 # see `make_pattern`'s `symmetry`), shared the same way.
 _worker_black_symmetry = None
@@ -15057,7 +15460,8 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
                   proper_noun_words=None,
                   max_proper_nouns=None, non_gloss_words=None, max_non_gloss=None,
                   priority_words=None, challenge_words=None, scrabble_words=None,
-                  words_per_node=WORDS_PER_NODE, black_symmetry=None, pattern_style=None):
+                  words_per_node=WORDS_PER_NODE, black_symmetry=None, pattern_style=None,
+                  multi_word_percent=MULTI_WORD_PERCENT):
     # See GENERATION_PROCESS_NICE_INCREMENT (right after PARALLEL_ATTEMPTS)
     # for the full reasoning — applied only once here, the very first time
     # this worker starts up (never per submitted task), since the pool
@@ -15083,9 +15487,10 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
         _worker_proper_noun_words, _worker_max_proper_nouns, \
         _worker_non_gloss_words, _worker_max_non_gloss, _worker_priority_words, \
         _worker_challenge_words, _worker_scrabble_words, _worker_words_per_node, \
-        _worker_black_symmetry, _worker_pattern_style
+        _worker_black_symmetry, _worker_pattern_style, _worker_multi_word_percent
     _worker_index = index
     _worker_words_per_node = words_per_node
+    _worker_multi_word_percent = multi_word_percent
     _worker_black_symmetry = black_symmetry
     _worker_pattern_style = pattern_style
     _worker_priority_words = priority_words
@@ -15445,6 +15850,7 @@ def _minimize_trial(grid, result, rows, cols, seed, permanent_locked_letters,
         permanent_black_cells=permanent_black_cells,
         challenge_words=_worker_challenge_words,
         symmetry=_worker_black_symmetry,
+        multi_word_percent=_worker_multi_word_percent,
     )
 
 
@@ -15749,7 +16155,8 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                            permanent_locked_letters=permanent_locked_letters,
                            incremental_fill=incremental_fill,
                            same_word_limit=MAX_SAME_WORD_PLACEMENTS,
-                           words_per_node=_worker_words_per_node)
+                           words_per_node=_worker_words_per_node,
+                           multi_word_percent=_worker_multi_word_percent)
     finally:
         if racing and checks_slot is not None and _worker_attempt_active is not None:
             _worker_attempt_active[checks_slot] = 0
@@ -16030,7 +16437,8 @@ def _continue_search(rows, cols, seed, rng, seed_grid, preseed_assignment, exclu
                        permanent_locked_letters=permanent_locked_letters,
                        incremental_fill=incremental_fill,
                        same_word_limit=MAX_SAME_WORD_PLACEMENTS,
-                       words_per_node=_worker_words_per_node)
+                       words_per_node=_worker_words_per_node,
+                       multi_word_percent=_worker_multi_word_percent)
     return result, diag
 
 
@@ -16194,6 +16602,7 @@ def _optimize_before_cleanup_task(cand_grid, cand_diag, rows, cols, rng_seed,
         permanent_black_cells=permanent_black_cells,
         challenge_words=challenge_words,
         symmetry=_worker_black_symmetry,
+        multi_word_percent=_worker_multi_word_percent,
     )
 
 
@@ -16208,6 +16617,7 @@ def _clean_continue_candidate_task(cand_grid, cand_diag, rows, cols, rng_seed,
         challenge_words=challenge_words,
         symmetry=_worker_black_symmetry,
         grouped=_worker_pattern_style == "grouped",
+        multi_word_percent=_worker_multi_word_percent,
     )
 
 
@@ -16247,7 +16657,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                    bilingual_priority_words=None, permanent_locked_letters=None,
                    permanent_black_cells=None, required_cells=None, challenge_words=None,
                    on_live_preview=None, words_per_node=WORDS_PER_NODE, black_symmetry=None,
-                   start_grid=None, pattern_style=None):
+                   start_grid=None, pattern_style=None, multi_word_percent=MULTI_WORD_PERCENT):
     """`start_grid` (`None` by default: a blank grid): the grid every
     attempt that starts afresh starts from instead of a blank grid — the
     reset attempts of a palier, the mid-palier replacement attempts and the
@@ -16259,6 +16669,10 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     `words_per_node` (`WORDS_PER_NODE` by default): words every search
     node of every attempt places at once (`Filler._descend_group`), the web
     UI's "Mots par pose" field.
+
+    `multi_word_percent` (`MULTI_WORD_PERCENT` by default): the web UI's
+    "Multi-mots" field, the cap on multi-word expressions every search
+    attempt applies (`Filler._multi_words_blocked`).
 
     `black_symmetry` (`BLACK_SYMMETRIES`, `None` = "none"): the web UI's
     "Symétrie" selector, applied by every attempt's ratio draw
@@ -17278,7 +17692,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         initargs=(index, cancel_event, batch_abandoned_event, attempt_done_event, best_state_queue,
                   checks_progress, attempt_active, warmup_barrier, proper_noun_words, max_proper_nouns,
                   non_gloss_words, max_non_gloss, priority_words, challenge_words, scrabble_words,
-                  words_per_node, black_symmetry, pattern_style)
+                  words_per_node, black_symmetry, pattern_style, multi_word_percent)
     ) as executor:
         # Pool warm-up: forces every worker to finish its real startup
         # before the very first palier (see `_warmup_worker`/`warmup_
@@ -19230,7 +19644,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             non_gloss_words=non_gloss_words, max_non_gloss=max_non_gloss,
             priority_words=priority_words, permanent_locked_letters=permanent_locked_letters,
             permanent_black_cells=permanent_black_cells, challenge_words=challenge_words,
-            symmetry=black_symmetry,
+            symmetry=black_symmetry, multi_word_percent=multi_word_percent,
         )
 
     def _final_result(grid, slots, assignment, process_number):

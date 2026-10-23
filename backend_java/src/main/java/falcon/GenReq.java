@@ -14,6 +14,7 @@ public final class GenReq {
     public int forceLettersPercent = 0;
     public int blackEnrichmentPercent = 15;
     public int wordsPerNode = falcon.gen.Filler.WORDS_PER_NODE;
+    public int multiWordPercent = falcon.gen.Filler.MULTI_WORD_PERCENT;
     public String symmetry = "none";
     public String patternStyle = "airy";
     public String mode = "medium";
@@ -35,6 +36,7 @@ public final class GenReq {
         r.forceLettersPercent = b.integer("force_letters_percent", 0, 0, 100);
         r.blackEnrichmentPercent = b.integer("black_enrichment_percent", 15, 0, 100);
         r.wordsPerNode = b.integer("words_per_node", falcon.gen.Filler.WORDS_PER_NODE, 1, App.MAX_WORDS_PER_NODE);
+        r.multiWordPercent = b.integer("multi_word_percent", falcon.gen.Filler.MULTI_WORD_PERCENT, 0, 100);
         r.symmetry = b.str("symmetry", "none");
         r.patternStyle = b.str("pattern_style", "airy");
         r.mode = b.str("mode", "medium");
@@ -57,6 +59,7 @@ public final class GenReq {
         m.put("force_letters_percent", forceLettersPercent);
         m.put("black_enrichment_percent", blackEnrichmentPercent);
         m.put("words_per_node", wordsPerNode);
+        m.put("multi_word_percent", multiWordPercent);
         m.put("symmetry", symmetry);
         m.put("pattern_style", patternStyle);
         m.put("mode", mode);

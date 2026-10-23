@@ -15,6 +15,8 @@ import java.util.BitSet;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.Optional;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -49,11 +51,13 @@ public final class Words {
 
     private record Entry(String word, String accented, double freq, List<String> canonical, int ref) {}
 
-    static boolean isAlpha(String s) {
+    /** Whether {@code s} is a plain run of A-Z letters, the only words a grid can hold (mirrors _is_grid_word): a
+     * wordlist row whose MOT holds any other character is ignored. */
+    static boolean isGridWord(String s) {
         if (s.isEmpty()) return false;
         for (int i = 0; i < s.length(); i++) {
             char ch = s.charAt(i);
-            if (Character.isSurrogate(ch) || !Character.isLetter(ch)) return false;
+            if (ch < 'A' || ch > 'Z') return false;
         }
         return true;
     }
@@ -66,20 +70,36 @@ public final class Words {
         }
     }
 
+    /** A row reference is the byte offset of a word's wordlist row shifted left by two bits, the low bits naming its
+     * wordlist — the index of its path in a lexicon's sources: the freq, Scrabble or multi-word wordlist (mirrors
+     * ROW_SOURCE_FREQ/ROW_SOURCE_SCRABBLE/ROW_SOURCE_MULTI). */
+    public static final int ROW_SOURCE_FREQ = 0, ROW_SOURCE_SCRABBLE = 1, ROW_SOURCE_MULTI = 2;
+
     /** Row reference of a freq-wordlist row starting at byte {@code offset} (mirrors _freq_row_ref). */
     static int freqRowRef(long offset) {
-        return (int) (offset << 1);
+        return (int) (offset << 2 | ROW_SOURCE_FREQ);
     }
 
     /** Row reference of a Scrabble-wordlist row starting at byte {@code offset} (mirrors _scrabble_row_ref). */
     static int scrabbleRowRef(long offset) {
-        return (int) ((offset << 1) | 1);
+        return (int) (offset << 2 | ROW_SOURCE_SCRABBLE);
+    }
+
+    /** Row reference of a multi-word-wordlist row starting at byte {@code offset} (mirrors _multi_row_ref). */
+    static int multiRowRef(long offset) {
+        return (int) (offset << 2 | ROW_SOURCE_MULTI);
+    }
+
+    public static Lexicon loadWordlist(String path, Number maxWords, boolean requireGloss, boolean excludeProperNouns)
+            throws IOException {
+        return loadWordlist(path, maxWords, requireGloss, excludeProperNouns, null);
     }
 
     /** {@code maxWords}: null, an Integer (absolute count) or a Double
-     * (fraction of the loaded lexicon). */
-    public static Lexicon loadWordlist(String path, Number maxWords, boolean requireGloss, boolean excludeProperNouns)
-            throws IOException {
+     * (fraction of the loaded lexicon); {@code language}: the wordlist's language when its file name does not say it
+     * (langFromPath). */
+    public static Lexicon loadWordlist(String path, Number maxWords, boolean requireGloss, boolean excludeProperNouns,
+                                       String language) throws IOException {
         List<Entry> entries = new ArrayList<>();
         falcon.TextLines.forEachLine(Path.of(path), (offset, line) -> {
             if (line.isEmpty() || line.startsWith("#")) return;
@@ -89,18 +109,18 @@ public final class Words {
                 String word = parts[0].toUpperCase(Locale.ROOT);
                 List<String> canonical = new ArrayList<>();
                 for (String c : parts[3].split(";", -1)) if (!c.isEmpty()) canonical.add(c);
-                if (isAlpha(word)) entries.add(new Entry(word, parts[1], parseFreq(parts[2]),
+                if (isGridWord(word)) entries.add(new Entry(word, parts[1], parseFreq(parts[2]),
                         canonical.isEmpty() ? List.of(parts[1]) : canonical, ref));
             } else if (parts.length == 3) {
                 String word = parts[0].toUpperCase(Locale.ROOT);
-                if (isAlpha(word)) entries.add(new Entry(word, parts[1], parseFreq(parts[2]), List.of(parts[1]), ref));
+                if (isGridWord(word)) entries.add(new Entry(word, parts[1], parseFreq(parts[2]), List.of(parts[1]), ref));
             } else if (parts.length == 2) {
                 String word = parts[0].toUpperCase(Locale.ROOT);
-                if (isAlpha(word)) entries.add(new Entry(word, word, parseFreq(parts[1]), List.of(word), ref));
+                if (isGridWord(word)) entries.add(new Entry(word, word, parseFreq(parts[1]), List.of(word), ref));
             } else {
                 String t = Py.strip(line.toUpperCase(Locale.ROOT));
                 if (t.isEmpty()) return;
-                for (String tok : Py.split(t)) if (isAlpha(tok)) entries.add(new Entry(tok, tok, 0.0, List.of(tok), ref));
+                for (String tok : Py.split(t)) if (isGridWord(tok)) entries.add(new Entry(tok, tok, 0.0, List.of(tok), ref));
             }
         });
         LinkedHashMap<String, Entry> best = new LinkedHashMap<>();
@@ -112,13 +132,14 @@ public final class Words {
             }
         }
         entries.clear();
-        String lang = langFromPath(path);
+        String lang = language != null ? language : langFromPath(path);
         boolean glossAvailable = lang != null && GlossLookup.hasGlossDictionary(lang);
         if (requireGloss && glossAvailable) {
             best.values().removeIf(v -> !hasAnyGloss(v, lang));
         }
-        if (excludeProperNouns && lang != null && !PROPER_NOUN_EXCLUDED_LANGS.contains(lang)) {
-            best.values().removeIf(v -> !v.accented.isEmpty() && Character.isUpperCase(v.accented.charAt(0)));
+        java.util.function.BiPredicate<String, List<String>> isProper = properNounCheck(lang);
+        if (excludeProperNouns) {
+            best.values().removeIf(v -> isProper.test(v.accented, v.canonical));
         }
         List<Entry> ranked = new ArrayList<>(best.values());
         best.clear();
@@ -132,15 +153,30 @@ public final class Words {
         Map<String, Double> frequencies = new HashMap<>();
         Set<String> properNouns = new HashSet<>();
         Set<String> nonGloss = new HashSet<>();
-        boolean checkProper = lang == null || !PROPER_NOUN_EXCLUDED_LANGS.contains(lang);
         for (Entry e : ranked) {
             byLength.computeIfAbsent(e.word.length(), k -> new ArrayList<>()).add(e.word);
             refs.put(e.word, e.ref);
             frequencies.put(e.word, e.freq);
-            if (checkProper && !e.accented.isEmpty() && Character.isUpperCase(e.accented.charAt(0))) properNouns.add(e.word);
+            if (isProper.test(e.accented, e.canonical)) properNouns.add(e.word);
             if (glossAvailable && !hasAnyGloss(e, lang)) nonGloss.add(e.word);
         }
         return new Lexicon(byLength, refs, frequencies, properNouns, nonGloss);
+    }
+
+    /** {@code isProper(accented, lemmas)} of the language: a likely proper noun — a capitalized spelling (outside
+     * PROPER_NOUN_EXCLUDED_LANGS), or a word whose gloss-dictionary entries (its spelling's and its lemmas') have only
+     * proper-noun ("name") senses, in every language (mirrors _proper_noun_check). */
+    public static java.util.function.BiPredicate<String, List<String>> properNounCheck(String language) {
+        boolean checkCase = language != null && !language.isEmpty() && !PROPER_NOUN_EXCLUDED_LANGS.contains(language);
+        boolean checkGloss = language != null && !language.isEmpty() && GlossLookup.hasGlossDictionary(language);
+        return (accented, lemmas) -> {
+            if (checkCase && !accented.isEmpty() && Character.isUpperCase(accented.charAt(0))) return true;
+            if (!checkGloss) return false;
+            List<String> cands = new ArrayList<>();
+            cands.add(accented);
+            cands.addAll(lemmas);
+            return GlossLookup.onlyProperNounGlosses(cands, language);
+        };
     }
 
     private static boolean hasAnyGloss(Entry e, String lang) {
@@ -179,11 +215,12 @@ public final class Words {
         Integer id = idx.ids.get(word);
         if (id == null) return new Object[]{word, List.of(word)};
         int ref = idx.refs[id];
-        boolean scrabble = (ref & 1) != 0;
-        String path = scrabble ? idx.sources[1] : idx.sources[0];
+        int source = ref & 3;
+        String path = source < idx.sources.length ? idx.sources[source] : null;
         if (path == null) return new Object[]{word, List.of(word)};
         try {
-            return rowForms(falcon.TextLines.readLineAt(Path.of(path), Integer.toUnsignedLong(ref) >>> 1), word, scrabble);
+            return rowForms(falcon.TextLines.readLineAt(Path.of(path), Integer.toUnsignedLong(ref) >>> 2), word,
+                    source != ROW_SOURCE_FREQ);
         } catch (IOException e) {
             return new Object[]{word, List.of(word)};
         }
@@ -199,23 +236,23 @@ public final class Words {
     }
 
     /** Adds to every length of {@code index} the lemma ids of its words, read from each word's own wordlist row
-     * ({@code refs}, the (freq, Scrabble) wordlist paths {@code sources}): a word's lemmas are its CANONIQUE column
+     * ({@code refs}, the (freq, Scrabble, multi-word) wordlist paths {@code sources}): a word's lemmas are its CANONIQUE column
      * ({@link #rowForms}), else its accented form (mirrors _attach_lemmas). */
     public static void attachLemmas(Map<Integer, LenIndex> index, Map<String, Integer> refs, String[] sources)
             throws IOException {
         Map<String, Integer> interned = new HashMap<>();
         Map<String, int[]> perWord = new HashMap<>();
-        for (int flag = 0; flag < 2; flag++) {
-            String path = sources == null ? null : sources[flag];
+        for (int flag = 0; sources != null && flag < sources.length; flag++) {
+            String path = sources[flag];
             if (path == null || !Files.exists(Path.of(path))) continue;
-            boolean scrabble = flag == 1;
+            boolean scrabble = flag != ROW_SOURCE_FREQ;
             int f = flag;
             falcon.TextLines.forEachLine(Path.of(path), (offset, line) -> {
                 int tab = line.indexOf('\t');
                 if (tab <= 0) return;
                 String word = line.substring(0, tab);
                 Integer ref = refs.get(word);
-                if (ref == null || ref != (int) ((offset << 1) | f) || perWord.containsKey(word)) return;
+                if (ref == null || ref != (int) (offset << 2 | f) || perWord.containsKey(word)) return;
                 LenIndex li = index.get(word.length());
                 if (li == null || !li.contains(word)) return;
                 @SuppressWarnings("unchecked")
@@ -336,17 +373,23 @@ public final class Words {
     }
 
     /** {MOT: usage score} of {@code language}'s usage-score file plus its file for the freq words absent from the
-     * Scrabble wordlist (when it exists), null when the language has no usage-score file. Transient: only read while
-     * a lexicon is being indexed (mirrors load_usage_scores). */
+     * Scrabble wordlist and its multi-word expressions' file (when they exist), null when the language has no
+     * usage-score file. Transient: only read while a lexicon is being indexed (mirrors load_usage_scores). */
     public static Map<String, Integer> loadUsageScores(String language) throws IOException {
         if (language == null || language.isEmpty()) return null;
         Path path = usageScorePath(language);
         if (!Files.exists(path)) return null;
         Map<String, Integer> result = new HashMap<>();
         readUsageFile(path, result);
-        Path outPath = usageScoreOutPath(language);
-        if (Files.exists(outPath)) readUsageFile(outPath, result);
+        for (Path extra : new Path[]{usageScoreOutPath(language), usageScoreMultiPath(language)}) {
+            if (Files.exists(extra)) readUsageFile(extra, result);
+        }
         return result;
+    }
+
+    /** The usage scores of the multi-word expressions (mirrors usage_score_multi_path). */
+    public static Path usageScoreMultiPath(String language) {
+        return falcon.Env.ROOT.resolve("data").resolve("usage_score_" + language + "_multi.tsv");
     }
 
     /** The usage scores of the freq-wordlist words absent from the Scrabble wordlist (mirrors
@@ -572,7 +615,7 @@ public final class Words {
         try {
             falcon.TextLines.forEachLine(path, (offset, line) -> {
                 String[] parts = line.split("\t", -1);
-                if (parts.length < 3 || !isAlpha(parts[0])) return;
+                if (parts.length < 3 || !isGridWord(parts[0])) return;
                 refs.put(parts[0], scrabbleRowRef(offset));
                 if (accented != null) accented.put(parts[0], parts[1]);
             });
@@ -591,13 +634,13 @@ public final class Words {
         return refs;
     }
 
-    /** Every form and every lemma of the language's inflection table (data/inflection/&lt;lang&gt;.jsonl),
+    /** Every form and every lemma of the language's inflection table (data/inflection/&lt;lang&gt;_inflect.jsonl),
      * lowercased with ligatures folded — the words with a known inflection. Not cached: only read while an "easy"
      * lexicon's Scrabble words are being selected (mirrors load_inflection_keys). */
     public static Set<String> loadInflectionKeys(String language) {
         if (language == null || language.isEmpty()) return Set.of();
         Set<String> keys = new HashSet<>();
-        Path path = falcon.Env.ROOT.resolve("data").resolve("inflection").resolve(language + ".jsonl");
+        Path path = falcon.Env.ROOT.resolve("data").resolve("inflection").resolve(language + "_inflect.jsonl");
         if (Files.exists(path)) {
             try (BufferedReader r = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
                 String line;
@@ -723,6 +766,238 @@ public final class Words {
             String gf = challengeWordGridForm(String.valueOf(w));
             if (!gf.isEmpty()) out.add(gf);
         }
+        return out;
+    }
+
+    // ---------- Multi-word expressions (mirrors crossword_gen.py's section of the same name) ----------
+
+    /** Characters that separate the words of an expression's spelling (mirrors _WORD_SEPARATORS). */
+    private static final String WORD_SEPARATORS = " -'\u2019";
+
+    private static final Map<String, Map<String, int[]>> MULTI_BREAKS = new HashMap<>();
+
+    public static Path multiWordlistPath(String language) {
+        return falcon.Env.ROOT.resolve("data").resolve("wordlist_" + language + "_multi.tsv");
+    }
+
+    public static Path freqMultiWordlistPath(String language) {
+        return falcon.Env.ROOT.resolve("data").resolve("wordlist_" + language + "_freq_multi.tsv");
+    }
+
+    /** The letter counts after which {@code spelling} separates two words, in grid letters (mirrors word_breaks). */
+    public static int[] wordBreaks(String spelling) {
+        List<Integer> breaks = new ArrayList<>();
+        int n = 0;
+        for (int i = 0; i < spelling.length(); ) {
+            int cp = spelling.codePointAt(i);
+            i += Character.charCount(cp);
+            if (WORD_SEPARATORS.indexOf(cp) >= 0) {
+                if (n > 0 && (breaks.isEmpty() || breaks.get(breaks.size() - 1) != n)) breaks.add(n);
+                continue;
+            }
+            n += challengeWordGridForm(new String(Character.toChars(cp))).length();
+        }
+        int total = n;
+        return breaks.stream().mapToInt(Integer::intValue).filter(b -> b < total).toArray();
+    }
+
+    /** A language's multi-word wordlist: its number of distinct MOTs and those no freq or Scrabble word has (the
+     * expressions mergeMultiLexicon can add to a lexicon). */
+    public record MultiOnly(int total, Set<String> mots) {}
+
+    private static final Map<String, Optional<MultiOnly>> MULTI_ONLY = new ConcurrentHashMap<>();
+
+    /** The language's MultiOnly, once per language and process; null without a multi-word wordlist (mirrors
+     * multi_only_mots). */
+    public static MultiOnly multiOnlyMots(String language) throws IOException {
+        synchronized (MULTI_ONLY) {
+            Optional<MultiOnly> cached = MULTI_ONLY.get(language);
+            if (cached != null) return cached.orElse(null);
+            MultiOnly result = null;
+            Path path = multiWordlistPath(language);
+            if (Files.exists(path)) {
+                Set<String> mots = new HashSet<>();
+                try (BufferedReader r = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
+                    String line;
+                    while ((line = r.readLine()) != null) {
+                        if (falcon.Py.strip(line).isEmpty()) continue;
+                        int tab = line.indexOf('\t');
+                        mots.add(tab < 0 ? line : line.substring(0, tab));
+                    }
+                }
+                int total = mots.size();
+                mots.removeAll(singleWordMots(language));
+                result = new MultiOnly(total, Set.copyOf(mots));
+            }
+            MULTI_ONLY.put(language, Optional.ofNullable(result));
+            return result;
+        }
+    }
+
+    /** MOTs of the language's freq and Scrabble wordlists — transient (mirrors _single_word_mots). */
+    private static Set<String> singleWordMots(String language) throws IOException {
+        Set<String> mots = new HashSet<>();
+        for (Path path : new Path[]{falcon.Env.ROOT.resolve("data").resolve("wordlist_" + language + "_freq.tsv"),
+                scrabbleWordlistPath(language)}) {
+            if (!Files.exists(path)) continue;
+            try (BufferedReader r = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    int tab = line.indexOf('\t');
+                    mots.add(tab < 0 ? line : line.substring(0, tab));
+                }
+            }
+        }
+        return mots;
+    }
+
+    /** {MOT: word breaks} of every expression of the language's multi-word wordlist whose grid form no freq or
+     * Scrabble word has, once per language and process; empty when the language has none (mirrors
+     * load_multi_breaks). */
+    public static synchronized Map<String, int[]> loadMultiBreaks(String language) {
+        if (language == null || language.isEmpty()) return Map.of();
+        Map<String, int[]> cached = MULTI_BREAKS.get(language);
+        if (cached != null) return cached;
+        Map<String, int[]> result = new HashMap<>();
+        Path path = multiWordlistPath(language);
+        if (Files.exists(path)) {
+            try {
+                Set<String> single = singleWordMots(language);
+                try (BufferedReader r = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
+                    String line;
+                    while ((line = r.readLine()) != null) {
+                        String[] parts = line.split("\t", -1);
+                        if (parts.length < 2 || single.contains(parts[0])) continue;
+                        int[] breaks = wordBreaks(parts[1].split(";", -1)[0]);
+                        if (breaks.length > 0) result.put(parts[0], breaks);
+                    }
+                }
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        }
+        result = java.util.Collections.unmodifiableMap(result);
+        MULTI_BREAKS.put(language, result);
+        return result;
+    }
+
+    /** A grid's expression breaks: one map, or one per direction on a bilingual grid (mirrors
+     * multi_breaks_for_languages). */
+    public record Breaks(Map<String, int[]> across, Map<String, int[]> down) {
+        public Map<String, int[]> forDirection(String direction) {
+            return "across".equals(direction) ? across : down;
+        }
+
+        public boolean isEmpty() {
+            return across.isEmpty() && down.isEmpty();
+        }
+    }
+
+    public static Breaks multiBreaksForLanguages(String language, String bilingualLanguage) {
+        Map<String, int[]> across = loadMultiBreaks(language);
+        if (bilingualLanguage != null && !bilingualLanguage.isEmpty() && !bilingualLanguage.equals(language)) {
+            return new Breaks(across, loadMultiBreaks(bilingualLanguage));
+        }
+        return new Breaks(across, across);
+    }
+
+    /** Adds the language's multi-word wordlist to a lexicon, in place: every expression whose grid form is not in it
+     * yet joins byLength with the reference of its own row, a frequency of at least {@code noiseThreshold},
+     * {@code properNouns} when it is a likely proper noun (properNounCheck) and {@code nonGloss} when no gloss-dictionary entry
+     * defines it or its lemmas (mirrors merge_multi_lexicon). */
+    public static void mergeMultiLexicon(String language, Lexicon lex, double noiseThreshold, Set<String> properNouns,
+                                         Set<String> nonGloss) throws IOException {
+        if (language == null || language.isEmpty()) return;
+        Path path = multiWordlistPath(language);
+        if (!Files.exists(path)) return;
+        boolean glossAvailable = GlossLookup.hasGlossDictionary(language);
+        java.util.function.BiPredicate<String, List<String>> isProper = properNounCheck(language);
+        falcon.TextLines.forEachLine(path, (offset, line) -> {
+            String[] parts = line.split("\t", -1);
+            String word = parts[0];
+            if (parts.length < 3 || !isGridWord(word) || lex.refs().containsKey(word)) return;
+            lex.refs().put(word, multiRowRef(offset));
+            lex.byLength().computeIfAbsent(word.length(), k -> new ArrayList<>()).add(word);
+            lex.frequencies().put(word, Math.max(lex.frequencies().getOrDefault(word, 0.0), noiseThreshold));
+            String accented = parts[1].split(";", -1)[0];
+            if (accented.isEmpty()) accented = word;
+            List<String> lemmas = splitCanonical(parts[2], accented);
+            List<String> cands = new ArrayList<>();
+            cands.add(accented);
+            cands.addAll(lemmas);
+            if (isProper.test(accented, lemmas)) properNouns.add(word);
+            if (glossAvailable && !GlossLookup.hasAnyGloss(cands, language)) nonGloss.add(word);
+        });
+    }
+
+    /** A JSON word break [row, col, direction]. */
+    private static List<Object> breakJson(int r, int c, String direction) {
+        List<Object> b = new ArrayList<>();
+        b.add(r);
+        b.add(c);
+        b.add(direction);
+        return b;
+    }
+
+    /** [row, col, direction] of every word break of a JSON grid: for each fully lettered run spelling an expression
+     * of {@code breaks} (that run's direction's map), the cell right before each of its breaks. Sorted (mirrors
+     * word_break_edges). */
+    public static List<Object> wordBreakEdges(Object grid, Breaks breaks) {
+        java.util.TreeMap<Long, List<Object>> found = new java.util.TreeMap<>();
+        if (breaks == null || breaks.isEmpty() || !(grid instanceof List<?> rowsList) || rowsList.isEmpty()) {
+            return new ArrayList<>();
+        }
+        int rows = rowsList.size();
+        Object first = rowsList.get(0);
+        int cols = first instanceof String str ? str.length() : ((List<?>) first).size();
+        for (int dir = 0; dir < 2; dir++) {
+            String direction = dir == 0 ? "across" : "down";
+            Map<String, int[]> breaksOf = breaks.forDirection(direction);
+            if (breaksOf.isEmpty()) continue;
+            int outer = dir == 0 ? rows : cols, inner = dir == 0 ? cols : rows;
+            for (int a = 0; a < outer; a++) {
+                List<int[]> run = new ArrayList<>();
+                StringBuilder word = new StringBuilder();
+                boolean complete = true;
+                for (int b = 0; b <= inner; b++) {
+                    int r = dir == 0 ? a : b, c = dir == 0 ? b : a;
+                    Object row = b < inner ? rowsList.get(r) : null;
+                    String ch = row == null ? "#" : row instanceof String str
+                            ? String.valueOf(str.charAt(c)) : String.valueOf(((List<?>) row).get(c));
+                    if (!ch.equals("#")) {
+                        run.add(new int[]{r, c});
+                        word.append(ch);
+                        if (ch.equals(".")) complete = false;
+                        continue;
+                    }
+                    if (run.size() >= 2 && complete) {
+                        int[] ks = breaksOf.get(word.toString());
+                        if (ks != null) {
+                            for (int k : ks) {
+                                int[] cell = run.get(k - 1);
+                                found.put(((long) cell[0] << 32) | ((long) cell[1] << 1) | dir,
+                                        breakJson(cell[0], cell[1], direction));
+                            }
+                        }
+                    }
+                    run.clear();
+                    word.setLength(0);
+                    complete = true;
+                }
+            }
+        }
+        return new ArrayList<>(found.values());
+    }
+
+    /** [row, col, direction] of the word breaks of {@code word} placed on slot {@code cells}; empty for a single word
+     * (mirrors placed_word_break_edges). */
+    public static List<Object> placedWordBreakEdges(int[] cells, String word, Breaks breaks) {
+        List<Object> out = new ArrayList<>();
+        if (breaks == null || cells == null || cells.length < 2 || word == null) return out;
+        String direction = Cells.r(cells[0]) == Cells.r(cells[1]) ? "across" : "down";
+        int[] ks = breaks.forDirection(direction).get(word);
+        if (ks == null) return out;
+        for (int k : ks) out.add(breakJson(Cells.r(cells[k - 1]), Cells.c(cells[k - 1]), direction));
         return out;
     }
 }

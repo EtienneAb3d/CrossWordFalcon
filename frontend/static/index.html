@@ -242,6 +242,18 @@
           </div>
           <ul id="generate-challenge-list" hidden></ul>
         </div>
+        <!-- "Multi-mots": right of "Mots Défi", the maximum share (percent)
+             of multi-word expressions among the words placed
+             (GenerateRequest.multi_word_percent, crossword_gen.py's
+             MULTI_WORD_PERCENT): past it, no new expression is chosen until
+             enough single words are placed. Also sent by "Suivant" and
+             "Finir la grille"/"Finir la zone". -->
+        <label for="multi-word-percent">
+          <span data-i18n="multiWordPercentLabel">Multi-mots max (%)</span>
+          <input type="number" id="multi-word-percent" name="multi_word_percent"
+                 min="0" max="100" step="1" value="15"
+                 data-i18n-title="multiWordPercentTitle">
+        </label>
         <button type="button" id="stop-btn" data-i18n="stopBtn" hidden>Stop</button>
         <button type="button" id="continue-btn" data-i18n="continueBtn" hidden>Continuer</button>
       </div>
@@ -481,7 +493,8 @@
                    label. -->
               <th data-i18n="libraryColInteractive"></th>
               <!-- Exports: printable PDF (empty grid + clues + title, no
-                   answers), then the Across Lite .puz file. -->
+                   answers), then the Across Lite .puz, ipuz and
+                   Crossword Compiler .jpz files. -->
               <th data-i18n="libraryColExport"></th>
             </tr>
           </thead>
@@ -1140,6 +1153,17 @@
                         data-i18n-aria="virtualKeyboardAcrossBtn">→</button>
                 <button type="button" id="interactive-dir-down-btn" class="toggle-btn"
                         data-i18n-aria="virtualKeyboardDownBtn">↓</button>
+                <!-- Move mode: a two-state toggle (script.js's
+                     setInteractiveMoveMode) — while on, a click-drag on the
+                     grid moves letters, as Shift+click-drag does; held
+                     Shift turns it on, releasing Shift turns it off. -->
+                <button type="button" id="interactive-move-btn" class="toggle-btn icon-toggle-btn"
+                        data-i18n-aria="interactiveMoveBtn" data-i18n-title="interactiveMoveBtn">
+                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"
+                       fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 2v20M2 12h20M9 5l3-3 3 3M9 19l3 3 3-3M5 9l-3 3 3 3M19 9l3 3-3 3"/>
+                  </svg>
+                </button>
                 <!-- "Nettoyer": triggers a full cleanup of the impossible
                      zones (removes crossing words / black cell, like the
                      automatic generation), at the user's explicit request —

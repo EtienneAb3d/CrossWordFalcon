@@ -58,6 +58,7 @@ the grid for you.
 
 - Place words one at a time ("Next") or by hand, undo step by step.
 - Toggle black cells by hand, mirrored if the symmetry option is on.
+- Mark the break between two words of an expression (a thicker line).
 - Word suggestions per slot, per crossing, by start or end.
 - Warnings on letters that would block a crossing word.
 - Highlighting of impossible, poor and set-aside slots.
@@ -76,7 +77,7 @@ the grid for you.
   machine itself); archived grids stay viewable and playable.
 - Player count per grid; "seen" tracking.
 - PDF download (one or two A4 pages).
-- Across Lite `.puz` download.
+- Across Lite `.puz`, `.ipuz` and Crossword Compiler `.jpz` downloads.
 - SVG/PNG images of each published grid and its solution.
 
 **Tools**
@@ -319,7 +320,10 @@ On the page:
    placed, "été" or "était" (forms of "être") are left out, and "elms"
    once "elm" is in. A word you list this way never
    shows up in the Library's own grid listing, since it's meant to stay a
-   hidden answer to a spot you chose yourself.
+   hidden answer to a spot you chose yourself. In French and English, expressions of several words
+   ("arc-en-ciel") can fill a slot too; the **"Multi-words (%)"** field,
+   right of the Challenge Words, caps their share of the placed words
+   (15 % by default; 0 forbids them).
 3. On the **"Generate the crossword:"** line, click **"Automatic"** (the
    labels follow your chosen language; pressing Enter in a field does the
    same). A full grid with all its definitions can take anywhere from
@@ -351,7 +355,10 @@ On the page:
    once zoomed in, sliders on the right of and below the grid move the
    view, while the row and column numbers stay visible (same in
    Interactive mode). Above the grid, a short generated title for the puzzle
-   is shown, with the grid's level next to it ("Level: Medium"). Clues follow the usual crossword format:
+   is shown, with the grid's level next to it ("Level: Medium"). In French
+   and English a grid can hold expressions of several words ("arc-en-ciel",
+   "screw cap"), written as one word; a thicker line marks where each of
+   their words ends. Clues follow the usual crossword format:
    horizontal ("Horizontalement") clues appear to the left of the grid,
    grouped one line per row; vertical ("Verticalement") clues appear
    below, grouped one line per column, spanning the full width in two
@@ -424,9 +431,12 @@ you enter this mode, so you can look up words while you fill in the grid:
   at random from among the best candidates for that spot — so undoing it
   and clicking again usually offers a different word;
   **"Back"** undoes the last change, one step at a time.
-- You can click any cell and type a letter, press **Space** (or any
+- You can click any cell and type a letter, press **.** (or any other
   punctuation key) to add or remove a black cell — mirrored according to
-  the **"Symmetry"** menu — or **Delete** to clear a cell. **Ctrl**, or a
+  the **"Symmetry"** menu — or **Delete** to clear a cell. **Space**,
+  **-** or **_** adds or removes a break between two words (a thicker
+  line) right before the selected cell: type ARC, Space, EN, Space, CIEL
+  for "arc-en-ciel". **Ctrl**, or a
   second click on the selected cell, flips the horizontal/vertical
   direction the cursor moves in.
 - A **"Challenge Words"** box beside the grid lets you list words you
@@ -492,8 +502,11 @@ exactly as if it had just finished generating.
 Each row also has a shareable "Play" link, an **Export** column with a
 PDF download of the empty grid (one A4 landscape page, sized so the grid
 and all its clues fit; for a grid with a side above 20 cells, two pages —
-the grid, then all the clues) and, next to it, a **.puz** download (the
-Across Lite format most crossword apps open), and a small pencil button that opens the grid in Interactive mode
+the grid, then all the clues) and, next to it, **.puz** (the Across Lite
+format most crossword apps open; a multi-word answer's clue ends with its
+word lengths, e.g. "(3-2-4)"), **.ipuz** and **.jpz** downloads (two
+formats that also draw the breaks between the words of an expression),
+and a small pencil button that opens the grid in Interactive mode
 with all its letters and clues already filled in — handy for editing an
 existing grid. Opening one that way starts a fresh entry in your
 "Créations" list and never changes the stored grid. When you publish

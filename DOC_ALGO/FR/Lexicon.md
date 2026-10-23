@@ -379,6 +379,33 @@ plusieurs signaux) :
   (`backend/crossword_gen.py`, `Filler._try_reshape`, `_undo_reshape`,
   `_find_priority_word_placement`.)
 
+- **Expression (de plusieurs mots)** : mot de grille formé de plusieurs
+  mots d'une expression du Wiktionnaire, écrit sans ses séparateurs
+  (« arc-en-ciel » → ARCENCIEL, « screw cap » → SCREWCAP). Elle entre dans
+  le lexique comme les autres mots, sélectionnée par score d'usage et
+  fréquence, et la recherche la traite comme un mot ordinaire, au plafond
+  « Multi-mots max » près.
+  (`backend/crossword_gen.py`, `merge_multi_lexicon`, `_select_lexicon`.)
+
+- **Plafond « Multi-mots max »** : pourcentage maximal d'expressions parmi les
+  mots posés d'une grille (champ « Multi-mots max (%) » du formulaire, 15 % par
+  défaut, `MULTI_WORD_PERCENT`). Tant que les expressions déjà posées en
+  dépassent la part, aucune nouvelle expression n'est retenue parmi les
+  candidats d'un emplacement ; de nouveaux mots simples posés les
+  autorisent à nouveau. 0 les interdit toutes, 100 ne limite rien ; un Mot
+  Défi n'est jamais concerné. Recherche automatique et « Suivant » du mode
+  Interactif. (`backend/crossword_gen.py`, `Filler._multi_words_blocked`,
+  `Filler.ordered_candidates`.)
+
+- **Séparation de mots** : trait plus épais tracé entre deux cases voisines
+  d'un même emplacement, à l'endroit où une expression passe d'un mot au
+  suivant ; elle vient de la graphie de l'expression posée, ou de l'auteur
+  en mode Interactif (Espace, « - » ou « _ »), et est notée
+  `[ligne, colonne, sens]` (la limite entre cette case et la suivante dans
+  ce sens). (`backend/crossword_gen.py`, `word_breaks`, `word_break_edges`;
+  `frontend/static/script.js`, `appendWordBreaks`,
+  `interactiveToggleBreak`.)
+
 ## Retour en arrière
 
 - **Descente** : candidat qui a passé le contrôle de croisement et dans

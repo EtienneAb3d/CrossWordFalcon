@@ -53,7 +53,7 @@ Engineering language is English (code, comments, this file, the SKILLs,
 | `data_builder/` | One-off/periodic scripts that build each language's dictionary artifacts (corpus → wordlist → gloss dictionary → inflection table → Qdrant embeddings), plus one orchestration shell script per language. |
 | `scrapper/` | Daily-refreshed content scrapers feeding the web UI's "Actu Croisée" panel (RSS feeds, aggregated crossword-publisher links). |
 | `Automation/` | `Populate.py`, a CLI daemon that drives the real `/api/generate` endpoint to bulk-fill the grid library. |
-| `data/` | Per-language dictionaries (`wordlist_<lang>_freq.tsv`, `wordlist_<lang>_scrabble.tsv`, `wordlist_<lang>_hunspell.tsv` (en/fr/es), `gloss_dictionary/`, `inflection/`, the raw `scrabble/` lists, the gitignored `wiktionary/` dump cache), the reference sentence corpus, and Qdrant's on-disk storage. |
+| `data/` | Per-language dictionaries (`wordlist_<lang>_freq.tsv`, `wordlist_<lang>_scrabble.tsv`, `wordlist_<lang>_hunspell.tsv` (en/fr/es), `wordlist_<lang>_multi.tsv`/`wordlist_<lang>_freq_multi.tsv` (en/fr), `gloss_dictionary/`, `inflection/`, the raw `scrabble/` lists, the gitignored `wiktionary/` dump cache), the reference sentence corpus, and Qdrant's on-disk storage. |
 | `DOC_ALGO/FR/`, `DOC_DIC/FR/`, `DOC_USER/EN/` | Hand-maintained, present-tense-only reference docs (see intro). |
 | `GRID_STORE/`, `GRID_WORK/`, `GRID_GAME/` | Persisted grids: published library grids (archived ones under `GRID_STORE/BACKUP/`), in-progress "Interactif" authoring drafts, per-player play state. All gitignored. |
 | `STOP_DUMP/` | One diagnostic snapshot per automatic-generation job interrupted via the "Stop" button: last known cell/slot state of every attempt still running at that moment. Gitignored. |
@@ -87,7 +87,11 @@ Each of the six languages has its own dictionary, built independently by
    of its own, `œ`/`Œ`/`æ`/`Æ`, is folded into its two separate ASCII
    letters — "sœur" -> `SOEUR`, not `SŒUR` — so MOT always stays a plain
    run of A-Z letters, individually typable on a simple keyboard/grid
-   cell; `ACCENTUE`/`CANONIQUE` fold it too, see "Ligatures" below),
+   cell — a word whose MOT holds any other character, a letter of another
+   alphabet included ("µg" -> `ΜG`, "Øresund", "Δt"), is left out,
+   `is_grid_form`, and every lexicon loader ignores such a row,
+   `crossword_gen._is_grid_word`, Java `Words.isGridWord`;
+   `ACCENTUE`/`CANONIQUE` fold it too, see "Ligatures" below),
    `ACCENTUE` (natural accented/inflected spelling), `FREQUENCE` (a
    blended frequency score favoring the word's own canonical/lemma form),
    `CANONIQUE` (one or more `;`-separated candidate lemmas). Every
@@ -108,7 +112,7 @@ Each of the six languages has its own dictionary, built independently by
    dump (its tags are structured and consistent across languages, unlike
    the own-language editions), extracts every `form-of` sense's
    grammatical tags, filters to the surface forms (ACCENTUE) of
-   `data/wordlist_<lang>_freq.tsv` and `data/wordlist_<lang>_scrabble.tsv`, and writes `data/inflection/<lang>.jsonl` (`{"form",
+   `data/wordlist_<lang>_freq.tsv` and `data/wordlist_<lang>_scrabble.tsv`, and writes `data/inflection/<lang>_inflect.jsonl` (`{"form",
    "analyses": [{"pos", "tags", "lemma"}]}`) — used by `backend/
    inflection_lookup.py` for clue-writing's grammar grounding. A
    wordlist form with no accent (ASCII only) also collects the analyses
@@ -128,10 +132,12 @@ wordlist,
 lemmas of its unaccented spellings (`build_unaccented_lemmas.py`),
 Scrabble download (`download_scrabble_dictionaries.py <lang>`) + Scrabble
 dictionary, Hunspell wordlist (`build_wordlist_hunspell.py`, en/fr/es
-only, see "Hunspell wordlist" below), gloss dictionary, corpus archive,
+only, see "Hunspell wordlist" below), multi-word wordlist
+(`build_wordlist_multi.py`, en/fr only, see "Multi-word wordlist" below),
+gloss dictionary, corpus archive,
 inflection table, usage scores (`build_usage_scores.py`, see "Usage
-scores" below), Qdrant tenant (steps 1/10-10/10 for en/fr/es, 1/9-9/9 for
-de/it/pt, the last two non-fatal);
+scores" below), Qdrant tenant (steps 1/11-11/11 for en/fr, 1/10-10/10 for
+es, 1/9-9/9 for de/it/pt, the last two non-fatal);
 `data_builder/build_all.sh` runs the six in turn (logs/build_<lang>.log).
 Only Python's standard library, `httpx`, `curl`, `xz` and the `hunspell`/
 `unmunch` CLIs are needed (`Install.sh` installs `hunspell`/`unmunch`/
@@ -200,6 +206,86 @@ dictionaries expand to hundreds of thousands or millions of extra forms
 enclitic pronouns, Portuguese prefixed/suffixed derivations), beyond what
 the usage scoring can rate.
 
+**Multi-word wordlist** (`data/wordlist_<lang>_multi.tsv`, committed,
+`MOT<TAB>ACCENTUE<TAB>CANONIQUE` sorted by MOT, the Scrabble wordlist's
+format), built by `data_builder/build_wordlist_multi.py` right after the
+Hunspell wordlist, for English and French only (`LANGUAGES`): every
+multi-word Wiktionary headword of the language ("arc-en-ciel", "quart de
+finale", "screw cap") read from the own-language Kaikki dump
+(`<lang>_wiktionary.jsonl`) and the English-edition one (`<Name>-en.jsonl.
+gz`, the same dump for English, read once), entries of the language only
+(`lang_code`). A headword is kept when it holds a space or a hyphen, every
+piece between separators (space, hyphen, apostrophe) is letters only, and
+its `pos` is in `KEPT_POS` (proper nouns, proverbs, abbreviations and
+onomatopoeias included; no symbol, affix, article, contraction or
+typographic variant). MOT is its grid form with the separators removed
+(`grid_form`, ARCENCIEL), at most `MAX_LENGTH` (20) letters. An inflected form (every
+sense a `form_of`/`alt_of` one) is kept with its lemmas. A grammatical
+phrase is left out (`_is_grammatical_phrase`): one made of `STOPWORDS`
+only ("ce que", "à la", "to the", "is a"), or — for a verb, phrase or
+interjection entry (`VERB_PHRASE_POS`) — of stopwords and a single verb
+form preceded by the English infinitive "to" (`INFINITIVE_MARKER`), or by
+a subject pronoun (`SUBJECT_WORDS`, `CLITICS` allowed in between), or in
+French joined after it by a hyphen ("je suis", "tu m'étonnes", "sais-tu",
+"you know", "to be"; "un point c'est tout", "go for it" stay). An
+incomplete verbal phrase is left out too (`_is_incomplete_verbal_phrase`,
+same entry kinds): a single verb form opening the expression (after an
+elided negation, `NEGATION_LEAD`) followed by stopwords only, ending with
+a word awaiting its complement (`DANGLING_WORDS`: "want to", "look for",
+"essayer de"), or by a bare negation (`NEGATION_TAIL`: "sais pas"; a
+negation lead with nothing after the verb: "don't know"); phrasal-verb
+particles are not dangling ("come on", "give up" stay), nor a pronoun
+hyphenated to an imperative ("ferme-la"); words
+are the headword's lowercase letter runs (`_WORD_RE`), a verb form one the
+single-word inflection table or gloss dictionary gives as a verb
+(`_verb_forms`). Three more filters (`_left_out`): a determiner phrase
+(`_is_determiner_phrase`, every entry but a proper noun: a `DETERMINERS`
+word followed by a single content word — "un autre", "mon père", "the
+way"); an expression ending with a preposition or conjunction
+(`TRAILING_FUNCTION_WORDS`, whatever its `pos`, English phrasal-verb
+particles not listed — "près de", "à cause de", "because of"); a verbal
+phrase (`_is_verbal_phrase`, verb/phrase/interjection entries: a subject
+pronoun followed, `CLITICS` aside, by a verb form or a stopword auxiliary —
+"j'ai dit" — or a single verb whose other words are all `VERB_COMPANIONS`
+pronouns/adverbs — "y aller", "à voir", "screw it" — a French reflexive
+verb, "se"/"s'", excepted). Finally an entry with no definition of its own
+(an inflected form, or a lemma entry with no gloss) is dropped when the
+reference corpus never holds it (`_corpus_counts`, `build_wordlist_freq_
+multi.py`'s counting); `--dropped FILE` lists every headword left out
+with its filter. ACCENTUE lists
+every headword with that MOT, the main one first (a lemma entry, then
+lowercase, then alphabetical); CANONIQUE the union of their lemmas (a lemma
+entry is its own). A MOT the freq or Scrabble wordlist already holds is
+kept. A lexicon selected by usage score merges it in (see "Multi-word
+expressions and word breaks" below). Three companion files cover it,
+built by the same `build_<lang>.sh` steps: `data/wordlist_<lang>_freq_
+multi.tsv` (`build_wordlist_freq_multi.py`, the freq wordlist's format:
+every expression found in the reference corpus — the full one, else the
+capped one when the full one is not on disk — both cut into lowercase
+letter runs (`_WORD_RE`, so a space, hyphen or apostrophe all separate
+words), every occurrence counted, nested ones included
+(`_count_expressions`); ACCENTUE the spelling found most often, CANONIQUE
+the multi wordlist's, FREQUENCE blended like `build_wordlist_freq.py`'s
+(`CANONICAL_WEIGHT` over the most frequent lemma's own MOT count, a
+capitalized main spelling scaled by `PROPER_NOUN_SCORE_FACTOR` in
+`PROPER_NOUN_LANGS`); sorted by decreasing FREQUENCE),
+`data/gloss_dictionary/<lang>_glosses_multi.jsonl` (`build_gloss_
+dictionary.py --multi`: the own-language dump's entries for its CANONIQUE
+column) and `data/inflection/<lang>_inflect_multi.jsonl` (`build_
+inflections.py --multi`: the English-edition dump's form-of analyses of
+its ACCENTUE spellings), in the formats of their single-word
+counterparts; `backend/gloss_lookup.py`/`inflection_lookup.py` (Java
+`GlossLookup`/`InflectionLookup`) read them with the single-word ones (a
+single-word entry wins a shared key), and `build_usage_scores.py --source
+multi` rates the expressions into `data/usage_score_<lang>_multi.tsv`
+(the freq-multi ones first; the prompt gains `MULTI_WORD_NOTES`, and each
+expression first goes through a self-contained check — `Rater._self_
+contained`, a separate call with `SELF_CONTAINED_PROMPT`, its main
+spelling alone, a one-letter Y/N answer, the prompt config's
+`multi_incomplete_examples`/`multi_established_examples` as examples —
+where "N", an expression that does not clearly make sense out of a
+sentence giving it its meaning, rates it 0 without the rating call).
+
 **Usage scores** (`data/usage_score_<lang>_scrabble.tsv`, committed once
 built, `MOT<TAB>ACCENTUE<TAB>SCORE`, the main spelling as ACCENTUE, sorted
 by decreasing SCORE then MOT): `data_builder/build_usage_scores.py`
@@ -236,7 +322,7 @@ merges the out file in, only when the Scrabble one exists; Java `Words.
 loadUsageScores`) (see "What a lexicon
 keeps in memory", the candidate order and "Content scoring"); the
 Dictionnaire panel through `backend/usage_scores.py` (Java `UsageScores`,
-both files). A language without
+both files plus `usage_score_<lang>_multi.tsv`). A language without
 the file is neither filtered nor corrected.
 
 **Unaccented spellings**: a freq-wordlist row whose ACCENTUE holds no
@@ -278,19 +364,22 @@ Not applied to a language whose lexicon is selected by usage score (below).
 given (`usage_lexicon_active`, Java `Words.usageLexiconActive`),
 `load_lexicon(path, max_words, difficulty)` (Java `Generator.load(path,
 maxWords, difficulty)`), through `_select_lexicon` (Java `Generator.
-select`), loads the whole freq and Scrabble wordlists, then keeps the union
-of two criteria (a word with no usage score is dropped at easy/medium):
-a word of either wordlist rated at least `USAGE_DIFFICULTY_MIN_SCORE
-[difficulty]` in either usage-score file (easy 3, medium 2, hard `None` =
-every word), or a word kept by the freq
+select`), loads the whole freq, Scrabble and multi-word wordlists
+(`merge_multi_lexicon`), then keeps the union of two criteria (a word with
+no usage score is dropped at easy/medium): a word rated at least
+`USAGE_DIFFICULTY_MIN_SCORE[difficulty]` in a usage-score file (easy 3,
+medium 2, hard `None` = every word), or a word kept by the freq
 wordlist's own `DIFFICULTY_PRESETS[difficulty]` cut (a second
-`load_wordlist`) rated at least `FREQ_CUT_USAGE_LENIENCY` (1) point less
-(easy 2, medium 1; its score from either usage-score file):
+`load_wordlist`), or an expression kept by the same cut of
+`data/wordlist_<lang>_freq_multi.tsv` (`load_wordlist(..., language=)`),
+rated at least `FREQ_CUT_USAGE_LENIENCY` (1) point less (easy 2, medium 1;
+every usage-score file counts — `_scrabble`, `_scrabble_out`, `_multi`):
 - easy: the freq cut is `load_wordlist(path, 0.75, require_gloss=True,
-  exclude_proper_nouns=True)`; no quota set (`proper_nouns`/`non_gloss`
-  empty), so a word rated 3 or more enters whether or not it has a
-  definition or looks like a proper noun — the Scrabble inflection filter
-  above is ignored;
+  exclude_proper_nouns=True)`; no no-gloss quota (`non_gloss` empty), so a
+  word rated 3 or more enters whether or not it has a definition, but the
+  easy proper-noun quota (`MAX_PROPER_NOUNS["easy"]` 0) drops every likely
+  proper noun but a Scrabble word from the lexicon — the Scrabble
+  inflection filter above is ignored;
 - medium: the freq cut is `load_wordlist(path, 0.85)`; the
   `MAX_PROPER_NOUNS`/`MAX_NON_GLOSS_WORDS` medium quotas (2) apply;
 - hard: every word, the hard quotas (5) apply.
@@ -310,8 +399,10 @@ length (`build_index`, Java `LenIndex`): the words, their ids, the
 (position, letter) index, two float32 frequency columns (`freq`,
 `dict_freq` — `array('f')` behind `_WordColumn`, Java `float[]`) and one
 row reference per word (`refs`: the byte offset of the word's row in its
-wordlist shifted left one bit, low bit 1 for the Scrabble wordlist —
-`_freq_row_ref`/`_scrabble_row_ref`; `array('I')`, Java `int[]`), the
+wordlist shifted left two bits, the low bits naming the wordlist —
+`ROW_SOURCE_FREQ` 0, `ROW_SOURCE_SCRABBLE` 1, `ROW_SOURCE_MULTI` 2,
+`_freq_row_ref`/`_scrabble_row_ref`/`_multi_row_ref`; `array('I')`, Java
+`int[]`), the
 usage-score column (`usage`, `array('b')` behind `_WordColumn`, Java
 `LenIndex.usage` `byte[]`; `USAGE_SCORE_UNKNOWN` -1 for an unrated word,
 `None`/null when the language has no usage-score file — `load_usage_
@@ -321,7 +412,7 @@ word and their inverse (`lemma_off`/`lemma_ids`, `lemma_keys`/
 `int[]`, set by `_attach_lemmas`/Java `Words.attachLemmas` from each
 word's own row: its CANONIQUE lemmas, lowercased, else its accented form,
 interned to ids unique per process so two languages never share one), plus
-the two wordlist paths (`sources`). The accented form and the lemmas are
+the three wordlist paths (`sources`: freq, Scrabble, multi-word). The accented form and the lemmas are
 read back from that row only when a grid's words get their `accented`/
 `canonical` fields (`word_forms`, Java `Words.wordForms`). Besides the
 index, a `LoadedLexicon` holds the proper-noun and no-gloss quota sets
@@ -398,7 +489,9 @@ json`. Holds all server-side state in plain module dicts/lists:
   `generate_grid` merges the Scrabble lexicon itself);
   `_load_interactive_index` merges it into an Interactive session's
   lexicon (`merge_scrabble_lexicon`); `_load_wordlist_raw_lines` falls
-  back on the Scrabble TSV's line for the word-verification table;
+  back on the Scrabble TSV's line, then the multi-word wordlist's, for the
+  word-verification table, whose gloss lines (`_load_gloss_raw_lines`)
+  include the multi-word gloss dictionary too;
   `_annotate_scrabble_cells` adds `scrabble_cells`
   (`scrabble_word_cells` of the example's own `example_grid`) to every
   example published through `progress` and `_on_live_preview` (after the
@@ -434,7 +527,9 @@ json`. Holds all server-side state in plain module dicts/lists:
   the live grids, and moving every live grid of that version or older to
   `GRID_STORE/BACKUP/`, see `grid_store.archive_grids`), `GET /api/library/{grid_id}/pdf` (answer-free printable sheet),
   `GET /api/library/{grid_id}/puz` (Across Lite .puz file, see
-  `puz_export.py`),
+  `puz_export.py`), `GET /api/library/{grid_id}/ipuz` and `GET
+  /api/library/{grid_id}/jpz` (ipuz and Crossword Compiler files, see
+  `ipuz_export.py`/`jpz_export.py`),
   `POST /api/game/save` (autosave play state to `GRID_GAME`), `GET
   /api/game/leaderboard/{grid_id}` (players' ranking on that grid).
 - *Dictionary/paraphrase*: `GET /api/dictionary` (root-family search;
@@ -480,10 +575,14 @@ json`. Holds all server-side state in plain module dicts/lists:
 - *Usage-score statistics* (localhost-only, gated by `frontend/server.py`):
   `GET /api/usage_stats` (`usage_scores.usage_score_counts`, Java
   `UsageScores.usageScoreCounts`: `{scores, levels, languages: [{language,
-  counts, total, length_counts, level_totals, easy_length_counts}],
+  counts, total, length_counts, level_totals, easy_length_counts,
+  multi_total, multi_rated, multi_rated_min, multi_level_totals,
+  multi_length_counts, multi_easy_length_counts}],
   lengths}`, every score found in ascending order, one count per score,
   both usage-score files of each language counted; `levels` easy/medium/
-  hard, `level_totals` the size of each difficulty's lexicon
+  hard, `level_totals` the number of single words of each difficulty's
+  lexicon (its words minus its multi-word expressions, which are counted
+  apart; `backend/app.py`'s `usage_stats`, Java `App`)
   (`crossword_gen.lexicon_length_counts`, Java `Generator.
   lexiconLengthCounts`, per length, from `lexicon_words`/`Generator.
   lexiconWords`: each (language, difficulty) lexicon's words
@@ -493,8 +592,19 @@ json`. Holds all server-side state in plain module dicts/lists:
   missing pairs in parallel, one worker process / thread each); `lengths` every word length of the
   words rated at least `LENGTH_STATS_MIN_SCORE` (3) or of an easy lexicon,
   longest first, `length_counts` one count of such rated words per length,
-  `easy_length_counts` the easy lexicon's words per length;
-  `counts`/`total`/`length_counts` null for a language with neither file).
+  `easy_length_counts` the easy lexicon's single words per length;
+  `counts`/`total`/`length_counts` null for a language with neither file;
+  the multi-word expressions: `multi_total` the distinct MOTs of
+  `wordlist_<lang>_multi.tsv`, `multi_rated`/`multi_rated_min` the
+  expressions of `usage_score_<lang>_multi.tsv` (all / rated 3 or more,
+  `usage_scores._load_multi`, Java `UsageScores.loadMulti`),
+  `multi_level_totals` the expressions of each difficulty's lexicon —
+  its words among `crossword_gen.multi_only_mots` (the multi MOTs no freq
+  or Scrabble word has; Java `Words.multiOnlyMots`), counted per length by
+  `multi_lexicon_length_counts`, Java `Generator.multiLexiconLengthCounts`,
+  once per pair and process —, `multi_length_counts`/`multi_easy_length_
+  counts` per length of `lengths` (which covers them too): the expressions
+  rated 3 or more / those of the easy lexicon; each null when unknown).
   Its proxy route has its own `USAGE_STATS_PROXY_TIMEOUT_S` (150 s), the
   page its `USAGE_STATS_FETCH_TIMEOUT_MS` (160 s).
 - *STOP_DUMP records* (localhost-only, gated by `frontend/server.py`):
@@ -509,7 +619,9 @@ json`. Holds all server-side state in plain module dicts/lists:
 (`language`, `bilingual_language`, `width`/`height` [5-50], `difficulty`
 [easy/medium/hard], `seed`, `force_letters_percent` [0-100, default 0],
 `black_enrichment_percent` [0-100, default 15], `words_per_node` [1-50,
-default `WORDS_PER_NODE`], `symmetry` [`BLACK_SYMMETRIES`, default
+default `WORDS_PER_NODE`], `multi_word_percent` [0-100, default
+`MULTI_WORD_PERCENT` 15, also sent by "Suivant" and "Finir la grille"],
+`symmetry` [`BLACK_SYMMETRIES`, default
 "none", 400 otherwise, also applied to an Interactive session's starting
 pattern], `pattern_style` [`PATTERN_STYLES`: airy/grouped, default
 "airy", 400 otherwise, also applied to an Interactive session's starting
@@ -557,9 +669,15 @@ in memory" above). `DIFFICULTY_
 PRESETS = {easy: 0.75, medium: 0.85, hard: 1.0}` are *fractions* of the
 gloss-filtered lexicon kept (not fixed counts, so the effect is
 comparable across languages with very different vocabulary sizes); "easy"
-additionally requires a findable Wiktionary gloss and excludes likely
-proper nouns (unless the lexicon is selected by usage score, see "Lexicon
-selected by usage score"); "medium" allows up to `MAX_PROPER_NOUNS["medium"]=2` and
+additionally requires a findable Wiktionary gloss (unless the lexicon is
+selected by usage score, see "Lexicon selected by usage score") and
+excludes likely proper nouns; a likely proper noun (`_proper_noun_check`,
+Java `Words.properNounCheck`) is a capitalized ACCENTUE (outside
+`PROPER_NOUN_EXCLUDED_LANGS`) or a word whose gloss-dictionary entries —
+its spelling's and its lemmas', at least one — have only "name" senses
+(`gloss_lookup.only_proper_noun_glosses`, Java `GlossLookup.
+onlyProperNounGlosses`, from the name-only keys `_GlossIndex.name_only`
+collects while indexing), in every language; "medium" allows up to `MAX_PROPER_NOUNS["medium"]=2` and
 "hard" up to 5 (never restricted otherwise). `MAX_NON_GLOSS_WORDS` mirrors
 this same per-difficulty cap for words absent from the gloss dictionary.
 Both are enforced by `try_fill` as a final safety net, after an otherwise
@@ -869,7 +987,25 @@ own rng drawn from the parent's in candidate order:
    within the chosen slot is `Filler.ordered_candidates` — this engine's
    single candidate-ordering rule, shared verbatim with Interactive
    mode's own "Suivant" (see "Priority-tier search in Interactive mode"
-   below): shuffled, then filtered by usage score (`Filler._usage_
+   below): shuffled, then held to the "Multi-mots max" cap (`Filler._multi_
+   words_blocked`, Java `multiWordsBlocked`: while the expressions among
+   the words placed — `ROW_SOURCE_MULTI` row references, `_is_multi_word`,
+   Java `LenIndex.isMulti` — exceed `multi_word_percent` % of them,
+   `multi * 100 > percent * placed`, or the cap is 0, every expression but
+   a "Mots Défi" word is dropped; 100/`None` = no limit; `try_fill(multi_
+   word_percent=)`, set from `generate_grid(multi_word_percent=)` ->
+   `_worker_multi_word_percent` for the search attempts, and
+   `interactive_place_word(multi_word_percent=)` for "Suivant"; every other
+   step choosing words applies it too — `_close_implied_slots` leaves open
+   a slot whose single candidate is a forbidden expression,
+   `minimize_black_squares`, `_optimize_before_cleanup` (both fills),
+   `_shorten_impossible_zones`/`_lengthen_impossible_zones` through
+   `_find_shorter_word_for_zone`/`_find_longer_word_for_zone`
+   (`_multi_words_blocked_in` over `_known_assignment`), each taking
+   `multi_word_percent=`, set from `_worker_multi_word_percent` in the
+   worker tasks; Java
+   `Filler.multiWordPercent`, `Fill.FillArgs`/`Generator.Params`/`Ctx.
+   multiWordPercent`), then filtered by usage score (`Filler._usage_
    filtered`, Java `usageFiltered`: among the candidates whose usage
    score is known, `index[length]["usage"]`, only the `USAGE_KEEP_PERCENT`
    (60) % with the highest score are kept — `ceil`, at least one, ties at
@@ -1720,6 +1856,42 @@ scrabble` for a general-dictionary word found in its direction's Scrabble
 set. `scrabble_word_cells(grid, scrabble_words)` lists the cells of every
 fully lettered run (≥2) spelling a Scrabble word.
 
+**Multi-word expressions and word breaks**: `_select_lexicon` (lexicon
+selected by usage score only) merges `data/wordlist_<lang>_multi.tsv`
+(`merge_multi_lexicon`, Java `Words.mergeMultiLexicon`): every expression
+whose grid form is not yet in the lexicon joins it with its own row
+reference (`_multi_row_ref`), a frequency of at least
+`NOISE_FREQUENCY_THRESHOLD`, `proper_nouns` when it is a likely proper noun
+(capitalized main spelling, or only "name" gloss senses) and `non_gloss` when no gloss defines it or its lemmas (so the
+quotas apply to it, unlike a Scrabble word); `load_lexicon` adds the
+`wordlist_<lang>_freq_multi.tsv` frequencies to `dict_freq` for the words
+the freq wordlist lacks. An expression is then an ordinary word of the
+search and of Interactive mode, with no family or bonus of its own, held
+only to the "Multi-mots max" cap (`MULTI_WORD_PERCENT`, see the candidate
+order above). Its
+word breaks — the letter counts after which its main spelling separates
+two words (`word_breaks`: space, hyphen, apostrophe; "arc-en-ciel" -> (3,
+5)) — are kept per language (`load_multi_breaks`, Java `Words.
+loadMultiBreaks`: {MOT: breaks} of every expression whose grid form no freq
+or Scrabble word has, once per process; `multi_breaks_for_languages`, a
+dict or a `DualSet`, Java `Words.Breaks`). A break is written
+`[row, col, direction]`: the line between that cell and the next one in
+`direction`. `word_break_edges(grid, multi_breaks)` (Java `Words.
+wordBreakEdges`) lists the breaks of every fully lettered run spelling an
+expression, sorted; `placed_word_break_edges(cells, word, multi_breaks)`
+those of one placed word. `backend/app.py` adds `breaks` to every preview
+example (`_annotate_scrabble_cells`) and to the finished grid (`result
+["breaks"]`, plus the author's own for "Finir la grille"/"Finir la zone",
+`preserved_breaks`), to the word "Suivant" places (`placed.breaks`,
+`_add_placed_breaks`, from the session's `multi_breaks`), and takes the
+author's breaks (`breaks`, cleaned by `_clean_breaks`: valid, distinct,
+sorted) on `/save`, `/save_work`, `/finish` and `/from-attempt`; a draft
+(`grid_store.save_grid_work(breaks=)`) and a published record keep them,
+`/resume` and `/from-library` give them back (`job["result"]["breaks"]`).
+`svg_export._puzzle_grid_svg(breaks=)` (Java `SvgExport.puzzleGridSvg`)
+draws each as a `#1f2937` line `WORD_BREAK_WIDTH_FACTOR` (0.12) of a cell
+thick on the PDF/SVG/PNG pages.
+
 **Themed generation**: `priority_words`/`bilingual_priority_words` (sets
 of preferred words, built by `backend/app.py` from an LLM-expanded,
 Qdrant-searched glossary — see below) are a soft preference throughout
@@ -2456,7 +2628,7 @@ without the solution.
 "Finir la grille"/"Finir la zone" (`POST /api/interactive/finish`) keeps
 the session's grid size and language(s) and takes every other generation
 parameter from the generation form's current values (`Interactive
-FinishRequest`: `mode`, `black_enrichment_percent`, `words_per_node`, `symmetry`, `force_letters_percent`,
+FinishRequest`: `mode`, `black_enrichment_percent`, `words_per_node`, `multi_word_percent`, `symmetry`, `force_letters_percent`,
 `difficulty`, `theme`, `theme_precision`, `challenge_words` — each of the
 last four falling back to the session's own when omitted); the session's
 theme glossary is reused only while the form's theme and precision equal
@@ -2848,7 +3020,34 @@ then NUL-terminated title, author (the record's pseudo, else
 "CrossWordFalcon"), copyright ("CrossWordFalcon"), the clues in the
 format's order (cells row by row, the across word starting there then the
 down word, `_clues_in_order`), and empty notes; text is Windows-1252, a
-character it lacks written "?". Both back ends produce identical bytes.
+character it lacks written "?". The format cannot draw a word break, so
+the clue of a word holding breaks (the record's `breaks`, `break_set`)
+ends with its enumeration — `word_enumeration`, Java `PuzExport.
+wordEnumeration`: the letter count of each piece between two breaks,
+joined by "-" where the word's `accented` spelling has a hyphen there,
+"," otherwise (space, apostrophe, or no spelling to tell), "Après la
+pluie (3-2-4)" for ARCENCIEL. `numbered_slots` (Java `PuzExport.
+numberedSlots`) lists the grid's words with their printed numbers in the
+same order, for the two exports below. Both back ends produce identical
+bytes.
+
+### `ipuz_export.py` / `jpz_export.py`
+
+`render_ipuz(record, title)` (Java `IpuzExport.renderIpuz`, served as
+`application/json`) writes the record as an ipuz v2 crossword (compact
+UTF-8 JSON, keys in a fixed order: version, kind, title, author,
+copyright, publisher, dimensions, `block` "#", `empty` 0, `puzzle` — each
+cell its number or 0, `{"cell", "style": {"barred": "R"/"B"/"RB"}}` when
+a break follows it across/down —, `solution`, `clues` — `Across`/`Down`
+lists of `{"number", "clue"}` plus `enumeration` for a word with breaks).
+`render_jpz(record, title)` (Java `JpzExport.renderJpz`, `application/
+xml`) writes it as an uncompressed Crossword Compiler file
+(`crossword-compiler-applet`/`rectangular-puzzle`: metadata, one `<cell>`
+per cell with `solution`/`number`/`right-bar`/`bottom-bar` or
+`type="block"`, one `<word>` per word, then the two `<clues>` lists headed
+in the grid's language, `JPZ_DIRECTION_TITLES`, each clue carrying
+`format` = its enumeration when it has breaks). Both back ends produce
+identical bytes.
 
 ### `svg_export.py`
 
@@ -2933,10 +3132,14 @@ point ids make it resumable/idempotent.
 
 ### Small lookup helpers
 
-`usage_scores.py` (`usage_score(mot, language)`: a word's usage score for
-the Dictionnaire panel, the language's file read once and cached; `None`
-when unknown — `dictionary_lookup.search` adds it to every row as `usage`,
-from the row's form folded to its grid form; `usage_score_counts`: the
+`usage_scores.py` (`usage_score(mot, language, multi=False)`: a word's
+usage score for the Dictionnaire panel, the language's files read once and
+cached — the single-word ones, then the multi-word one, or the multi-word
+one first when `multi`; `None` when unknown — `dictionary_lookup.search`
+adds it to every row as `usage`, from the row's form folded to its grid
+form (`grid_form`, A-Z only, a multi-word expression's separators
+dropped), `multi` set for a form holding a space, hyphen or apostrophe
+(`WORD_SEPARATORS`; Java `DictionaryLookup.hasWordSeparator`); `usage_score_counts`: the
 number of words per score of every language, for `GET /api/usage_stats`;
 Java `UsageScores`),
 `text_lines.py` (byte-offset line access: `iter_lines_with_offsets`,
@@ -2946,11 +3149,17 @@ lookup.py` (exact-form grammatical analysis), `example_sentences.py`
 (reservoir-sampled real usage sentences per exact inflected form),
 `dictionary_lookup.py` (accent/case-insensitive same-root-family search
 for the "Dictionnaire" panel — distinct from `gloss_lookup.py`'s single-
-lemma lookup; the roots come from the freq wordlist rows the query
+lemma lookup; its index, `_build_index`, holds one row per (spelling,
+lemmas) of every wordlist giving a grid form's possible accented
+spellings — `WORDLIST_SOURCES`: the freq wordlist, then every ACCENTUE
+spelling of the Scrabble, Hunspell and multi-word wordlists, a spelling
+an earlier one already gave skipped —, also what `word_forms` reads, so
+a Scrabble-only grid word such as ETRECIT finds "étrécit"/"étrécît" and
+their lemma "étrécir"; the roots come from the rows the query
 spells, the query itself as a lemma, and the inflection table's lemmas of
-the exact form, `inflection_lookup.lemmas_of`, so a form the wordlist
-lacks — "foehna" — gets a row with its lemmas' definitions, plus one per
-such lemma with definitions; Java `DictionaryLookup.search`), `secret_store.py` (`verify_or_claim`: PBKDF2-hashed
+the exact form, `inflection_lookup.lemmas_of`, so a form no wordlist
+holds — "foehna" — gets a row with its lemmas' definitions, plus one per
+such lemma with definitions; Java `DictionaryLookup.search`/`build`), `secret_store.py` (`verify_or_claim`: PBKDF2-hashed
 nickname secret words under `SECRET/<slug>.json`, keyed by the same slug
 as every per-player save file — `grid_store._slugify_pseudo`, so
 "Étienne"/"etienne" or "Jean-Luc"/"jean luc" are one pseudo, claimed by
@@ -2976,7 +3185,8 @@ validation) and `Job.java` (one `JOBS` entry, mutated and serialized under
 its own lock); the theme-glossary/Qdrant part of `app.py` → `Themes.java`;
 `clues.py` → `Clues.java`; `chatbot.py` → `ChatBot.java` (SSE streaming);
 `grid_store.py` → `GridStore.java`; `svg_export.py` → `SvgExport.java`;
-`puz_export.py` → `PuzExport.java`;
+`puz_export.py` → `PuzExport.java`; `ipuz_export.py`/`jpz_export.py` →
+`IpuzExport.java`/`JpzExport.java`;
 `embedder.py`/`qdrant_store.py`/`system_info.py`/`gloss_lookup.py`/
 `inflection_lookup.py`/`example_sentences.py`/`dictionary_lookup.py`/
 `secret_store.py`/`text_lines.py`/`usage_scores.py` → one class each; `crossword_gen.py` → package
@@ -3058,8 +3268,8 @@ state, unlike the backend).
   shown first, i.e. what the player was looking at when "Stop" was
   clicked);
   `#usage-stats-btn` toggles the `#usage-stats` panel (`loadUsageStats`/
-  `renderUsageStats`: one row per language, one column per usage score,
-  then the words rated 3 or more (`USAGE_STATS_MIN_SCORE`), then the total, then one column per difficulty (`level_totals`, headed by the `difficulty*` names; "Total ≥ 3" and "Facile" bold, `.usage-stats-strong`), from `GET /api/usage_stats`; below it `renderUsageLengthStats`: per word length, one row per length, longest first, one column per language, "rated 3 or more / easy lexicon" in each cell); `#mode` lists only the budget modes (flash … gridzilla),
+  `renderUsageStats`: one row per language, a two-row header with a "Mots simples" column group (`usageStatsColSingle`, the single words only) then a "Multi-mots" one: one column per usage score,
+  then the words rated 3 or more (`USAGE_STATS_MIN_SCORE`), then the total, then one column per difficulty (`level_totals`, headed by the `difficulty*` names; "Total ≥ 3" and "Facile" bold, `.usage-stats-strong`), then the "Multi-mots" column group (two-row header, `usageStatsColMulti`: glossary size, rated, rated ≥ 3, then one column per difficulty — `multi_total`/`multi_rated`/`multi_rated_min`/`multi_level_totals`), from `GET /api/usage_stats`; below it `renderUsageLengthStats`: per word length, one row per length, longest first, a "Mots simples" column group with one column per language, "rated 3 or more / easy lexicon" (single words) in each cell, then a "Multi-mots" column group, one column per language with expressions, the same count over them — `multi_length_counts`/`multi_easy_length_counts`); `#mode` lists only the budget modes (flash … gridzilla),
   also read by "Finir la grille"/"Finir la zone".
   While a playable grid is on screen (`displayFinalGrid`), the creation
   form is folded (`#generate-form.play-collapsed`, `setGenerateFormCollapsed`
@@ -3109,17 +3319,31 @@ state, unlike the backend).
   its starting cell, at least `INTERACTIVE_DRAG_MIN_PX` (4 px) of pointer
   movement, selects the two emplacements crossing there and swallows the
   following click, `interactiveSuppressNextClick`), undo stack, per-cell
-  editing — space or any punctuation toggles the selected cell black,
+  editing — "." or any other punctuation toggles the selected cell black,
   with its images under the form's `#symmetry` (`interactiveToggleBlack`,
-  `symmetryCells`), and a click on the already-selected cell swaps the
+  `symmetryCells`), space, "-" or "_" toggles a word break between the
+  cell before the selection, in the fill direction, and the selected cell
+  (`interactiveToggleBreak`; `interactiveBreaks`, "row,col,direction"
+  keys, carried by every undo snapshot, replaced inside a "Suivant" word's
+  slot by its `placed.breaks`, `applyPlacedWordBreaks`, sent as `breaks`
+  with every save; every grid — play, Interactive, attempt previews —
+  draws them as `.word-break` bars, `appendWordBreaks`), and a click on the already-selected cell swaps the
   fill direction (`selectCell`, in play mode too), Shift+click-drag moves
   the letters of the selected zone, else of the focused word, by the
   dragged offset (`interactiveMoveSourceLetters`/`interactiveMovePlan`/
   `renderInteractiveMovePreview`/`finishInteractiveMove`: black cells stay,
   and so does a source letter of a complete emplacement not moved whole,
   refused when a letter would leave the grid or land on a black cell; the
-  zone, selection, theme/challenge/Scrabble colouring and the definitions
-  of wholly moved words follow, one undo step) —, calls to every `/api/interactive/*` endpoint, "Définitions"/
+  zone, selection, theme/challenge/Scrabble colouring, the word breaks
+  between two moved letters and the definitions of wholly moved words
+  follow — any other break touching an erased or overwritten cell is
+  dropped —, one undo step; a plain click-drag does the same while the
+  move mode is on — `#interactive-move-btn`, a two-state icon toggle right
+  after the direction arrows, `interactiveMoveMode`/`setInteractiveMoveMode`,
+  turned on by pressing Shift and off by releasing it
+  (`setInteractiveMoveShift`, also synced from the mouse's `shiftKey`),
+  reset on leaving Interactive mode — and the grid then shows the `move`
+  cursor, `#grid.move-cursor`) —, calls to every `/api/interactive/*` endpoint, "Définitions"/
   "Recalculer" (`generateInteractiveDefinitions`: `POST /api/interactive/
   verify` then `GET /api/dictionary/define` per filled valid word —
   only those lacking a definition, or all of them, replacing the
@@ -3143,7 +3367,11 @@ state, unlike the backend).
   (`grid_store.save_grid_work`'s own `challenge_words` field) — the
   "Créations" drafts panel); a second, simpler "Mots Défi
   (personnalisation)" mini-form on the main generation form itself
-  (`#generate-challenge-panel`, right next to "Thématique") — a plain
+  (`#generate-challenge-panel`, right next to "Thématique", followed by
+  the "Multi-mots max (%)" field `#multi-word-percent`, read by
+  `readMultiWordPercent` and sent as `multi_word_percent` by
+  "Automatique", "Interactif", "Suivant" and "Finir la grille"/"Finir la
+  zone", restored from `generation_params`) — a plain
   add/remove list with no grid yet to color/click-insert against, sent as
   `GenerateRequest.challenge_words` by either button of the form's
   "Générer les mots croisés :" row (`#generate-row`): "Automatique"

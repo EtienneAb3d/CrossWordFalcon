@@ -435,12 +435,15 @@ public final class Interactive {
     // ================================================================== "Suivant"
 
     public static Map<String, Object> placeWord(char[][] grid, int rows, int cols, DualIndex index, Rng rng, PW pwIn,
-                                                Set<String> challengeIn, PW scrabble) {
-        return placeWord(grid, rows, cols, index, rng, pwIn, challengeIn, null, scrabble);
+                                                Set<String> challengeIn, PW scrabble, int multiWordPercent) {
+        return placeWord(grid, rows, cols, index, rng, pwIn, challengeIn, null, scrabble, multiWordPercent);
     }
 
+    /** {@code multiWordPercent}: the cap on multi-word expressions (Filler.MULTI_WORD_PERCENT), applied to every
+     * candidate drawn through Filler.orderedCandidates (mirrors interactive_place_word's multi_word_percent). */
     public static Map<String, Object> placeWord(char[][] grid, int rows, int cols, DualIndex index, Rng rng, PW pwIn,
-                                                Set<String> challengeIn, List<int[]> lastPlacedCells, PW scrabble) {
+                                                Set<String> challengeIn, List<int[]> lastPlacedCells, PW scrabble,
+                                                int multiWordPercent) {
         PW pw = pwIn == null ? PW.EMPTY : pwIn;
         Set<String> challenge = challengeIn == null ? Set.of() : challengeIn;
         char[][] pattern = Grids.patternOf(grid);
@@ -448,6 +451,7 @@ public final class Interactive {
         Object[] built = buildInteractiveFiller(pattern, rows, cols, index, rng, known, pw, challenge);
         Filler f = (Filler) built[0];
         f.scrabbleWords = scrabble == null ? PW.EMPTY : scrabble;
+        f.multiWordPercent = multiWordPercent;
         @SuppressWarnings("unchecked")
         List<int[]> slots = (List<int[]>) built[1];
         if (slots.isEmpty()) return new LinkedHashMap<>(Map.of("impossible", true));

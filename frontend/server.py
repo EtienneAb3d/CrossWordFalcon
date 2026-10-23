@@ -442,6 +442,54 @@ async def proxy_library_get_puz(grid_id: str):
     )
 
 
+@app.get("/api/library/{grid_id}/ipuz")
+async def proxy_library_get_ipuz(grid_id: str):
+    """Relays downloading a library grid's ipuz file (see
+    backend/app.py's library_get_ipuz) — the same binary passthrough as
+    proxy_library_get_pdf."""
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/library/{grid_id}/ipuz")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    if resp.status_code != 200:
+        try:
+            return JSONResponse(status_code=resp.status_code, content=resp.json())
+        except ValueError:
+            return Response(status_code=resp.status_code, content=resp.content)
+    headers = {}
+    disposition = resp.headers.get("content-disposition")
+    if disposition:
+        headers["Content-Disposition"] = disposition
+    return Response(
+        content=resp.content, media_type="application/json", headers=headers
+    )
+
+
+@app.get("/api/library/{grid_id}/jpz")
+async def proxy_library_get_jpz(grid_id: str):
+    """Relays downloading a library grid's Crossword Compiler .jpz file (see
+    backend/app.py's library_get_jpz) — the same binary passthrough as
+    proxy_library_get_pdf."""
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/library/{grid_id}/jpz")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    if resp.status_code != 200:
+        try:
+            return JSONResponse(status_code=resp.status_code, content=resp.json())
+        except ValueError:
+            return Response(status_code=resp.status_code, content=resp.content)
+    headers = {}
+    disposition = resp.headers.get("content-disposition")
+    if disposition:
+        headers["Content-Disposition"] = disposition
+    return Response(
+        content=resp.content, media_type="application/xml", headers=headers
+    )
+
+
 @app.post("/api/game/save")
 async def proxy_game_save(request: Request):
     """Relays the current game's autosave (see script.js's

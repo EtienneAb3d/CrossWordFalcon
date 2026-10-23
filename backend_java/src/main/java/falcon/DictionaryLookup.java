@@ -22,7 +22,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Accent- and case-insensitive root-family search for the "Dictionnaire"
- * panel (mirrors backend/dictionary_lookup.py).
+ * panel over the corpus, Scrabble, Hunspell and multi-word wordlists
+ * (mirrors backend/dictionary_lookup.py).
  */
 public final class DictionaryLookup {
     private DictionaryLookup() {}
@@ -30,11 +31,22 @@ public final class DictionaryLookup {
     private static final Path WORDLIST_DIR = Env.path("data");
     public static final int MAX_ROWS = 300;
 
+    /** Characters separating the words of a multi-word expression's spelling: a form holding one
+     * takes its usage score from the multi-word file first (mirrors WORD_SEPARATORS). */
+    public static final String WORD_SEPARATORS = " -'\u2019";
+
+    static boolean hasWordSeparator(String form) {
+        for (int i = 0; i < form.length(); i++) {
+            if (WORD_SEPARATORS.indexOf(form.charAt(i)) >= 0) return true;
+        }
+        return false;
+    }
+
     private static final class LangIndex {
         final List<String> forms = new ArrayList<>();
         final List<List<String>> canonicals = new ArrayList<>();
         final Map<String, List<Integer>> byKey = new HashMap<>();
-        final Map<String, Set<Integer>> byCanon = new HashMap<>();
+        final Map<String, List<Integer>> byCanon = new HashMap<>();
     }
 
     private static final Map<String, Optional<LangIndex>> CACHE = new ConcurrentHashMap<>();
@@ -52,38 +64,77 @@ public final class DictionaryLookup {
         return Py.strip(sb.toString().toLowerCase(Locale.ROOT));
     }
 
+    /** The wordlists read, in this order, with the index of their CANONIQUE column: the corpus wordlist
+     * (one spelling per row), then the Scrabble, Hunspell and multi-word ones (ACCENTUE lists every
+     * spelling, `;`-separated) — mirrors WORDLIST_SOURCES. */
+    private static final List<Map.Entry<String, Integer>> WORDLIST_SOURCES = List.of(
+            Map.entry("freq", 3), Map.entry("scrabble", 2), Map.entry("hunspell", 2), Map.entry("multi", 2));
+
+    private static void addRow(LangIndex idx, Map<Object, Object> shared, String mot, String accented,
+                               List<String> canon) {
+        @SuppressWarnings("unchecked")
+        List<String> sharedCanon = (List<String>) shared.computeIfAbsent(canon, k -> canon);
+        int rowI = idx.forms.size();
+        idx.forms.add(accented);
+        idx.canonicals.add(sharedCanon);
+        for (String key : new LinkedHashSet<>(List.of(norm(mot), norm(accented)))) {
+            if (!key.isEmpty()) idx.byKey.computeIfAbsent(key, k -> new ArrayList<>()).add(rowI);
+        }
+        Set<String> keys = new LinkedHashSet<>();
+        for (String c : sharedCanon) keys.add(norm(c));
+        for (String ck : keys) {
+            if (ck.isEmpty()) continue;
+            String sk = (String) shared.computeIfAbsent(ck, k -> ck);
+            idx.byCanon.computeIfAbsent(sk, k -> new ArrayList<>()).add(rowI);
+        }
+    }
+
+    /** One row per (spelling, lemmas) of every wordlist of WORDLIST_SOURCES, in file order, the corpus
+     * wordlist first; a spelling an earlier wordlist already gave a row gets none from a later one. */
     private static Optional<LangIndex> build(String language) {
-        Path path = WORDLIST_DIR.resolve("wordlist_" + language + "_freq.tsv");
-        if (!Files.exists(path)) return Optional.empty();
+        if (!Files.exists(WORDLIST_DIR.resolve("wordlist_" + language + "_freq.tsv"))) return Optional.empty();
         LangIndex idx = new LangIndex();
-        try (BufferedReader r = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
-            String line;
-            while ((line = r.readLine()) != null) {
-                if (line.isEmpty() || line.startsWith("#")) continue;
-                String[] parts = line.split("\t", -1);
-                if (parts.length < 2) continue;
-                String mot = parts[0];
-                String accented = parts[1].isEmpty() ? mot : parts[1];
-                String canonField = (parts.length >= 4 && !parts[3].isEmpty()) ? parts[3] : accented;
-                List<String> canon = new ArrayList<>();
-                for (String p : canonField.split(";", -1)) {
-                    String c = Py.strip(p);
-                    if (!c.isEmpty()) canon.add(c);
+        Set<String> spelled = new HashSet<>();
+        Map<Object, Object> shared = new HashMap<>();
+        for (Map.Entry<String, Integer> src : WORDLIST_SOURCES) {
+            Path path = WORDLIST_DIR.resolve("wordlist_" + language + "_" + src.getKey() + ".tsv");
+            if (!Files.exists(path)) continue;
+            boolean several = !src.getKey().equals("freq");
+            int canonCol = src.getValue();
+            Set<String> added = new HashSet<>();
+            try (BufferedReader r = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    if (line.isEmpty() || line.startsWith("#")) continue;
+                    String[] parts = line.split("\t", -1);
+                    if (parts.length < 2) continue;
+                    String mot = parts[0];
+                    List<String> spellings = new ArrayList<>();
+                    if (several) {
+                        for (String p : parts[1].split(";", -1)) {
+                            String sp = Py.strip(p);
+                            if (!sp.isEmpty()) spellings.add(sp);
+                        }
+                    } else if (!parts[1].isEmpty()) {
+                        spellings.add(parts[1]);
+                    }
+                    if (spellings.isEmpty()) spellings.add(mot);
+                    String canonField = parts.length > canonCol ? parts[canonCol] : "";
+                    List<String> lemmas = new ArrayList<>();
+                    for (String p : canonField.split(";", -1)) {
+                        String c = Py.strip(p);
+                        if (!c.isEmpty()) lemmas.add(c);
+                    }
+                    for (String accented : spellings) {
+                        if (spelled.contains(accented)) continue;
+                        added.add(accented);
+                        addRow(idx, shared, mot, accented, lemmas.isEmpty() ? List.of(accented) : List.copyOf(lemmas));
+                    }
                 }
-                if (canon.isEmpty()) canon.add(accented);
-                int rowI = idx.forms.size();
-                idx.forms.add(accented);
-                idx.canonicals.add(canon);
-                for (String key : new LinkedHashSet<>(List.of(norm(mot), norm(accented)))) {
-                    if (!key.isEmpty()) idx.byKey.computeIfAbsent(key, k -> new ArrayList<>()).add(rowI);
-                }
-                for (String c : canon) {
-                    String ck = norm(c);
-                    if (!ck.isEmpty()) idx.byCanon.computeIfAbsent(ck, k -> new HashSet<>()).add(rowI);
-                }
+            } catch (IOException e) {
+                if (!several) return Optional.empty();
             }
-        } catch (IOException e) {
-            return Optional.empty();
+            spelled.addAll(added);
         }
         return Optional.of(idx);
     }
@@ -151,7 +202,7 @@ public final class DictionaryLookup {
         if (roots.isEmpty()) return result;
 
         Set<Integer> family = new TreeSet<>();
-        for (String r : roots) family.addAll(idx.byCanon.getOrDefault(r, Set.of()));
+        for (String r : roots) family.addAll(idx.byCanon.getOrDefault(r, List.of()));
 
         record Row(String form, String canonical, Set<String> canonNorm, List<Object> definitions) {}
         List<Row> rows = new ArrayList<>();
@@ -207,15 +258,16 @@ public final class DictionaryLookup {
             m.put("form", row.form);
             m.put("canonical", row.canonical);
             m.put("definitions", row.definitions);
-            m.put("usage", UsageScores.usageScore(gridForm(row.form), language));
+            m.put("usage", UsageScores.usageScore(gridForm(row.form), language, hasWordSeparator(row.form)));
             outRows.add(m);
         }
         result.put("rows", outRows);
         return result;
     }
 
-    /** The grid form (MOT column: bare, uppercase) of a row's form (mirrors grid_form). */
+    /** The grid form (MOT column: bare, uppercase, A-Z only — a multi-word expression's separators
+     * dropped) of a row's form (mirrors grid_form). */
     public static String gridForm(String form) {
-        return norm(form.replace("ß", "ss")).toUpperCase(Locale.ROOT);
+        return norm(form.replace("ß", "ss")).toUpperCase(Locale.ROOT).replaceAll("[^A-Z]", "");
     }
 }

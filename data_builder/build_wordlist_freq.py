@@ -32,7 +32,8 @@ for, so it was folded into one script and the file removed.
   ASCII letters (`œ`→`oe`, `æ`→`ae`) rather than kept as one glued
   character: "sœur" -> WORD `SOEUR`, not `SŒUR` — every WORD must stay a
   plain run of A-Z letters, individually typable on a simple keyboard/grid
-  cell.
+  cell; a word whose WORD holds any other character (a Greek letter, "Ø",
+  a modifier-letter apostrophe…) is left out (`is_grid_form`).
 - ACCENTED is the original spelling as written in the source (natural case,
   accents/diacritics kept) — carried through so clue generation
   (backend/clues.py) can see the word's real gender/number/conjugation,
@@ -120,29 +121,14 @@ WORDLIST_DIR = Path(__file__).resolve().parent.parent / "data"
 _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 
 
-def _has_punctuation_mark(word):
-    """True if `word` contains a punctuation-like character that has no
-    business in a crossword-grid word, at the user's explicit request:
-    "filtrer les mots qui contiennent des ponctuations (apostrophe,
-    tiret, espaces, etc.)". `word.isalpha()` (the pre-existing filter,
-    just below where this is called) already rejects real Unicode
-    punctuation (hyphen, comma, quotes, spaces — category `P*`/`Z*`) on
-    its own; the one real gap is Unicode category `Lm` ("modifier
-    letter") — e.g. U+02BC MODIFIER LETTER APOSTROPHE — which Unicode
-    itself classifies as a LETTER, so `isalpha()` alone wrongly accepts
-    it. Found live in the real French corpus: `_WORD_RE` (`[^\\W\\d_]+`)
-    happily tokenizes elisions like "l'article"/"qu'il"/"c'est" as a
-    single word (`LʼARTICLE`/`QUʼIL`/`CʼEST`) whenever the source text
-    spells the apostrophe with U+02BC instead of a real punctuation
-    apostrophe (`'`/`’`) — an artifact of the corpus text, not a genuine
-    word. Checked explicitly (not just "not `Lu`/`Ll`") so a real letter
-    like French `Œ`/`Æ` (category `Lu`, genuine ligature letters, e.g.
-    `CŒUR`/`SŒUR`) is never mistaken for punctuation."""
-    return any(
-        ch.isspace() or unicodedata.category(ch)[0] == "P"
-        or unicodedata.category(ch) == "Lm"
-        for ch in word
-    )
+def is_grid_form(word):
+    """Whether `word` (a WORD/MOT, accent-stripped and uppercased) is a
+    plain run of A-Z letters — the only words a grid can hold, typable one
+    letter per cell. Rejects every other character, a Unicode letter
+    included (a Greek "Μ" from the unit prefix "µ", "Ø", "Δ", a modifier-
+    letter apostrophe U+02BC in a corpus elision "lʼarticle")."""
+    return bool(word) and all("A" <= c <= "Z" for c in word)
+
 
 # How much of the final ranking score comes from the word's canonical
 # (stem) form's frequency vs. the word's own raw frequency — see the
@@ -403,9 +389,8 @@ def main():
         # unlike 1-letter zones, are real cluable words: "et", "ou", "no",
         # etc.); a bare 1-letter zone never becomes a slot at all, so a
         # 1-letter word would never be looked up — excluded here too.
-        # `_has_punctuation_mark` catches the one real gap `isalpha()`
-        # alone leaves open — see its own docstring.
-        if not word.isalpha() or len(word) < 2 or _has_punctuation_mark(word):
+        # Only plain A-Z letters (`is_grid_form`).
+        if len(word) < 2 or not is_grid_form(word):
             continue
         candidates.append((raw_word, raw_count))
 

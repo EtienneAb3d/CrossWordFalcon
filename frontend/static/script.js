@@ -303,6 +303,10 @@ const widthInput = document.getElementById("width");
 const heightInput = document.getElementById("height");
 const blackEnrichmentInput = document.getElementById("black-enrichment");
 const wordsPerNodeInput = document.getElementById("words-per-node");
+// "Multi-mots" (GenerateRequest.multi_word_percent): maximum share of
+// multi-word expressions among the words placed, read by readMultiWordPercent.
+const multiWordPercentInput = document.getElementById("multi-word-percent");
+const DEFAULT_MULTI_WORD_PERCENT = 15;
 const symmetrySelect = document.getElementById("symmetry");
 // "Style de motif" (GenerateRequest.pattern_style): "airy" or "grouped".
 const patternStyleSelect = document.getElementById("pattern-style");
@@ -372,6 +376,7 @@ const interactiveFillStat = document.getElementById("interactive-fill-stat");
 const interactiveMessage = document.getElementById("interactive-message");
 const interactiveDirAcrossBtn = document.getElementById("interactive-dir-across-btn");
 const interactiveDirDownBtn = document.getElementById("interactive-dir-down-btn");
+const interactiveMoveBtn = document.getElementById("interactive-move-btn");
 const interactiveCleanBtn = document.getElementById("interactive-clean-btn");
 const interactiveCleanDeepBtn = document.getElementById("interactive-clean-deep-btn");
 const interactiveDefinitionInput = document.getElementById("interactive-definition-input");
@@ -842,6 +847,13 @@ let interactiveGrid = [];
 // Deep-copied snapshots of interactiveGrid; the first is pushed on entry
 // so length <= 1 means "nothing left to undo".
 let interactiveUndoStack = [];
+// Word breaks of the Interactive grid, "row,col,direction" keys: a thicker
+// line between that cell and the next one in `direction` (backend/app.py's
+// `breaks`). Typed with " ", "-" or "_" (interactiveToggleBreak), set by a
+// "Suivant" word spelling a multi-word expression (`placed.breaks`), saved
+// with the draft and the published grid; every undo snapshot carries its
+// own copy (interactivePushUndo).
+let interactiveBreaks = new Set();
 // Cells of every word "Suivant" placed this session, oldest first. The
 // latest one the grid still fully holds (interactiveOriginCells) is sent
 // with each "Suivant" as the origin of the backend's slot-selection
@@ -1536,6 +1548,7 @@ function renderAttemptPreview(examples) {
     theme_cells: themeCells,
     challenge_cells: challengeCells,
     scrabble_cells: scrabbleCells,
+    breaks: previewBreaks,
     process_number: processNumber,
     is_best: isBest,
     live_status: liveStatus,
@@ -1555,6 +1568,8 @@ function renderAttemptPreview(examples) {
     // down tally as Interactive mode's "Stats"), carried by the live tiles
     // and the attempt's own key step only — `|| []` everywhere else.
     const statLetterMap = new Map((statLetters || []).map(([r, c, l]) => [`${r},${c}`, l]));
+    // Word breaks of the multi-word expressions this grid spells.
+    const breakSet = wordBreakSet(previewBreaks);
     const item = document.createElement("div");
     item.className = "attempt-preview-item";
     const miniGrid = document.createElement("div");
@@ -1646,6 +1661,7 @@ function renderAttemptPreview(examples) {
             }
           }
           if (impossibleSet.has(`${r},${c}`)) cell.classList.add("impossible");
+          appendWordBreaks(cell, breakSet, r, c);
           cellElementsByCoord.set(`${r},${c}`, cell);
         }
         miniGrid.appendChild(cell);
@@ -1854,7 +1870,7 @@ function renderAttemptPreview(examples) {
       "</svg>";
     openInteractiveBtn.addEventListener("click", (event) => {
       event.stopPropagation();
-      openAttemptPreviewInteractive(exampleGrid);
+      openAttemptPreviewInteractive(exampleGrid, previewBreaks);
     });
     stats.appendChild(openInteractiveBtn);
     item.appendChild(stats);
@@ -1908,7 +1924,7 @@ async function chooseGeneratedGrid(index) {
 // running, its job is cancelled first (same call as the "Stop" button)
 // so it doesn't keep occupying a queue slot once the player has moved on
 // to editing this attempt by hand.
-async function openAttemptPreviewInteractive(exampleGrid) {
+async function openAttemptPreviewInteractive(exampleGrid, breaks) {
   const jobToCancel = currentJobId;
   if (jobToCancel) {
     try {
@@ -1931,6 +1947,7 @@ async function openAttemptPreviewInteractive(exampleGrid) {
       theme: theme || undefined,
       challenge_words: generateChallengeWords.length ? generateChallengeWords : undefined,
       pattern_style: patternStyleSelect.value,
+      breaks: breaks || [],
     },
     "/api/interactive/from-attempt"
   );
@@ -2723,8 +2740,36 @@ new ResizeObserver(() => {
   if (puzzle && !result.hidden) updateGridViewport();
 }).observe(boardMainEl);
 
+// ---- Word breaks ([row, col, direction] lists on the wire, "row,col,
+// direction" keys here) ----
+function wordBreakKey(r, c, direction) {
+  return `${r},${c},${direction}`;
+}
+function wordBreakSet(list) {
+  return new Set((list || []).map(([r, c, d]) => wordBreakKey(r, c, d)));
+}
+function wordBreakList(set) {
+  return [...set].map((key) => {
+    const [r, c, d] = key.split(",");
+    return [Number(r), Number(c), d];
+  });
+}
+// Draws the word breaks of cell (r, c) — a thick bar on its right edge
+// (across) and/or bottom edge (down) — as overlay spans.
+function appendWordBreaks(cell, breaks, r, c) {
+  for (const direction of ["across", "down"]) {
+    if (!breaks.has(wordBreakKey(r, c, direction))) continue;
+    const bar = document.createElement("span");
+    bar.className = `word-break word-break-${direction}`;
+    cell.appendChild(bar);
+  }
+}
+
 function renderGrid() {
   const { width, height, pattern, solution, words } = puzzle;
+  // The grid's word breaks: the Interactive grid's own, else the loaded
+  // grid's (its record's `breaks`).
+  const breaks = interactiveMode ? interactiveBreaks : wordBreakSet(puzzle.breaks);
   const numberByCell = new Map();
   for (const w of words) {
     numberByCell.set(`${w.row},${w.col}`, w.number);
@@ -2805,6 +2850,7 @@ function renderGrid() {
 
       const letter = showSolution ? solution[r][c] : userLetters[r][c];
       cell.appendChild(document.createTextNode(letter || ""));
+      appendWordBreaks(cell, breaks, r, c);
 
       // "Interactif" mode "Stats" button: light-gray suggested letter,
       // shown only while the cell is still genuinely empty (see
@@ -3161,7 +3207,7 @@ function buildVirtualKeyboard() {
     virtualKeyboardRows.appendChild(rowEl);
   }
   // "Case noire" key, at the user's explicit request: same effect as the
-  // Space bar — toggle the selected cell black, only meaningful in
+  // "." key — toggle the selected cell black, only meaningful in
   // interactive authoring mode.
   const blackKey = document.createElement("button");
   blackKey.type = "button";
@@ -5288,28 +5334,36 @@ async function renderLibraryList() {
     pdfLink.addEventListener("click", (event) => event.stopPropagation());
     pdfLink.addEventListener("keydown", (event) => event.stopPropagation());
     pdfTd.appendChild(pdfLink);
-    // Right of the PDF icon: the Across Lite .puz file (grid, answers,
-    // clues — GET /api/library/<id>/puz), for any crossword app.
-    const puzLink = document.createElement("a");
-    puzLink.href = `/api/library/${encodeURIComponent(entry.id)}/puz`;
-    puzLink.setAttribute("download", "");
-    puzLink.rel = "noopener";
-    puzLink.className = "library-link library-pdf-link library-puz-link";
-    puzLink.setAttribute("aria-label", t.libraryPuzText);
-    puzLink.title = t.libraryPuzText;
-    puzLink.innerHTML =
-      '<svg class="pdf-icon" viewBox="0 0 24 24" width="20" height="20" ' +
-      'aria-hidden="true" focusable="false">' +
-      '<path d="M7 2h7l5 5v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" ' +
-      'fill="#ffffff" stroke="#9ca3af" stroke-width="1.3"/>' +
-      '<path d="M14 2v5h5" fill="#ffffff" stroke="#9ca3af" stroke-width="1.3"/>' +
-      '<rect x="3.5" y="12" width="17" height="8" rx="1.5" fill="#2563eb"/>' +
-      '<text x="12" y="18.2" font-size="5.4" font-weight="700" ' +
-      'text-anchor="middle" fill="#ffffff" font-family="sans-serif">PUZ</text>' +
-      "</svg>";
-    puzLink.addEventListener("click", (event) => event.stopPropagation());
-    puzLink.addEventListener("keydown", (event) => event.stopPropagation());
-    pdfTd.appendChild(puzLink);
+    // Right of the PDF icon, the crossword-app files (grid, answers,
+    // clues — GET /api/library/<id>/<format>): Across Lite .puz, then ipuz
+    // and Crossword Compiler .jpz, which also draw the word breaks of
+    // multi-word answers.
+    for (const [format, badge, color, label] of [
+      ["puz", "PUZ", "#2563eb", t.libraryPuzText],
+      ["ipuz", "IPUZ", "#059669", t.libraryIpuzText],
+      ["jpz", "JPZ", "#7c3aed", t.libraryJpzText],
+    ]) {
+      const link = document.createElement("a");
+      link.href = `/api/library/${encodeURIComponent(entry.id)}/${format}`;
+      link.setAttribute("download", "");
+      link.rel = "noopener";
+      link.className = "library-link library-pdf-link library-puz-link";
+      link.setAttribute("aria-label", label);
+      link.title = label;
+      link.innerHTML =
+        '<svg class="pdf-icon" viewBox="0 0 24 24" width="20" height="20" ' +
+        'aria-hidden="true" focusable="false">' +
+        '<path d="M7 2h7l5 5v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" ' +
+        'fill="#ffffff" stroke="#9ca3af" stroke-width="1.3"/>' +
+        '<path d="M14 2v5h5" fill="#ffffff" stroke="#9ca3af" stroke-width="1.3"/>' +
+        `<rect x="3.5" y="12" width="17" height="8" rx="1.5" fill="${color}"/>` +
+        `<text x="12" y="18.2" font-size="${badge.length > 3 ? 4.4 : 5.4}" font-weight="700" ` +
+        `text-anchor="middle" fill="#ffffff" font-family="sans-serif">${badge}</text>` +
+        "</svg>";
+      link.addEventListener("click", (event) => event.stopPropagation());
+      link.addEventListener("keydown", (event) => event.stopPropagation());
+      pdfTd.appendChild(link);
+    }
     pdfTd.className = "library-export-cell";
     tr.append(
       languageTd, dateTd, versionTd, titleTd, themeTd, difficultyTd, sizeTd, authorTd,
@@ -5826,6 +5880,15 @@ function readThemePrecision() {
   const n = Number(raw);
   if (!Number.isFinite(n)) return undefined;
   return Math.min(1, Math.max(0, n));
+}
+
+// "Multi-mots" (#multi-word-percent): an integer clamped to [0, 100],
+// DEFAULT_MULTI_WORD_PERCENT when empty or unreadable. Sent by every
+// automatic generation, Interactive start, "Suivant" and "Finir la grille".
+function readMultiWordPercent() {
+  const n = Math.round(Number(String(multiWordPercentInput.value).trim()));
+  if (multiWordPercentInput.value.trim() === "" || !Number.isFinite(n)) return DEFAULT_MULTI_WORD_PERCENT;
+  return Math.min(100, Math.max(0, n));
 }
 
 // On blur, rewrites the field with the normalized value (dot, clamped to
@@ -6424,16 +6487,44 @@ function renderUsageStats(data) {
   const minColumn = 1 + data.scores.length;
   const strongColumns = new Set([minColumn,
     ...levels.map((level, i) => (level === USAGE_STATS_STRONG_LEVEL ? minColumn + 2 + i : -1))]);
-  const headLabels = [t.usageStatsColLang, ...data.scores.map(String),
-    t.usageStatsColTotalMin(USAGE_STATS_MIN_SCORE), t.usageStatsColTotal,
-    ...levels.map((level) => t[DIFFICULTY_LABEL_KEYS[level]] || level)];
-  headLabels.forEach((label, i) => {
-    const th = document.createElement("th");
-    th.textContent = label;
-    if (strongColumns.has(i)) th.className = "usage-stats-strong";
-    headRow.appendChild(th);
-  });
-  table.createTHead().appendChild(headRow);
+  const levelLabels = levels.map((level) => t[DIFFICULTY_LABEL_KEYS[level]] || level);
+  // Two header rows: "Langue", then the "Mots simples" column group (the
+  // single words: one column per usage score, "Total ≥ 3", "Total", one
+  // column per difficulty's lexicon) and the "Multi-mots" one (the
+  // multi-word expressions, counted apart: glossary size, rated, rated
+  // USAGE_STATS_MIN_SCORE or more, then the expressions of each
+  // difficulty's lexicon), their own column labels on the second row.
+  const singleLabels = [...data.scores.map(String),
+    t.usageStatsColTotalMin(USAGE_STATS_MIN_SCORE), t.usageStatsColTotal, ...levelLabels];
+  const multiLabels = [t.usageStatsColMultiTotal, t.usageStatsColMultiRated,
+    t.usageStatsColTotalMin(USAGE_STATS_MIN_SCORE), ...levelLabels];
+  const langTh = document.createElement("th");
+  langTh.textContent = t.usageStatsColLang;
+  langTh.rowSpan = 2;
+  headRow.appendChild(langTh);
+  const subRow = document.createElement("tr");
+  for (const [title, labels, extraClass] of [
+    [t.usageStatsColSingle, singleLabels, ""],
+    [t.usageStatsColMulti, multiLabels, "usage-stats-multi-start"],
+  ]) {
+    const group = document.createElement("th");
+    group.textContent = title;
+    group.colSpan = labels.length;
+    group.className = `usage-stats-group ${extraClass}`.trim();
+    headRow.appendChild(group);
+    labels.forEach((label, i) => {
+      const th = document.createElement("th");
+      th.textContent = label;
+      const classes = [];
+      if (i === 0 && extraClass) classes.push(extraClass);
+      // strongColumns counts "Langue" as column 0.
+      if (!extraClass && strongColumns.has(i + 1)) classes.push("usage-stats-strong");
+      if (classes.length) th.className = classes.join(" ");
+      subRow.appendChild(th);
+    });
+  }
+  const head = table.createTHead();
+  head.append(headRow, subRow);
   const body = table.createTBody();
   for (const row of data.languages) {
     const tr = document.createElement("tr");
@@ -6456,6 +6547,13 @@ function renderUsageStats(data) {
       if (strongColumns.has(i + 1)) td.className = "usage-stats-strong";
       tr.appendChild(td);
     });
+    const multiLevels = row.multi_level_totals || levels.map(() => null);
+    [row.multi_total, row.multi_rated, row.multi_rated_min, ...multiLevels].forEach((n, i) => {
+      const td = document.createElement("td");
+      td.textContent = fmt(n);
+      if (i === 0) td.className = "usage-stats-multi-start";
+      tr.appendChild(td);
+    });
     body.appendChild(tr);
   }
   usageStatsBody.replaceChildren(table, renderUsageLengthStats(data, fmt));
@@ -6463,7 +6561,9 @@ function renderUsageStats(data) {
 
 // Words rated at least USAGE_STATS_MIN_SCORE per word length (the backend's
 // LENGTH_STATS_MIN_SCORE) / words of the easy-difficulty lexicon of that
-// length: one row per length, longest first, one column per language.
+// length: one row per length, longest first, one column per language for
+// the single words ("Mots simples" group), then the same count over the
+// multi-word expressions ("Multi-mots" group).
 function renderUsageLengthStats(data, fmt) {
   const t = I18N[uiLanguage];
   const wrap = document.createElement("div");
@@ -6473,30 +6573,57 @@ function renderUsageLengthStats(data, fmt) {
   title.textContent = t.usageStatsLengthTitle(USAGE_STATS_MIN_SCORE);
   const table = document.createElement("table");
   table.className = "usage-stats-table usage-stats-lengths";
+  const languageName = (row) =>
+    languageSelect.querySelector(`option[value="${row.language}"]`)?.textContent || row.language;
+  // "Multi-mots" column group: the same count over the multi-word
+  // expressions, one column per language that has some.
+  const multiRows = data.languages.filter((row) => row.multi_total != null);
+  // Two header rows: "Longueur", then the "Mots simples" group (one column
+  // per language) and the "Multi-mots" one (one column per language with
+  // expressions), the language names on the second row.
   const headRow = document.createElement("tr");
   const corner = document.createElement("th");
   corner.textContent = t.usageStatsColLength;
+  corner.rowSpan = 2;
   headRow.appendChild(corner);
-  for (const row of data.languages) {
-    const th = document.createElement("th");
-    th.textContent = languageSelect.querySelector(`option[value="${row.language}"]`)?.textContent
-      || row.language;
-    headRow.appendChild(th);
+  const subRow = document.createElement("tr");
+  for (const [title, rows, extraClass] of [
+    [t.usageStatsColSingle, data.languages, ""],
+    [t.usageStatsColMulti, multiRows, "usage-stats-multi-start"],
+  ]) {
+    if (!rows.length) continue;
+    const group = document.createElement("th");
+    group.textContent = title;
+    group.colSpan = rows.length;
+    group.className = `usage-stats-group ${extraClass}`.trim();
+    headRow.appendChild(group);
+    rows.forEach((row, k) => {
+      const th = document.createElement("th");
+      th.textContent = languageName(row);
+      if (k === 0 && extraClass) th.className = extraClass;
+      subRow.appendChild(th);
+    });
   }
-  table.createTHead().appendChild(headRow);
+  const head = table.createTHead();
+  head.append(headRow, subRow);
   const body = table.createTBody();
+  const pairCell = (rated, easy, i) => {
+    const td = document.createElement("td");
+    td.textContent = `${fmt(rated ? rated[i] : null)} / ${fmt(easy ? easy[i] : null)}`;
+    return td;
+  };
   (data.lengths || []).forEach((length, i) => {
     const tr = document.createElement("tr");
     const th = document.createElement("th");
     th.scope = "row";
     th.textContent = String(length);
     tr.appendChild(th);
-    for (const row of data.languages) {
-      const td = document.createElement("td");
-      td.textContent = `${fmt(row.length_counts ? row.length_counts[i] : null)} / ${
-        fmt(row.easy_length_counts ? row.easy_length_counts[i] : null)}`;
+    for (const row of data.languages) tr.appendChild(pairCell(row.length_counts, row.easy_length_counts, i));
+    multiRows.forEach((row, k) => {
+      const td = pairCell(row.multi_length_counts, row.multi_easy_length_counts, i);
+      if (k === 0) td.className = "usage-stats-multi-start";
       tr.appendChild(td);
-    }
+    });
     body.appendChild(tr);
   });
   wrap.append(title, table);
@@ -7158,8 +7285,9 @@ function renderInteractiveMovePreview() {
 // black cells never move. A source letter belonging to a complete
 // emplacement (every cell lettered) that does not move whole is left in
 // place — moving a word never mutilates a complete word it crosses. The selected zone, the selected cell, the
-// theme/"Mots Défi"/Scrabble letter colouring and the definition of every
-// word moved whole follow the letters; any other definition touching a
+// theme/"Mots Défi"/Scrabble letter colouring, the word breaks between two
+// moved letters and the definition of every word moved whole follow the
+// letters; any other definition touching a
 // changed cell is dropped. Refused (message) when a letter would leave the
 // grid or land on a black cell.
 function finishInteractiveMove() {
@@ -7221,6 +7349,23 @@ function finishInteractiveMove() {
     for (const key of set) if (plan.source.has(key)) out.add(shiftKey(key));
     return out;
   };
+  // Word breaks: one whose two cells both move follows them; one touching
+  // an erased source cell or an overwritten destination cell is dropped.
+  const movedCell = (key) => plan.source.has(key) && !kept.has(key);
+  const breaks = new Set();
+  const movedBreaks = [];
+  for (const bk of interactiveBreaks) {
+    const [r, c, d] = bk.split(",");
+    const a = `${r},${c}`;
+    const b = d === "across" ? `${r},${Number(c) + 1}` : `${Number(r) + 1},${c}`;
+    if (movedCell(a) && movedCell(b)) {
+      movedBreaks.push(wordBreakKey(Number(r) + plan.dr, Number(c) + plan.dc, d));
+    } else if (!movedCell(a) && !movedCell(b) && !plan.target.has(a) && !plan.target.has(b)) {
+      breaks.add(bk);
+    }
+  }
+  for (const bk of movedBreaks) breaks.add(bk);
+  interactiveBreaks = breaks;
   interactiveThemeCells = moveSet(interactiveThemeCells);
   interactiveChallengeCells = moveSet(interactiveChallengeCells);
   interactiveScrabbleCells = moveSet(interactiveScrabbleCells);
@@ -7239,6 +7384,35 @@ function finishInteractiveMove() {
   renderInteractive();
 }
 
+// Interactive mode's move mode: while on, a click-drag on the grid moves
+// letters (as Shift+click-drag does), the grid shows the "move" cursor (two
+// crossed double arrows) and #interactive-move-btn is active. The button
+// toggles it; pressing Shift turns it on and releasing Shift turns it off
+// (`interactiveMoveShiftHeld`, also synced from the mouse's own shiftKey
+// for a Shift pressed or released while the page had no focus).
+let interactiveMoveMode = false;
+let interactiveMoveShiftHeld = false;
+function setInteractiveMoveMode(on) {
+  interactiveMoveMode = Boolean(on);
+  interactiveMoveBtn.classList.toggle("active", interactiveMoveMode);
+  gridEl.classList.toggle("move-cursor", interactiveMoveMode && interactiveMode);
+}
+function setInteractiveMoveShift(held) {
+  if (held === interactiveMoveShiftHeld) return;
+  interactiveMoveShiftHeld = held;
+  setInteractiveMoveMode(held);
+}
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Shift") setInteractiveMoveShift(true);
+});
+document.addEventListener("keyup", (e) => {
+  if (e.key === "Shift") setInteractiveMoveShift(false);
+});
+window.addEventListener("blur", () => setInteractiveMoveShift(false));
+gridEl.addEventListener("mousemove", (e) => setInteractiveMoveShift(e.shiftKey));
+interactiveMoveBtn.addEventListener("mousedown", (e) => e.preventDefault());
+interactiveMoveBtn.addEventListener("click", () => setInteractiveMoveMode(!interactiveMoveMode));
+
 // Starts/continues a click-drag zone selection on one grid cell — see
 // interactiveZoneSelection's own docstring. Mousedown begins tracking;
 // mouseenter (while a drag is already active) extends the live preview
@@ -7253,9 +7427,9 @@ function attachInteractiveDragHandlers(cell, r, c) {
     // otherwise fight with this custom one (grid cells hold real text
     // nodes for their letters/numbers).
     e.preventDefault();
-    // Shift+click-drag moves letters instead of selecting a zone (see
-    // interactiveMoveStart).
-    if (e.shiftKey) {
+    // Shift+click-drag, or a click-drag in move mode, moves letters instead
+    // of selecting a zone (see interactiveMoveStart).
+    if (e.shiftKey || interactiveMoveMode) {
       interactiveMoveStart = interactiveMoveSourceLetters().size ? { row: r, col: c } : null;
       interactiveMoveCurrent = interactiveMoveStart;
       if (!interactiveMoveStart) setInteractiveMessage(I18N[uiLanguage].interactiveMoveNothing, true);
@@ -7648,7 +7822,9 @@ function renderInteractive() {
 
 // ---- Editing primitives (push undo, then re-render) ----
 function interactivePushUndo() {
-  interactiveUndoStack.push(interactiveGrid.map((row) => row.slice()));
+  const snapshot = interactiveGrid.map((row) => row.slice());
+  snapshot.breaks = new Set(interactiveBreaks);
+  interactiveUndoStack.push(snapshot);
   if (interactiveUndoStack.length > 500) interactiveUndoStack.shift();
   // Any grid mutation invalidates the last backend fill diagnostics; the
   // "Suivant" handler re-populates them from its own response afterwards.
@@ -7661,7 +7837,7 @@ function interactivePushUndo() {
 // mode, black cells that can be replaced must not be skipped (unlike in
 // Play mode)." A black cell in
 // Interactive mode is always directly editable (interactiveTypeLetter()
-// itself never refuses to type over one — only the Space key's own
+// itself never refuses to type over one — only the "." key's own
 // toggle treats it specially), so skipping past it here would leave the
 // player unable to simply keep typing straight through it.
 function advanceInteractiveSelection() {
@@ -7691,6 +7867,33 @@ function interactiveClearDefsAt(row, col) {
       interactiveDefs.delete(interactiveKey(s));
     }
   }
+}
+
+// A "Suivant" word replaces the word breaks inside its own slot with its
+// own (`placed.breaks`: those of the multi-word expression it spells).
+function applyPlacedWordBreaks(placed) {
+  if (!placed || !placed.cells) return;
+  const direction = placed.direction;
+  for (const [r, c] of placed.cells.slice(0, -1)) {
+    interactiveBreaks.delete(wordBreakKey(r, c, direction));
+  }
+  for (const [r, c, d] of placed.breaks || []) interactiveBreaks.add(wordBreakKey(r, c, d));
+}
+
+// " ", "-" or "_": toggles the word break between the cell before the
+// selection, in the current direction, and the selected cell (the one the
+// next typed letter goes to), without moving the selection.
+function interactiveToggleBreak() {
+  if (!interactiveMode || !selected) return;
+  const { row, col } = selected;
+  const across = activeDirection === "across";
+  if (across ? col === 0 : row === 0) return;
+  const key = across ? wordBreakKey(row, col - 1, "across") : wordBreakKey(row - 1, col, "down");
+  interactivePushUndo();
+  if (interactiveBreaks.has(key)) interactiveBreaks.delete(key);
+  else interactiveBreaks.add(key);
+  setInteractiveMessage("");
+  renderInteractive();
 }
 
 function interactiveToggleBlack() {
@@ -7748,7 +7951,9 @@ function interactiveErase() {
 function interactiveUndo() {
   if (interactiveUndoStack.length <= 1) return;
   interactiveUndoStack.pop();
-  interactiveGrid = interactiveUndoStack[interactiveUndoStack.length - 1].map((r) => r.slice());
+  const top = interactiveUndoStack[interactiveUndoStack.length - 1];
+  interactiveGrid = top.map((r) => r.slice());
+  interactiveBreaks = new Set(top.breaks || []);
   clearInteractiveDiagnostics();
   setInteractiveMessage("");
   renderInteractive();
@@ -7829,8 +8034,13 @@ function handleInteractiveKeydown(event) {
   } else if (key.length === 1 && /[a-zA-Z]/.test(key)) {
     event.preventDefault();
     interactiveTypeLetter(key);
-  } else if (key === " " || /^\p{P}$/u.test(key)) {
-    // A space or any punctuation mark toggles the selected cell black.
+  } else if (key === " " || key === "-" || key === "_") {
+    // A space, "-" or "_" toggles a word break before the selected cell.
+    event.preventDefault();
+    interactiveToggleBreak();
+  } else if (/^\p{P}$/u.test(key)) {
+    // Any other punctuation mark (".", by default) toggles the selected
+    // cell black.
     event.preventDefault();
     interactiveToggleBlack();
   } else if (key === "Backspace" || key === "Delete") {
@@ -8950,6 +9160,9 @@ function enterInteractiveMode(state) {
     if (gp.words_per_node !== undefined && gp.words_per_node !== null) {
       wordsPerNodeInput.value = gp.words_per_node;
     }
+    if (gp.multi_word_percent !== undefined && gp.multi_word_percent !== null) {
+      multiWordPercentInput.value = gp.multi_word_percent;
+    }
     if (gp.symmetry) symmetrySelect.value = gp.symmetry;
     if (gp.pattern_style) {
       patternStyleSelect.value = gp.pattern_style;
@@ -8998,6 +9211,10 @@ function enterInteractiveMode(state) {
   renderGenerateChallengeList();
   interactiveUndoStack = [];
   interactivePlacedHistory = state.placed && state.placed.cells ? [state.placed.cells] : [];
+  // The grid's word breaks: a draft's or library grid's own, plus the
+  // first word's on a fresh start.
+  interactiveBreaks = wordBreakSet(state.breaks);
+  applyPlacedWordBreaks(state.placed);
   interactivePushUndo();
   setInteractiveDiagnostics(state); // after pushUndo (which clears them)
   interactiveTitleProposed = false;
@@ -9152,6 +9369,7 @@ function enterInteractiveMode(state) {
 
 function hideInteractivePanel() {
   interactiveMode = false;
+  setInteractiveMoveMode(false);
   interactiveControls.hidden = true;
   interactiveResults.hidden = true;
   gridColumn.classList.remove("interactive-flank");
@@ -9271,6 +9489,7 @@ async function autosaveInteractiveWork() {
         // InteractiveSaveWorkRequest/grid_store.save_grid_work.
         challenge_words: interactiveChallengeWords,
         diagnostics: interactiveDiagnosticsPayload(),
+        breaks: wordBreakList(interactiveBreaks),
       }),
     }, FETCH_TIMEOUT_MS);
   } catch (err) {
@@ -9502,6 +9721,7 @@ function applyStopDumpRequest(req) {
   if (req.mode && modeSelect.querySelector(`option[value="${req.mode}"]`)) modeSelect.value = req.mode;
   if (req.black_enrichment_percent != null) blackEnrichmentInput.value = req.black_enrichment_percent;
   if (req.words_per_node != null) wordsPerNodeInput.value = req.words_per_node;
+  if (req.multi_word_percent != null) multiWordPercentInput.value = req.multi_word_percent;
   if (req.symmetry) symmetrySelect.value = req.symmetry;
   if (req.pattern_style) {
     patternStyleSelect.value = req.pattern_style;
@@ -9733,6 +9953,7 @@ interactiveNextBtn.addEventListener("click", async () => {
         job_id: interactiveJobId, grid: wireGrid,
         challenge_words: interactiveChallengeWords,
         last_placed_cells: interactiveOriginCells(),
+        multi_word_percent: readMultiWordPercent(),
       }),
     }, FETCH_TIMEOUT_MS);
     if (resp.status === 404) {
@@ -9795,6 +10016,7 @@ interactiveNextBtn.addEventListener("click", async () => {
     // just below, which already replaces the whole grid for the same
     // "can change cells outside the obvious ones" reason.
     interactiveGrid = data.grid.map((row) => row.map((ch) => (ch === "." ? "" : ch)));
+    applyPlacedWordBreaks(data.placed);
     if (data.placed.from_theme) {
       for (const [r, c] of data.placed.cells) interactiveThemeCells.add(`${r},${c}`);
     }
@@ -10592,6 +10814,7 @@ async function runInteractiveFinish(zoneCells) {
           mode: finishMode,
           black_enrichment_percent: Number(blackEnrichmentInput.value),
           words_per_node: Number(wordsPerNodeInput.value),
+          multi_word_percent: readMultiWordPercent(),
           symmetry: symmetrySelect.value,
           pattern_style: patternStyleSelect.value,
           difficulty: document.getElementById("difficulty").value,
@@ -10600,6 +10823,7 @@ async function runInteractiveFinish(zoneCells) {
           challenge_words: generateChallengeWords,
           pseudo: userPseudo || undefined,
           zone_cells: zoneCells || undefined,
+          breaks: wordBreakList(interactiveBreaks),
         }),
       }, FETCH_TIMEOUT_MS);
     } catch (err) {
@@ -10733,6 +10957,7 @@ interactiveSaveBtn.addEventListener("click", async () => {
         // like the two calls above — otherwise that refresh would blank
         // them out of the draft.
         diagnostics: interactiveDiagnosticsPayload(),
+        breaks: wordBreakList(interactiveBreaks),
       }),
     }, FETCH_TIMEOUT_MS);
     const data = await resp.json();
@@ -10899,6 +11124,7 @@ form.addEventListener("submit", async (event) => {
   const mode = document.getElementById("mode").value;
   const blackEnrichmentPercent = Number(blackEnrichmentInput.value);
   const wordsPerNode = Number(wordsPerNodeInput.value);
+  const multiWordPercent = readMultiWordPercent();
   // Optional Thématique (word list, "+/-" chip list — see themeKeywords/
   // renderThemeList() above) — joined back into one space-separated
   // string, omitted if empty. Whatever is still pending, untyped-in
@@ -10924,6 +11150,7 @@ form.addEventListener("submit", async (event) => {
       language, width, height, difficulty,
       bilingual_language: interactiveBilingualLanguage || undefined,
       black_enrichment_percent: blackEnrichmentPercent,
+      multi_word_percent: multiWordPercent,
       symmetry: symmetrySelect.value,
       pattern_style: patternStyleSelect.value,
       theme: theme || undefined,
@@ -10957,6 +11184,7 @@ form.addEventListener("submit", async (event) => {
           bilingual_language: bilingualLanguage !== language ? bilingualLanguage : undefined,
           black_enrichment_percent: blackEnrichmentPercent,
           words_per_node: wordsPerNode,
+          multi_word_percent: multiWordPercent,
           symmetry: symmetrySelect.value,
           pattern_style: patternStyleSelect.value,
           // Thématique: a word list semantically steering the grid

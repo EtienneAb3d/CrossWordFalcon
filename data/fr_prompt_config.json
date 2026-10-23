@@ -101,6 +101,31 @@
     },
     "rare_forms": "an imperfect or pluperfect subjunctive, or a simple past (passé simple) in the first or second person",
     "common_forms": "present, imperfect indicative, future, conditional, simple past in the third person, participle, infinitive, plural, feminine",
-    "unaccented_example": "\"introspectees\" = \"introspectées\""
+    "unaccented_example": "\"introspectees\" = \"introspectées\"",
+    "multi_incomplete_examples": [
+      "les deux",
+      "du monde",
+      "mon père",
+      "un jour",
+      "tant que",
+      "à cause",
+      "une bonne",
+      "lors de",
+      "c'est pourquoi",
+      "prêt à",
+      "pour voir",
+      "de confiance"
+    ],
+    "multi_established_examples": [
+      "petit déjeuner",
+      "coffre-fort",
+      "faire semblant",
+      "perdre de vue",
+      "après coup",
+      "en résumé",
+      "à bloc",
+      "Dieu merci",
+      "New Jersey"
+    ]
   }
 }

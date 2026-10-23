@@ -834,7 +834,7 @@ project's engineering language.
   of MB total) — small enough to ship directly and load-bearing at runtime
   (the "easy"-difficulty gloss filter, LLM clue grounding), unlike the much
   larger raw corpus/dump caches above.
-- `data/inflection/<lang>.jsonl` **is** committed (~4–23 MB per language,
+- `data/inflection/<lang>_inflect.jsonl` **is** committed (~4–23 MB per language,
   ~100 MB total) — the exact-form grammatical-analysis table read by
   `backend/inflection_lookup.py` for the clue prompt's `A=` line. Stored
   **plain uncompressed** (at the user's request, so the tables can be
@@ -944,7 +944,7 @@ project's engineering language.
   tags inflection with a consistent structured vocabulary — extracts every
   `form-of` sense's grammatical tags, filters to the surface forms in
   `data/wordlist_<lang>_freq.tsv`, and writes
-  `data/inflection/<lang>.jsonl` (committed, plain uncompressed). Read at runtime by
+  `data/inflection/<lang>_inflect.jsonl` (committed, plain uncompressed). Read at runtime by
   `backend/inflection_lookup.py` for the clue prompt's `A=` line. It reads
   the wordlist, so re-run it after a wordlist rebuild.
 - `data_builder/build_<lang>.sh` (one per fr/en/de/es/it/pt) is a one-shot
@@ -1781,6 +1781,108 @@ the current defaults/behavior to know before touching this code.
   re-validated by `hunspell -G`; proper nouns and abbreviations are kept;
   a usage-score run skips the words its final file already rates, so the
   extension rates only the new words.
+- **Multi-word expressions are listed in `data/wordlist_<lang>_multi.tsv`**
+  (English and French, the user's request; Scrabble wordlist format,
+  committed), built by `data_builder/build_wordlist_multi.py`
+  (`build_<lang>.sh` step 6/11) from the Wiktionary headwords made of
+  several words joined by a space or a hyphen, the MOT being the
+  expression with its separators removed (ARCENCIEL). The user's rules:
+  proper nouns, proverbs, abbreviations and onomatopoeias are kept; a MOT
+  has at most 20 letters. Choices made with
+  it, to revisit with the user: both Kaikki dumps (own-language and
+  English edition) are read; symbols, affixes, articles, contractions and
+  typographic variants are left out; inflected forms are kept with their
+  lemmas; a MOT is not counted with its separators. The user's rule:
+  grammatical phrases are left out — stopwords only ("ce que", "to the")
+  and subject + verb or infinitive ("je suis", "to be"). Choices made with
+  it, to revisit with the user: the stopword and subject lists are
+  hand-written in the builder (auxiliaries included, so "is a" is
+  stopwords only); the subject + verb rule only applies to verb, phrase
+  and interjection entries (the conjunction "c'est-à-dire" stays), needs
+  exactly one non-stopword, a verb by the single-word inflection table or
+  gloss dictionary, with the subject right before it (object pronouns
+  allowed in between) or, in French, hyphenated after it, or "to" right
+  before it ("go for it", "screw it" stay); reflexive verbs ("s'en aller")
+  stay. The user's further rule: incomplete verbal phrases are left out
+  too. Choices made with it, to revisit with the user: verb, phrase and
+  interjection entries only (keeps "faute de", "care of", "système D"); a
+  single verb form first (after an elided negation) followed by stopwords
+  ending with a preposition, conjunction or article ("want to", "essayer
+  de", "look for", "put up with"), or by a bare negation ("sais pas",
+  "don't know"); phrasal-verb particles (on, up, off, in…) are not
+  dangling ("come on", "give up" stay); a MOT already in the freq or Scrabble
+  wordlist is kept (see the next entry for the grid lexicon). Companion files, the
+  user's request: `data/wordlist_<lang>_freq_multi.tsv`
+  (`build_wordlist_freq_multi.py`), `data/gloss_dictionary/<lang>_glosses_
+  multi.jsonl` and `data/inflection/<lang>_inflect_multi.jsonl`
+  (`build_gloss_dictionary.py --multi`, `build_inflections.py --multi`),
+  each in its single-word counterpart's format. Choices made with them, to
+  revisit with the user: counts over the capped corpus when the full one
+  is not on disk (the case for fr/en here); a space, hyphen or apostrophe
+  all separate words when counting; nested occurrences count; only
+  expressions found at least once are listed; a capitalized main
+  spelling is treated as a likely proper noun (x0.25). The gloss and
+  inflection lookups read the `_multi` files with the single-word ones;
+  `build_usage_scores.py --source multi` rates the expressions into
+  `usage_score_<lang>_multi.tsv` (the user's rule: an expression that does
+  not clearly make sense out of a sentence giving it its meaning is rated
+  0). Choice made with it, to revisit with the user: that judgment is a
+  separate one-letter Y/N LLM call before the rating (embedded in the
+  rating prompt, the local 9B model ignored it); Qdrant does not hold
+  them.
+- **Multi-word expressions fill grids, with their word breaks** — the
+  user's rules: the multi glossaries join grid filling (automatic and
+  Interactive) with the usual usage-score + frequency selection (multi
+  wordlist ≈ Scrabble's role, freq_multi ≈ the freq wordlist's), so until
+  `usage_score_<lang>_multi.tsv` exists they only enter at Hard; word
+  breaks are drawn as a thicker line everywhere (play, Interactive,
+  previews, PDF/SVG/PNG); in Interactive mode " ", "-" or "_" types a
+  break (saved with the grid) and "." (any other punctuation) a black
+  cell. Choices made with them, to revisit with the user: an expression
+  whose grid form is already a single word stays that word (no breaks);
+  expressions count against the proper-noun/no-gloss quotas; a break is
+  `[row, col, direction]` (after that cell), typed before the selected
+  cell without moving it; a "Suivant" expression replaces the breaks of
+  its slot; a Shift+drag letter move carries the breaks between two moved
+  letters and drops the other breaks touching a changed cell. Exports, the
+  user's request: the .puz format cannot draw a break, so a word with
+  breaks gets its enumeration appended to its clue ("(3-2-4)"), and the
+  Library also offers ipuz and Crossword Compiler .jpz files, which draw
+  them as bars and carry the enumeration. Choices made with it, to
+  revisit with the user: the separator is "-" where the word's spelling
+  has a hyphen, "," otherwise; a word with no break gets no enumeration;
+  the .jpz is uncompressed XML; the ipuz clue lists are "Across"/"Down",
+  the .jpz headings in the grid's language. Row references take two low bits (freq/Scrabble/multi)
+  in both back ends. The user's filters for the multi wordlists (all
+  applied, fr and en): stopwords-only phrases, conjugated or infinitive
+  verbal phrases, incomplete verbal phrases, determiner + one content word,
+  an ending preposition/conjunction, and an entry with no definition of
+  its own absent from the corpus. Choices made with them, to revisit with
+  the user: proper nouns escape the determiner rule; French reflexive
+  verbs escape the verbal rule; known collateral: "au revoir", "a
+  posteriori", "quatre-quarts", "sauter le pas", "c'est du chinois",
+  "à cause de", "in lieu of" are left out.
+- **The share of multi-word expressions in a grid is capped** — the
+  user's rule: a "Multi-mots" field right of "Mots Défi" sets the maximum
+  percentage of words coming from the multi-word glossaries (15 % by
+  default, `MULTI_WORD_PERCENT`); choosing a new expression is forbidden
+  while the expressions already placed exceed that share, so placing more
+  single words allows them again (`Filler._multi_words_blocked`, applied
+  in `Filler.ordered_candidates`, Java `multiWordsBlocked`). Choices made
+  with it, to revisit with the user: "exceed" is strict
+  (`multi * 100 > percent * placed`), so the first expression of an empty
+  grid is allowed, but 0 % forbids every expression; a word counts as an
+  expression when its row is in `wordlist_<lang>_multi.tsv`; every word
+  assigned counts as placed (locked and carried words included); a "Mots
+  Défi" word is never limited; the cap applies wherever a word is chosen
+  — the search attempts, the end-of-search closure of implied slots (a
+  slot whose only candidate is a forbidden expression stays open), the
+  pre-cleanup optimization and its last-chance fill, the shorter/longer
+  words of the "reprise telle quelle" repairs, the final minimization —
+  and to Interactive "Suivant" (and "Finir la grille", which reads the
+  form); a filtered expression stays in the slot's domain (it is just not
+  tried), like a word the usage filter drops.
+
 - **No two words of a grid share a canonical form** — the user's rule:
   "interdire la pose d'un mot ayant la même forme canonique qu'un mot déjà
   présent dans la grille" (French EST/ETE/ETAIT, English ELM/ELMS). Each
@@ -1833,15 +1935,30 @@ the current defaults/behavior to know before touching this code.
   union (the user's answer); an unrated word is dropped at Easy/Medium in both criteria; a
   freq-only word gets its score from `usage_score_<lang>_scrabble_out.tsv`
   (`build_usage_scores.py --source out`, `build_<lang>.sh` step 8); the
-  easy inflection filter of the Scrabble words and the Easy quotas are not
-  applied (a freq word rated 3 or more enters at Easy even without a
-  definition or as a likely proper noun), the Medium/Hard quotas (2 and
-  5 proper nouns, words with no definition) apply; the in-search 60 %
+  easy inflection filter of the Scrabble words and the Easy no-gloss
+  quota are not applied (a word rated 3 or more enters at Easy even
+  without a definition), the Medium/Hard quotas (2 and 5 proper nouns,
+  words with no definition) apply. The user's rules: the proper-noun
+  quotas apply even with usage scores, and a word whose gloss entries
+  have only the "name" type, no other type possible, is a proper noun
+  (`_proper_noun_check`, `gloss_lookup.only_proper_noun_glosses`, Java
+  `Words.properNounCheck`/`GlossLookup.onlyProperNounGlosses`). Choices
+  made with them, to revisit with the user: the Easy quota being 0, every
+  likely proper noun is dropped from the Easy lexicon rather than left to
+  the end-of-fill check; Scrabble words stay exempt; the "name"-only test
+  covers the word's spelling and its lemmas (at least one entry found,
+  all "name"), in every language including German, and applies wherever
+  the proper-noun signal is used (freq cut, quota sets, multi-word
+  expressions); the in-search 60 %
   usage filter and the content-score correction stay; an explicit CLI
   `--max-words` keeps the old cut. The localhost-only usage-score
   statistics panel shows each difficulty's lexicon size (one column per
   level after "Total") and, per length, "rated ≥ 3 / Easy lexicon", the
-  user's rule; those sizes are measured once per back-end process.
+  user's rule; those sizes are measured once per back-end process. The
+  user's rule: both tables count single words only under a "Mots simples"
+  column group, the multi-word expressions apart under a "Multi-mots"
+  one (glossary size, rated, rated ≥ 3, per difficulty; per length,
+  rated ≥ 3 / Easy).
 - **An unaccented spelling is looked up accents aside.** The Scrabble
   lists carry no accents, so a wordlist row (freq or Scrabble) whose
   ACCENTUE holds no accent has unknown accents: the user's rule is that
@@ -1860,6 +1977,31 @@ the current defaults/behavior to know before touching this code.
   "péché" does not gain "pêche"); outside German a variant must keep the
   entry's case; the example-sentence index stays keyed by the exact
   ACCENTUE.
+- **The Dictionnaire search reads every wordlist giving a grid form's
+  possible accented spellings** — the user's rule: "consulter tous les
+  wordlist permettant de retrouver les formes accentuées possibles". Its
+  index (`backend/dictionary_lookup.py`'s `_build_index`/
+  `WORDLIST_SOURCES`, Java `DictionaryLookup.build`) holds the freq
+  wordlist, then every ACCENTUE spelling of the Scrabble, Hunspell and
+  multi-word wordlists, so a word "Suivant" places is always found from
+  its grid form. Choices made with it, to revisit with the user:
+  `wordlist_<lang>_freq_multi.tsv` is not read (its spellings are already
+  the multi wordlist's); a spelling an earlier list gave is skipped; the
+  same index feeds `word_forms` (clue writing, chatbot), whose rows thus
+  include the other lists' spellings after the freq ones; it costs about
+  270 MB more for French, loaded once per process on first use.
+- **Every dictionary word is a plain run of A-Z letters** — the user's
+  rule: words holding a non-alphabetic character are removed from the
+  dictionaries. `build_wordlist_freq.py` keeps only an A-Z MOT
+  (`is_grid_form`, like the Scrabble/Hunspell/multi builders' `grid_form`),
+  every lexicon loader ignores any other row (`_is_grid_word`, Java
+  `Words.isGridWord`), and the committed files hold none. Choice made with
+  it, to revisit with the user: "alphabetic" means A-Z, so a letter of
+  another alphabet (the Greek "Μ" of "µg", "Ø", "Δ") is removed too; the
+  rows were deleted from the committed freq wordlists and usage-score
+  "out" files, and their Qdrant points removed, without rebuilding the
+  rest of the pipeline (gloss/inflection entries of those lemmas stay,
+  unused).
 - **No ligature letter in any dictionary.** Every text column of the
   wordlists, the gloss dictionary, the inflection table and Qdrant spells
   `œ`/`æ` (and their capitals) as two plain letters (`fold_ligatures`,
@@ -2721,7 +2863,7 @@ the current defaults/behavior to know before touching this code.
   form's part of speech AND full inflection, to feed the `A=` analysis
   line directly. Primary source: `backend/inflection_lookup.py`'s
   `describe_form()` — a **pure-local** read of
-  `data/inflection/<lang>.jsonl` (built by `data_builder/build_
+  `data/inflection/<lang>_inflect.jsonl` (built by `data_builder/build_
   inflections.py` from the English-Wiktionary Kaikki dump, checked in
   plain/uncompressed for hand inspection, ~100 MB total for all 6
   languages, filtered to each wordlist), whose

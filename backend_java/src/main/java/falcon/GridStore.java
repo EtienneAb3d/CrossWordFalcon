@@ -295,7 +295,8 @@ public final class GridStore {
     public static String saveGridWork(String jobId, Object grid, Object definitions, Object title, Object language,
                                       Object difficulty, Object theme, Collection<String> priorityWords, Object seed,
                                       String pseudo, String resumedFrom, Object origin, Object bilingualLanguage,
-                                      Object generationParams, Collection<?> challengeWords, Object diagnostics)
+                                      Object generationParams, Collection<?> challengeWords, Object diagnostics,
+                                      Object breaks)
             throws IOException {
         pseudo = blankToNull(pseudo);
         List<Path> existing = glob(GRID_WORK_DIR, "*_" + jobId + ".json");
@@ -344,6 +345,10 @@ public final class GridStore {
         record.put("origin", origin);
         record.put("generation_params", generationParams);
         record.put("challenge_words", challengeWords == null ? new ArrayList<>() : new ArrayList<>(challengeWords));
+        // Word breaks of the grid ([row, col, direction]), typed by the author or set by a placed expression.
+        List<Object> breakList = new ArrayList<>();
+        for (Object b : Json.listOrEmpty(breaks)) breakList.add(new ArrayList<>(Json.asList(b)));
+        record.put("breaks", breakList);
         record.put("diagnostics", diagnostics);
         record.put("previous", previous);
         record.put("created_at", createdAt != null ? createdAt : now);

@@ -51,19 +51,23 @@ from .qdrant_store import QdrantStore, QdrantStoreError
 from .secret_store import is_valid_pseudo
 from .secret_store import verify_or_claim as verify_or_claim_pseudo_secret
 from .puz_export import PUZ_MEDIA_TYPE, render_puz
+from .ipuz_export import IPUZ_MEDIA_TYPE, render_ipuz
+from .jpz_export import JPZ_MEDIA_TYPE, render_jpz
 from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, GenerationPaused,
-    BLACK_SYMMETRIES, PATTERN_STYLES, PREFILL_MIN_WORD_COUNT, style_index, WORDS_PER_NODE, DualIndex, DualSet, build_letters_grid,
+    BLACK_SYMMETRIES, PATTERN_STYLES, PREFILL_MIN_WORD_COUNT, style_index, WORDS_PER_NODE, MULTI_WORD_PERCENT, DualIndex, DualSet, build_letters_grid,
     build_word_entries, challenge_word_grid_form, extract_slots, generate_grid, slot_direction,
     word_forms,
     _interactive_fill_diagnostics, _interactive_letter_stats,
     _serialize_resume_state, interactive_boundary_candidates, interactive_clean_impossible_zones,
     interactive_crossing_words, interactive_minimize_black_cells,
     interactive_place_word, interactive_slot_candidates, lexicon_length_counts, lexicon_words,
+    multi_lexicon_length_counts, multi_only_mots,
     load_lexicon,
     make_pattern,
-    scrabble_word_cells, scrabble_wordlist_path,
+    scrabble_word_cells, scrabble_wordlist_path, multi_wordlist_path,
     scrabble_words_for_languages,
+    multi_breaks_for_languages, word_break_edges, placed_word_break_edges,
 )
 from .grid_store import (
     _slugify_title, get_grid, list_grids, save_grid_json,
@@ -882,6 +886,13 @@ class GenerateRequest(BaseModel):
         default=WORDS_PER_NODE, ge=1, le=MAX_WORDS_PER_NODE,
         description=f"Words placed at once by every search node (integer, 1 to {MAX_WORDS_PER_NODE})",
     )
+    # "Multi-mots": maximum share (percent) of multi-word expressions among
+    # the words placed (see crossword_gen.py's MULTI_WORD_PERCENT, its
+    # default).
+    multi_word_percent: int = Field(
+        default=MULTI_WORD_PERCENT, ge=0, le=100,
+        description="Maximum percentage of multi-word expressions among the words placed (integer, 0 to 100)",
+    )
     # "Symétrie": the black-cell symmetry of the ratio draw (crossword_gen.
     # py's BLACK_SYMMETRIES, `make_pattern`'s `symmetry`), also applied to
     # an Interactive session's starting pattern.
@@ -1002,11 +1013,15 @@ class InteractiveStepRequest(BaseModel):
     word a previous "Suivant" placed that the grid still holds: the origin
     of the slot-selection cascade's geometric score (see `interactive_
     place_word`'s own `last_placed_cells`). Empty — the top-left corner —
-    when there is none."""
+    when there is none.
+
+    `multi_word_percent` is the generation form's current "Multi-mots"
+    value (see `interactive_place_word`'s own `multi_word_percent`)."""
     job_id: str
     grid: list[list[str]]
     challenge_words: list[str] = []
     last_placed_cells: list[list[int]] = []
+    multi_word_percent: int = Field(default=MULTI_WORD_PERCENT, ge=0, le=100)
 
 
 class InteractiveCleanRequest(BaseModel):
@@ -1227,6 +1242,10 @@ class InteractiveSaveRequest(BaseModel):
     # refreshes this session's own GRID_WORK draft, and a field this call
     # left out would be blanked out of it.
     diagnostics: Optional[dict] = None
+    # Word breaks ([row, col, direction]: a thicker line between that cell
+    # and the next one in `direction`), typed by the author or set by a
+    # placed multi-word expression; cleaned by `_clean_breaks`.
+    breaks: list[list] = []
 
 
 class InteractiveSaveWorkRequest(BaseModel):
@@ -1260,6 +1279,10 @@ class InteractiveSaveWorkRequest(BaseModel):
     pseudo: Optional[str] = None
     challenge_words: list[str] = []
     diagnostics: Optional[dict] = None
+    # Word breaks ([row, col, direction]: a thicker line between that cell
+    # and the next one in `direction`), typed by the author or set by a
+    # placed multi-word expression; cleaned by `_clean_breaks`.
+    breaks: list[list] = []
 
 
 class InteractiveFinishRequest(BaseModel):
@@ -1275,7 +1298,7 @@ class InteractiveFinishRequest(BaseModel):
     words of that language, so the search must keep its dictionary.
     Every other generation parameter mirrors the generation form's own
     CURRENT values, which the player may have changed since the session
-    started: `mode`/`black_enrichment_percent`/`words_per_node`/`symmetry`/`pattern_style`/`force_letters_percent`/
+    started: `mode`/`black_enrichment_percent`/`words_per_node`/`multi_word_percent`/`symmetry`/`pattern_style`/`force_letters_percent`/
     `difficulty`/`theme`/`theme_precision`/`challenge_words`. The last four
     fall back to the session's own value when omitted (`None`). The
     session's already-resolved theme glossary is reused only while it
@@ -1287,6 +1310,7 @@ class InteractiveFinishRequest(BaseModel):
     mode: str = "medium"
     black_enrichment_percent: int = Field(default=15, ge=0, le=100)
     words_per_node: int = Field(default=WORDS_PER_NODE, ge=1, le=MAX_WORDS_PER_NODE)
+    multi_word_percent: int = Field(default=MULTI_WORD_PERCENT, ge=0, le=100)
     symmetry: str = "none"
     pattern_style: str = "airy"
     force_letters_percent: int = Field(default=0, ge=0, le=100)
@@ -1294,6 +1318,10 @@ class InteractiveFinishRequest(BaseModel):
     theme: Optional[str] = None
     theme_precision: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     challenge_words: Optional[list[str]] = None
+    # Word breaks ([row, col, direction]: a thicker line between that cell
+    # and the next one in `direction`), typed by the author or set by a
+    # placed multi-word expression; cleaned by `_clean_breaks`.
+    breaks: list[list] = []
     # Same convention as InteractiveSaveRequest/InteractiveSaveWorkRequest
     # (trusted directly from the frontend's own current userPseudo, never
     # derived from the session) — this is who's using the browser right
@@ -1360,6 +1388,10 @@ class InteractiveFromAttemptRequest(BaseModel):
     challenge_words: list[str] = []
     # The form's "Style de motif" (GenerateRequest.pattern_style).
     pattern_style: str = "airy"
+    # Word breaks ([row, col, direction]: a thicker line between that cell
+    # and the next one in `direction`), typed by the author or set by a
+    # placed multi-word expression; cleaned by `_clean_breaks`.
+    breaks: list[list] = []
 
 
 @dataclass
@@ -2126,15 +2158,33 @@ def _library_page(preferred_language, page, seen_filter, seen_ids,
 def usage_stats():
     """Localhost-only (frontend/server.py): the number of words per usage
     score of each language, both usage-score files counted, for the
-    "Statistiques" panel, with the number of words of each difficulty's
-    lexicon (`lexicon_length_counts`, computed once per process)."""
+    "Statistiques" panel, with the number of single words of each
+    difficulty's lexicon (`lexicon_length_counts` minus the expressions,
+    computed once per process) and the multi-word expressions' own counts
+    (`multi_only_mots`, `multi_lexicon_length_counts`)."""
     pairs = [(WORDLISTS[language], difficulty)
              for language in WORDLISTS for difficulty in DIFFICULTY_PRESETS]
     counts = lexicon_length_counts(pairs)
+    multi_levels = multi_lexicon_length_counts(pairs)
+    multi_counts = {}
+    for language in WORDLISTS:
+        multi = multi_only_mots(language)
+        if multi is not None:
+            multi_counts[language] = {
+                "total": multi[0],
+                "levels": {difficulty: multi_levels[(str(WORDLISTS[language]), difficulty)]
+                           for difficulty in DIFFICULTY_PRESETS},
+            }
+    def single_words(pair):
+        # The lexicon's words per length, its multi-word expressions left
+        # out (they are counted apart).
+        multi = multi_levels[pair] or {}
+        return {n: c - multi.get(n, 0) for n, c in counts[pair].items() if c - multi.get(n, 0) > 0}
+
     return usage_score_counts(list(WORDLISTS), {
-        language: {difficulty: counts[(str(WORDLISTS[language]), difficulty)]
+        language: {difficulty: single_words((str(WORDLISTS[language]), difficulty))
                    for difficulty in DIFFICULTY_PRESETS}
-        for language in WORDLISTS})
+        for language in WORDLISTS}, multi_counts)
 
 
 @app.get("/api/stop_dumps")
@@ -2278,6 +2328,39 @@ def library_get_puz(grid_id: str):
         content=render_puz(record, title),
         media_type=PUZ_MEDIA_TYPE,
         headers={"Content-Disposition": f'attachment; filename="{slug}.puz"'},
+    )
+
+
+@app.get("/api/library/{grid_id}/ipuz")
+def library_get_ipuz(grid_id: str):
+    """Downloads a library grid as an ipuz file (ipuz_export.render_ipuz:
+    grid, answers, clues, title, word breaks as bars, enumerations)."""
+    record = get_grid(grid_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="grille introuvable dans la bibliothèque")
+    title = (record.get("title") or "").strip()
+    slug = _slugify_title(title) if title else "grille"
+    return Response(
+        content=render_ipuz(record, title),
+        media_type=IPUZ_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{slug}.ipuz"'},
+    )
+
+
+@app.get("/api/library/{grid_id}/jpz")
+def library_get_jpz(grid_id: str):
+    """Downloads a library grid as a Crossword Compiler .jpz file
+    (jpz_export.render_jpz: grid, answers, clues, title, word breaks as
+    bars, enumerations)."""
+    record = get_grid(grid_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="grille introuvable dans la bibliothèque")
+    title = (record.get("title") or "").strip()
+    slug = _slugify_title(title) if title else "grille"
+    return Response(
+        content=render_jpz(record, title),
+        media_type=JPZ_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{slug}.jpz"'},
     )
 
 
@@ -3233,12 +3316,14 @@ def _load_wordlist_raw_lines(language):
     same highest-frequency-first convention closely enough for a
     diagnostic table (this file is not re-sorted here). A word only in
     the language's Scrabble wordlist (data/wordlist_<language>_scrabble.
-    tsv, merged into every grid's lexicon) gets that file's line."""
+    tsv, merged into every grid's lexicon) gets that file's line, then a
+    multi-word expression (data/wordlist_<language>_multi.tsv, MOT written
+    without its separators: SEHATER) that file's."""
     wordlist_path = WORDLISTS.get(language)
     lines = {}
     if not wordlist_path:
         return lines
-    for path in (wordlist_path, scrabble_wordlist_path(language)):
+    for path in (wordlist_path, scrabble_wordlist_path(language), multi_wordlist_path(language)):
         try:
             with open(path, encoding="utf-8") as f:
                 for line in f:
@@ -3259,23 +3344,27 @@ def _load_gloss_raw_lines(language):
     bucket-per-lemma file shape from build_gloss_dictionary.py) but keeps
     each entry's exact original line text rather than the parsed dict,
     since _build_word_verification_table (column 3) shows the file's real
-    content verbatim, not a re-serialization of it."""
-    path = DATA_DIR / "gloss_dictionary" / f"{language}_glosses.jsonl"
+    content verbatim, not a re-serialization of it. The multi-word
+    expressions' dictionary (`<language>_glosses_multi.jsonl`, keyed by the
+    expression as written: "se hâter") is read after it, a single-word
+    entry winning a shared key."""
     lines = {}
-    if not path.exists():
-        return lines
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                entry = json.loads(stripped)
-            except json.JSONDecodeError:
-                continue
-            word = entry.get("word")
-            if word:
-                lines.setdefault(word.lower(), stripped)
+    for name in (f"{language}_glosses.jsonl", f"{language}_glosses_multi.jsonl"):
+        path = DATA_DIR / "gloss_dictionary" / name
+        if not path.exists():
+            continue
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    entry = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                word = entry.get("word")
+                if word:
+                    lines.setdefault(word.lower(), stripped)
     return lines
 
 
@@ -3680,17 +3769,59 @@ async def _scrabble_words(language, bilingual_language=None, difficulty=None):
     )
 
 
-def _annotate_scrabble_cells(examples, scrabble_words):
+async def _multi_breaks(language, bilingual_language=None):
+    """The grid's expression word breaks (crossword_gen.py's
+    `multi_breaks_for_languages`), read once per language and process."""
+    return await asyncio.to_thread(
+        multi_breaks_for_languages, language,
+        bilingual_language if bilingual_language != language else None,
+    )
+
+
+def _annotate_scrabble_cells(examples, scrabble_words, multi_breaks=None):
     """Adds `scrabble_cells` to every preview example: the cells of each
     fully lettered run of its `example_grid` spelling a word of the grid's
     Scrabble dictionary (crossword_gen.py's `scrabble_word_cells`), shown
-    in dark cyan by the web UI."""
-    if not examples or not scrabble_words:
+    in dark cyan by the web UI; and `breaks`, the word breaks of the runs
+    spelling a multi-word expression (`word_break_edges`)."""
+    if not examples:
         return
     for ex in examples:
         eg = ex.get("example_grid")
         if eg:
-            ex["scrabble_cells"] = scrabble_word_cells(eg, scrabble_words)
+            if scrabble_words:
+                ex["scrabble_cells"] = scrabble_word_cells(eg, scrabble_words)
+            if multi_breaks:
+                ex["breaks"] = word_break_edges(eg, multi_breaks)
+
+
+_BREAK_DIRECTIONS = ("across", "down")
+
+
+def _clean_breaks(breaks, rows, cols):
+    """The valid, distinct `[row, col, direction]` word breaks of `breaks`
+    (a cell inside a `rows` x `cols` grid with a next cell in `direction`),
+    sorted."""
+    found = set()
+    for b in breaks or ():
+        if not isinstance(b, (list, tuple)) or len(b) != 3:
+            continue
+        r, c, d = b
+        if not isinstance(r, int) or not isinstance(c, int) or d not in _BREAK_DIRECTIONS:
+            continue
+        if 0 <= r < rows and 0 <= c < cols and (c + 1 < cols if d == "across" else r + 1 < rows):
+            found.add((r, c, d))
+    return [[r, c, d] for r, c, d in sorted(found)]
+
+
+def _add_placed_breaks(placed, multi_breaks):
+    """Adds `breaks` to a placed-word object (`interactive_place_word`'s
+    `placed`): the word breaks of the expression it spells, [] otherwise."""
+    if placed:
+        placed["breaks"] = placed_word_break_edges(
+            [tuple(c) for c in placed.get("cells", ())], placed.get("word", ""), multi_breaks,
+        )
+    return placed
 
 
 async def _await_grid_choice(job, choices, progress, cancel_event, short_id,
@@ -3762,8 +3893,12 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                              override_theme_description="", preserved_clues=None,
                              permanent_locked_letters=None, permanent_black_cells=None,
                              publish=True, origin=None, zone_revert=None,
-                             required_cells=None, start_grid=None):
-    """`start_grid` (`None` by default: a blank grid) is "Finir la
+                             required_cells=None, start_grid=None, preserved_breaks=None):
+    """`preserved_breaks` ("Finir la grille"/"Finir la zone", `None`
+    otherwise) are the author's word breaks, kept on the finished grid
+    next to those of its multi-word expressions (`result["breaks"]`).
+
+    `start_grid` (`None` by default: a blank grid) is "Finir la
     grille"/"Finir la zone"'s Interactive grid pattern, passed straight to
     `generate_grid(start_grid=...)`: every attempt starting afresh starts
     from it.
@@ -3906,6 +4041,9 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
     # wordlist into its lexicon by itself): the source of every preview's
     # dark-cyan `scrabble_cells` (`_annotate_scrabble_cells`).
     scrabble_words = await _scrabble_words(req.language, req.bilingual_language, req.difficulty)
+    # The expressions' word breaks: every preview's and the final grid's
+    # `breaks` (`_annotate_scrabble_cells`, `word_break_edges`).
+    multi_breaks = await _multi_breaks(req.language, req.bilingual_language)
 
     # Timestamps of generate_grid()'s two internal boundaries that
     # progress() below needs to split generation duration from
@@ -3973,7 +4111,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         # navigable, l'affichage temps réelle ne doit pas se faire, jusqu'à
         # ce que l'utilisateur revienne au dernier état de l'historique."
         _apply_zone_revert(examples)
-        _annotate_scrabble_cells(examples, scrabble_words)
+        _annotate_scrabble_cells(examples, scrabble_words, multi_breaks)
         job["live_preview"] = examples
         if examples:
             last_live_preview["examples"] = examples
@@ -4007,7 +4145,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         # `example_grid` this job's own `examples_history` ever stores gets
         # the same cell-by-cell revert as the live-preview channel does.
         _apply_zone_revert(data.get("examples"))
-        _annotate_scrabble_cells(data.get("examples"), scrabble_words)
+        _annotate_scrabble_cells(data.get("examples"), scrabble_words, multi_breaks)
         if step == "minimizing" and last_live_preview["examples"]:
             # See `last_live_preview` above. Each tile's `previous` field is
             # a STOP_DUMP-only diagnostic, never shown, so it is dropped.
@@ -4129,10 +4267,11 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         logger.info(
             "[%s] starting generation: language=%s bilingual_language=%s width=%s "
             "height=%s difficulty=%s force_letters_percent=%s black_enrichment_percent=%s "
-            "words_per_node=%s symmetry=%s pattern_style=%s mode=%s theme_precision=%s source=%s",
+            "words_per_node=%s multi_word_percent=%s symmetry=%s pattern_style=%s mode=%s "
+            "theme_precision=%s source=%s",
             short_id, req.language, req.bilingual_language, req.width, req.height,
             req.difficulty, req.force_letters_percent, req.black_enrichment_percent,
-            req.words_per_node, req.symmetry, req.pattern_style, req.mode, req.theme_precision,
+            req.words_per_node, req.multi_word_percent, req.symmetry, req.pattern_style, req.mode, req.theme_precision,
             req.source,
         )
         # Grid (CPU) queue, at the user's explicit request — see GRID_
@@ -4305,6 +4444,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                         required_cells=required_cells,
                         challenge_words=challenge_words,
                         words_per_node=req.words_per_node,
+                        multi_word_percent=req.multi_word_percent,
                         black_symmetry=req.symmetry,
                         pattern_style=req.pattern_style,
                         start_grid=start_grid,
@@ -4669,6 +4809,13 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
             if task in CLUES_QUEUE:
                 CLUES_QUEUE.remove(task)
 
+        # The grid's word breaks: those of every multi-word expression it
+        # holds, plus, for "Finir la grille"/"Finir la zone", the author's
+        # own (`preserved_breaks`).
+        result["breaks"] = _clean_breaks(
+            word_break_edges(result["solution"], multi_breaks) + list(preserved_breaks or ()),
+            result["height"], result["width"],
+        )
         progress("saving")
         # The automatic search engine's own parameters (see grid_store.
         # save_grid_json's own `generation_params` docstring), at the
@@ -4683,6 +4830,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         generation_params = {
             "black_enrichment_percent": req.black_enrichment_percent,
             "words_per_node": req.words_per_node,
+            "multi_word_percent": req.multi_word_percent,
             "symmetry": req.symmetry,
             "pattern_style": req.pattern_style,
             "force_letters_percent": req.force_letters_percent,
@@ -4742,6 +4890,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                     None, origin, result.get("bilingual_language"),
                     generation_params=generation_params,
                     challenge_words=req.challenge_words,
+                    breaks=result["breaks"],
                 )
                 logger.info("[%s] saved to Créations: %s (pseudo=%r)", short_id, work_id, pseudo)
                 # Read by frontend/static/script.js's runGeneration(), which
@@ -4927,15 +5076,20 @@ async def _run_interactive_job(job_id, req):
             if w and (grid_form := challenge_word_grid_form(w))
         )
         scrabble_words = await _scrabble_words(req.language, bilingual_language, req.difficulty)
+        multi_breaks = await _multi_breaks(req.language, bilingual_language)
         placed = await asyncio.to_thread(
             interactive_place_word, grid, rows, cols, index, rng, priority_words,
-            challenge_words, None, scrabble_words,
+            challenge_words, None, scrabble_words, req.multi_word_percent,
         )
+        _add_placed_breaks(placed.get("placed"), multi_breaks)
 
         INTERACTIVE_SESSIONS[job_id] = {
             "index": index,
             "priority_words": priority_words,
             "scrabble_words": scrabble_words,
+            # The expressions' word breaks, for each placed word's
+            # `breaks` (`_add_placed_breaks`).
+            "multi_breaks": multi_breaks,
             "rng": rng,
             # The original seed this session started from — kept around
             # purely so an autosave (POST /api/interactive/save_work) can
@@ -5137,6 +5291,7 @@ async def _run_recompute_job(job_id, grid_id):
                 "scrabble_cells": scrabble_word_cells(
                     result["solution"], await _scrabble_words(language, bilingual_language, difficulty),
                 ),
+                "breaks": result.get("breaks") or [],
                 "process_number": result.get("winning_process_number"),
                 "is_best": True,
             }],
@@ -5405,7 +5560,9 @@ async def interactive_step(req: InteractiveStepRequest):
         [list(row) for row in req.grid], rows, cols,
         sess["index"], sess["rng"], sess["priority_words"],
         challenge_words, req.last_placed_cells, sess.get("scrabble_words"),
+        req.multi_word_percent,
     )
+    _add_placed_breaks(placed.get("placed"), sess.get("multi_breaks"))
     if placed["impossible"]:
         return {"width": cols, "height": rows, "grid": req.grid,
                 "placed": None, "impossible": True,
@@ -5834,6 +5991,7 @@ async def interactive_save(req: InteractiveSaveRequest):
         "difficulty": req.difficulty,
         "theme": (req.theme or "").strip() or None,
         "title": req.title,
+        "breaks": _clean_breaks(req.breaks, rows, cols),
     }
     pseudo = (req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH] or None
     grid_id = await asyncio.to_thread(
@@ -5895,6 +6053,7 @@ async def interactive_save(req: InteractiveSaveRequest):
                 # saved it.
                 challenge_words=req.challenge_words,
                 diagnostics=req.diagnostics,
+                breaks=result["breaks"],
             )
         except Exception:
             logger.warning("interactive save: GRID_WORK snapshot skipped", exc_info=True)
@@ -5934,6 +6093,7 @@ async def interactive_save_work(req: InteractiveSaveWorkRequest):
         generation_params=meta.get("generation_params"),
         challenge_words=req.challenge_words,
         diagnostics=req.diagnostics,
+        breaks=_clean_breaks(req.breaks, len(req.grid), len(req.grid[0]) if req.grid else 0),
     )
     return {"work_id": work_id}
 
@@ -6056,6 +6216,7 @@ async def _run_interactive_resume_job(job_id, record):
             "index": index,
             "priority_words": priority_words,
             "scrabble_words": await _scrabble_words(language, bilingual_language, difficulty),
+            "multi_breaks": await _multi_breaks(language, bilingual_language),
             "rng": rng,
             "seed": seed,
             # The GRID_WORK file this session started from — read once by
@@ -6102,6 +6263,8 @@ async def _run_interactive_resume_job(job_id, record):
             "width": cols,
             "height": rows,
             "grid": grid,
+            # The draft's word breaks (grid_store.save_grid_work's `breaks`).
+            "breaks": _clean_breaks(record.get("breaks"), rows, cols),
             "placed": None,
             "impossible": False,
             "has_theme": bool(priority_words),
@@ -6234,6 +6397,8 @@ def _library_record_to_interactive(record):
         # reads it back via `record.get("challenge_words") or []`, same
         # as it already does for a real GRID_WORK record.
         "challenge_words": record.get("challenge_words") or [],
+        # The grid's word breaks (absent from an older record).
+        "breaks": record.get("breaks") or [],
         "priority_words": [],
         "seed": 0,
         "origin": {
@@ -6301,6 +6466,7 @@ async def interactive_from_attempt(req: InteractiveFromAttemptRequest):
         "theme": req.theme,
         "generation_params": {"pattern_style": req.pattern_style},
         "challenge_words": req.challenge_words,
+        "breaks": req.breaks,
         "priority_words": [],
         "seed": 0,
         "origin": None,
@@ -6587,6 +6753,7 @@ async def interactive_finish(req: InteractiveFinishRequest):
         force_letters_percent=req.force_letters_percent,
         black_enrichment_percent=req.black_enrichment_percent,
         words_per_node=req.words_per_node,
+        multi_word_percent=req.multi_word_percent,
         symmetry=req.symmetry,
         pattern_style=req.pattern_style,
         mode=req.mode,
@@ -6609,6 +6776,7 @@ async def interactive_finish(req: InteractiveFinishRequest):
             zone_revert=zone_revert,
             required_cells=required_cells,
             start_grid=seed_grid,
+            preserved_breaks=_clean_breaks(req.breaks, rows, cols),
         )
     )
     _BACKGROUND_TASKS.add(task)

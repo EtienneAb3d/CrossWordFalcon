@@ -235,6 +235,8 @@ public final class App {
         final String resumedFrom;
         /** The session's Scrabble dictionary (see scrabbleWords). */
         final PW scrabbleWords;
+        /** The expressions' word breaks, for each placed word's "breaks" (addPlacedBreaks). */
+        Words.Breaks multiBreaks;
 
         Session(DualIndex index, Set<String> priorityWords, Rng rng, Object seed, String resumedFrom, PW scrabbleWords) {
             this.scrabbleWords = scrabbleWords;
@@ -645,8 +647,9 @@ public final class App {
         Map<String, String> lines = new HashMap<>();
         Path wordlist = WORDLISTS.get(language);
         if (wordlist == null) return lines;
-        // A word only in the Scrabble wordlist (merged into every grid's lexicon) gets that file's line.
-        for (Path p : List.of(wordlist, Words.scrabbleWordlistPath(language))) {
+        // A word only in the Scrabble wordlist (merged into every grid's lexicon) gets that file's line, then a
+        // multi-word expression (MOT written without its separators) the multi-word wordlist's.
+        for (Path p : List.of(wordlist, Words.scrabbleWordlistPath(language), Words.multiWordlistPath(language))) {
             try (BufferedReader r = Files.newBufferedReader(p, StandardCharsets.UTF_8)) {
                 String line;
                 while ((line = r.readLine()) != null) {
@@ -662,20 +665,23 @@ public final class App {
 
     static Map<String, String> loadGlossRawLines(String language) {
         Map<String, String> lines = new HashMap<>();
-        Path p = DATA_DIR.resolve("gloss_dictionary").resolve(language + "_glosses.jsonl");
-        if (!Files.exists(p)) return lines;
-        try (BufferedReader r = Files.newBufferedReader(p, StandardCharsets.UTF_8)) {
-            String line;
-            while ((line = r.readLine()) != null) {
-                String s = Py.strip(line);
-                if (s.isEmpty()) continue;
-                try {
-                    Object e = Json.parse(s);
-                    String word = Json.str(e, "word", null);
-                    if (word != null && !word.isEmpty()) lines.putIfAbsent(word.toLowerCase(Locale.ROOT), s);
-                } catch (IllegalArgumentException ignored) { }
-            }
-        } catch (IOException ignored) { }
+        // The multi-word expressions' dictionary after the single-word one, a single-word entry winning a shared key.
+        for (String name : List.of(language + "_glosses.jsonl", language + "_glosses_multi.jsonl")) {
+            Path p = DATA_DIR.resolve("gloss_dictionary").resolve(name);
+            if (!Files.exists(p)) continue;
+            try (BufferedReader r = Files.newBufferedReader(p, StandardCharsets.UTF_8)) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    String s = Py.strip(line);
+                    if (s.isEmpty()) continue;
+                    try {
+                        Object e = Json.parse(s);
+                        String word = Json.str(e, "word", null);
+                        if (word != null && !word.isEmpty()) lines.putIfAbsent(word.toLowerCase(Locale.ROOT), s);
+                    } catch (IllegalArgumentException ignored) { }
+                }
+            } catch (IOException ignored) { }
+        }
         return lines;
     }
 
@@ -753,6 +759,8 @@ public final class App {
         Set<Integer> requiredCells;
         /** "Finir la grille"/"Finir la zone"'s Interactive grid pattern, Generator.Params.startGrid. */
         char[][] startGrid;
+        /** "Finir la grille"/"Finir la zone": the author's word breaks, kept on the finished grid. */
+        List<Object> preservedBreaks;
     }
 
     @SuppressWarnings("unchecked")
@@ -783,16 +791,65 @@ public final class App {
                 difficulty);
     }
 
-    /** Adds "scrabble_cells" to every preview example (mirrors _annotate_scrabble_cells): the cells of each fully
-     * lettered run of its example_grid spelling a word of the grid's Scrabble dictionary, shown in dark cyan. */
-    @SuppressWarnings("unchecked")
+    /** The grid's expression word breaks (mirrors _multi_breaks), read once per language and process. */
+    static Words.Breaks multiBreaks(String language, String bilingualLanguage) {
+        return Words.multiBreaksForLanguages(language,
+                bilingualLanguage != null && !bilingualLanguage.equals(language) ? bilingualLanguage : null);
+    }
+
     static void annotateScrabbleCells(Object examples, PW scrabble) {
-        if (!(examples instanceof List<?> l) || l.isEmpty() || scrabble == null || scrabble.isEmpty()) return;
+        annotateScrabbleCells(examples, scrabble, null);
+    }
+
+    /** Adds "scrabble_cells" to every preview example (mirrors _annotate_scrabble_cells): the cells of each fully
+     * lettered run of its example_grid spelling a word of the grid's Scrabble dictionary, shown in dark cyan; and
+     * "breaks", the word breaks of the runs spelling a multi-word expression (Words.wordBreakEdges). */
+    @SuppressWarnings("unchecked")
+    static void annotateScrabbleCells(Object examples, PW scrabble, Words.Breaks multiBreaks) {
+        if (!(examples instanceof List<?> l) || l.isEmpty()) return;
         for (Object o : l) {
             Map<String, Object> ex = (Map<String, Object>) o;
             Object eg = ex.get("example_grid");
-            if (eg instanceof List<?> rows && !rows.isEmpty()) ex.put("scrabble_cells", Words.scrabbleWordCells(eg, scrabble));
+            if (eg instanceof List<?> rows && !rows.isEmpty()) {
+                if (scrabble != null && !scrabble.isEmpty()) ex.put("scrabble_cells", Words.scrabbleWordCells(eg, scrabble));
+                if (multiBreaks != null && !multiBreaks.isEmpty()) ex.put("breaks", Words.wordBreakEdges(eg, multiBreaks));
+            }
         }
+    }
+
+    /** The valid, distinct [row, col, direction] word breaks of {@code breaks} (a cell inside a rows x cols grid
+     * with a next cell in direction), sorted (mirrors _clean_breaks). */
+    static List<Object> cleanBreaks(Object breaks, int rows, int cols) {
+        java.util.TreeMap<Long, List<Object>> found = new java.util.TreeMap<>();
+        for (Object o : Json.listOrEmpty(breaks)) {
+            if (!(o instanceof List<?> b) || b.size() != 3) continue;
+            if (!(b.get(0) instanceof Number rn) || !(b.get(1) instanceof Number cn) || !(b.get(2) instanceof String d)) continue;
+            if (rn instanceof Double || rn instanceof Float || cn instanceof Double || cn instanceof Float) continue;
+            if (!d.equals("across") && !d.equals("down")) continue;
+            int r = rn.intValue(), c = cn.intValue();
+            if (r < 0 || r >= rows || c < 0 || c >= cols || (d.equals("across") ? c + 1 >= cols : r + 1 >= rows)) continue;
+            List<Object> e = new ArrayList<>();
+            e.add(r);
+            e.add(c);
+            e.add(d);
+            found.put(((long) r << 32) | ((long) c << 1) | (d.equals("across") ? 0 : 1), e);
+        }
+        return new ArrayList<>(found.values());
+    }
+
+    /** Adds "breaks" to a placed-word object (Interactive.placeWord's "placed"): the word breaks of the expression it
+     * spells, empty otherwise (mirrors _add_placed_breaks). */
+    @SuppressWarnings("unchecked")
+    static void addPlacedBreaks(Object placed, Words.Breaks multiBreaks) {
+        if (!(placed instanceof Map<?, ?> pm)) return;
+        List<Object> cellsJson = Json.listOrEmpty(pm.get("cells"));
+        int[] cells = new int[cellsJson.size()];
+        for (int i = 0; i < cells.length; i++) {
+            List<Object> rc = Json.asList(cellsJson.get(i));
+            cells[i] = Cells.of(((Number) rc.get(0)).intValue(), ((Number) rc.get(1)).intValue());
+        }
+        ((Map<String, Object>) pm).put("breaks",
+                Words.placedWordBreakEdges(cells, Json.str(pm, "word", ""), multiBreaks));
     }
 
     /** How long a finished automatic generation waits for the player to pick one of its grids before keeping
@@ -889,6 +946,8 @@ public final class App {
         // The grid's Scrabble dictionary: the third candidate family of every slot, and the source of every
         // preview's dark-cyan "scrabble_cells" (annotateScrabbleCells).
         PW scrabble = scrabbleWords(req.language, req.bilingualLanguage, req.difficulty);
+        // The expressions' word breaks: every preview's and the final grid's "breaks".
+        Words.Breaks multi = multiBreaks(req.language, req.bilingualLanguage);
         Map<String, Long> phaseTimes = new ConcurrentHashMap<>();
         // Last non-empty live-preview snapshot, recorded as a "search_final" history entry right before
         // "minimizing" (live_preview itself is cleared when the search ends; see backend/app.py).
@@ -908,7 +967,7 @@ public final class App {
                 return;
             }
             applyZoneRevert(a.zoneRevert, data.get("examples"));
-            annotateScrabbleCells(data.get("examples"), scrabble);
+            annotateScrabbleCells(data.get("examples"), scrabble, multi);
             Map<String, Object> newStep = new LinkedHashMap<>();
             newStep.put("code", step);
             newStep.putAll(data);
@@ -956,9 +1015,9 @@ public final class App {
         };
         try {
             Log.info("[%s] starting generation: language=%s bilingual_language=%s width=%s height=%s difficulty=%s "
-                            + "force_letters_percent=%s black_enrichment_percent=%s words_per_node=%s symmetry=%s pattern_style=%s mode=%s theme_precision=%s source=%s", shortId,
+                            + "force_letters_percent=%s black_enrichment_percent=%s words_per_node=%s multi_word_percent=%s symmetry=%s pattern_style=%s mode=%s theme_precision=%s source=%s", shortId,
                     req.language, req.bilingualLanguage, req.width, req.height, req.difficulty, req.forceLettersPercent,
-                    req.blackEnrichmentPercent, req.wordsPerNode, req.symmetry, req.patternStyle, req.mode, req.themePrecision, req.source);
+                    req.blackEnrichmentPercent, req.wordsPerNode, req.multiWordPercent, req.symmetry, req.patternStyle, req.mode, req.themePrecision, req.source);
             String theme = req.theme == null ? "" : Py.strip(req.theme);
             List<String> themePriority = null, bilingualThemePriority = null;
             String themeDescription = "";
@@ -1011,13 +1070,14 @@ public final class App {
                         p.onProgress = progress;
                         p.onLivePreview = examples -> {
                             applyZoneRevert(a.zoneRevert, examples);
-                            annotateScrabbleCells(examples, scrabble);
+                            annotateScrabbleCells(examples, scrabble, multi);
                             job.put("live_preview", examples);
                             if (examples != null && !examples.isEmpty()) lastLivePreview.set(examples);
                         };
                         p.forceLettersFraction = req.forceLettersPercent / 100.0;
                         p.blackEnrichmentFraction = req.blackEnrichmentPercent / 100.0;
                         p.wordsPerNode = req.wordsPerNode;
+                        p.multiWordPercent = req.multiWordPercent;
                         p.blackSymmetry = req.symmetry;
                         p.patternStyle = req.patternStyle;
                         p.cancelEvent = job.cancel;
@@ -1169,10 +1229,16 @@ public final class App {
             } finally {
                 CLUES_QUEUE.remove(task);
             }
+            // The grid's word breaks: those of every multi-word expression it holds, plus, for "Finir la grille"/
+            // "Finir la zone", the author's own (preservedBreaks).
+            List<Object> allBreaks = new ArrayList<>(Words.wordBreakEdges(result.get("solution"), multi));
+            if (a.preservedBreaks != null) allBreaks.addAll(a.preservedBreaks);
+            result.put("breaks", cleanBreaks(allBreaks, ((Number) result.get("height")).intValue(),
+                    ((Number) result.get("width")).intValue()));
             progress.on("saving", new LinkedHashMap<>());
             String pseudo = pseudoOf(req.pseudo);
             Map<String, Object> generationParams = Json.obj("black_enrichment_percent", req.blackEnrichmentPercent,
-                    "words_per_node", req.wordsPerNode, "symmetry", req.symmetry, "pattern_style", req.patternStyle, "force_letters_percent", req.forceLettersPercent, "mode", req.mode, "theme_precision", req.themePrecision);
+                    "words_per_node", req.wordsPerNode, "multi_word_percent", req.multiWordPercent, "symmetry", req.symmetry, "pattern_style", req.patternStyle, "force_letters_percent", req.forceLettersPercent, "mode", req.mode, "theme_precision", req.themePrecision);
             if (a.publish) {
                 // On the result too: the play view and the SVG/PNG pages draw a "grouped" grid's black cells full
                 // size (pattern_style).
@@ -1199,7 +1265,8 @@ public final class App {
                     String workId = GridStore.saveGridWork(jobId, result.get("solution"), definitions, title, req.language,
                             req.difficulty, theme.isEmpty() ? null : theme, themePriority == null ? List.of() : themePriority,
                             req.seed != null && req.seed != 0 ? req.seed : 0, pseudo, null, a.origin,
-                            result.get("bilingual_language"), generationParams, req.challengeWords, null);
+                            result.get("bilingual_language"), generationParams, req.challengeWords, null,
+                            result.get("breaks"));
                     Log.info("[%s] saved to Créations: %s (pseudo=%s)", shortId, workId, Log.repr(pseudo));
                     result.put("grid_work_id", workId);
                 } catch (Exception e) {
@@ -1316,9 +1383,13 @@ public final class App {
                     null, null, index, req.blackEnrichmentPercent / 100.0, req.symmetry, req.patternStyle);
             Set<String> challenge = challengeSet(req.challengeWords);
             PW scrabble = scrabbleWords(req.language, req.bilingualLanguage, req.difficulty);
+            Words.Breaks multi = multiBreaks(req.language, req.bilingualLanguage);
             Map<String, Object> placed = Interactive.placeWord(grid, rows, cols, index, rng, PW.single(priority), challenge,
-                    scrabble);
-            INTERACTIVE_SESSIONS.put(jobId, new Session(index, priority, rng, req.seed, null, scrabble));
+                    scrabble, req.multiWordPercent);
+            addPlacedBreaks(placed.get("placed"), multi);
+            Session session = new Session(index, priority, rng, req.seed, null, scrabble);
+            session.multiBreaks = multi;
+            INTERACTIVE_SESSIONS.put(jobId, session);
             Map<String, Object> meta = new LinkedHashMap<>();
             meta.put("language", req.language);
             meta.put("bilingual_language", isBilingual ? req.bilingualLanguage : null);
@@ -1409,8 +1480,10 @@ public final class App {
             Set<String> challenge = challengeSet(rawChallenge);
             List<Object>[] diag = rows > 0 ? Interactive.fillDiagnostics(gridOf(gridJson), rows, cols, index, challenge)
                     : new List[]{List.of(), List.of(), List.of()};
-            INTERACTIVE_SESSIONS.put(jobId, new Session(index, priority, rng, seed, (String) record.get("id"),
-                    scrabbleWords(language, bilingual, difficulty)));
+            Session session = new Session(index, priority, rng, seed, (String) record.get("id"),
+                    scrabbleWords(language, bilingual, difficulty));
+            session.multiBreaks = multiBreaks(language, bilingual);
+            INTERACTIVE_SESSIONS.put(jobId, session);
             Map<String, Object> meta = new LinkedHashMap<>();
             meta.put("language", language);
             meta.put("bilingual_language", bilingual);
@@ -1428,6 +1501,8 @@ public final class App {
             result.put("width", cols);
             result.put("height", rows);
             result.put("grid", gridJson);
+            // The draft's word breaks (GridStore.saveGridWork's breaks).
+            result.put("breaks", cleanBreaks(record.get("breaks"), rows, cols));
             result.put("placed", null);
             result.put("impossible", false);
             result.put("has_theme", !priority.isEmpty());
@@ -1481,6 +1556,8 @@ public final class App {
         m.put("theme", record.get("theme"));
         m.put("generation_params", record.get("generation_params"));
         m.put("challenge_words", Json.listOrEmpty(record.get("challenge_words")));
+        // The grid's word breaks (absent from an older record).
+        m.put("breaks", Json.listOrEmpty(record.get("breaks")));
         m.put("priority_words", new ArrayList<>());
         m.put("seed", 0);
         m.put("origin", Json.obj("id", record.get("id"), "title", Json.truthy(record.get("title")) ? record.get("title") : "",
@@ -1569,6 +1646,7 @@ public final class App {
             ex.put("locked_cells", List.of());
             ex.put("theme_cells", List.of());
             ex.put("scrabble_cells", Words.scrabbleWordCells(result.get("solution"), scrabbleWords(language, bilingual, difficulty)));
+            ex.put("breaks", Json.listOrEmpty(result.get("breaks")));
             ex.put("process_number", result.get("winning_process_number"));
             ex.put("is_best", true);
             progress.on("clues", Json.obj("current", 0, "total", words.size(), "examples", Json.list(ex), "word_table", wordTable));
@@ -1840,13 +1918,32 @@ public final class App {
                 for (String d : difficulties) pairs.add(new String[] {WORDLISTS.get(language).toString(), d});
             }
             Map<String, Map<Integer, Integer>> counts = falcon.gen.Generator.lexiconLengthCounts(pairs);
+            Map<String, Map<Integer, Integer>> multiLevels = falcon.gen.Generator.multiLexiconLengthCounts(pairs);
+            // Each lexicon's single words per length: its multi-word expressions left out (counted apart).
             Map<String, Map<String, Map<Integer, Integer>>> lexiconCounts = new LinkedHashMap<>();
             for (String language : WORDLISTS.keySet()) {
                 Map<String, Map<Integer, Integer>> perLevel = new LinkedHashMap<>();
-                for (String d : difficulties) perLevel.put(d, counts.get(WORDLISTS.get(language) + "|" + d));
+                for (String d : difficulties) {
+                    String key = WORDLISTS.get(language) + "|" + d;
+                    Map<Integer, Integer> multi = multiLevels.get(key) == null ? Map.of() : multiLevels.get(key);
+                    Map<Integer, Integer> single = new java.util.TreeMap<>();
+                    counts.get(key).forEach((n, c) -> {
+                        int k = c - multi.getOrDefault(n, 0);
+                        if (k > 0) single.put(n, k);
+                    });
+                    perLevel.put(d, single);
+                }
                 lexiconCounts.put(language, perLevel);
             }
-            return UsageScores.usageScoreCounts(new ArrayList<>(WORDLISTS.keySet()), lexiconCounts);
+            Map<String, Map<String, Object>> multiCounts = new LinkedHashMap<>();
+            for (String language : WORDLISTS.keySet()) {
+                falcon.gen.Words.MultiOnly multi = falcon.gen.Words.multiOnlyMots(language);
+                if (multi == null) continue;
+                Map<String, Map<Integer, Integer>> byLevel = new LinkedHashMap<>();
+                for (String d : difficulties) byLevel.put(d, multiLevels.get(WORDLISTS.get(language) + "|" + d));
+                multiCounts.put(language, Json.obj("total", multi.total(), "levels", byLevel));
+            }
+            return UsageScores.usageScoreCounts(new ArrayList<>(WORDLISTS.keySet()), lexiconCounts, multiCounts);
         });
         w.get("/api/stop_dumps", r -> Json.obj("items", GridStore.listStopDumps()));
         w.get("/api/stop_dumps/{dump_id}", r -> {
@@ -1903,6 +2000,24 @@ public final class App {
             String slug = title.isEmpty() ? "grille" : GridStore.slugifyTitle(title);
             return new Web.Raw(200, PuzExport.PUZ_MEDIA_TYPE, PuzExport.renderPuz(record, title),
                     Map.of("Content-Disposition", "attachment; filename=\"" + slug + ".puz\""));
+        });
+        w.get("/api/library/{grid_id}/ipuz", r -> {
+            Map<String, Object> record = GridStore.getGrid(r.pathParams.get("grid_id"));
+            if (record == null) throw http(404, "grille introuvable dans la bibliothèque");
+            String title = Json.str(record, "title", "");
+            title = title == null ? "" : Py.strip(title);
+            String slug = title.isEmpty() ? "grille" : GridStore.slugifyTitle(title);
+            return new Web.Raw(200, IpuzExport.IPUZ_MEDIA_TYPE, IpuzExport.renderIpuz(record, title),
+                    Map.of("Content-Disposition", "attachment; filename=\"" + slug + ".ipuz\""));
+        });
+        w.get("/api/library/{grid_id}/jpz", r -> {
+            Map<String, Object> record = GridStore.getGrid(r.pathParams.get("grid_id"));
+            if (record == null) throw http(404, "grille introuvable dans la bibliothèque");
+            String title = Json.str(record, "title", "");
+            title = title == null ? "" : Py.strip(title);
+            String slug = title.isEmpty() ? "grille" : GridStore.slugifyTitle(title);
+            return new Web.Raw(200, JpzExport.JPZ_MEDIA_TYPE, JpzExport.renderJpz(record, title),
+                    Map.of("Content-Disposition", "attachment; filename=\"" + slug + ".jpz\""));
         });
         w.post("/api/game/save", r -> {
             Body b = new Body(r.json());
@@ -2259,13 +2374,15 @@ public final class App {
             List<Object> gridJson = b.grid("grid");
             Set<String> cw = challengeSet(b.strList("challenge_words"));
             List<int[]> lastPlaced = b.cells("last_placed_cells", false);
+            int mwp = b.integer("multi_word_percent", falcon.gen.Filler.MULTI_WORD_PERCENT, 0, 100);
             Session s = session(jobId);
             int[] d = dims(gridJson);
             Map<String, Object> placed;
             synchronized (s) {
                 placed = Interactive.placeWord(gridOf(gridJson), d[0], d[1], s.index, s.rng, s.pw(), cw, lastPlaced,
-                        s.scrabbleWords);
+                        s.scrabbleWords, mwp);
             }
+            addPlacedBreaks(placed.get("placed"), s.multiBreaks);
             boolean impossible = Boolean.TRUE.equals(placed.get("impossible"));
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("width", d[1]);
@@ -2435,6 +2552,7 @@ public final class App {
             String pseudoRaw = b.str("pseudo", null);
             List<String> challengeWords = b.strList("challenge_words");
             Map<String, Object> diagnostics = b.dict("diagnostics");
+            List<Object> rawBreaks = b.listOfLists("breaks");
             int[] d = dims(gridJson);
             int rows = d[0], cols = d[1];
             char[][] bw = new char[rows][cols];
@@ -2508,6 +2626,7 @@ public final class App {
             result.put("difficulty", difficulty);
             result.put("theme", themeClean);
             result.put("title", title);
+            result.put("breaks", cleanBreaks(rawBreaks, rows, cols));
             String pseudo = pseudoOf(pseudoRaw);
             String gridId = GridStore.saveGridJson(result, language, difficulty, "interactive", title, isBilingual ? bilingual : null,
                     pseudo, themeClean, true, meta.get("origin"), meta.get("generation_params"),
@@ -2524,7 +2643,7 @@ public final class App {
                             meta.getOrDefault("language", language),
                             meta.getOrDefault("difficulty", difficulty), Json.truthy(mt) ? mt : themeClean, s.priorityWords,
                             s.seed == null ? 0 : s.seed, pseudo, s.resumedFrom, meta.get("origin"), meta.get("bilingual_language"),
-                            meta.get("generation_params"), challengeWords, diagnostics);
+                            meta.get("generation_params"), challengeWords, diagnostics, result.get("breaks"));
                 } catch (Exception e) {
                     Log.warning("interactive save: GRID_WORK snapshot skipped: %s", e.getMessage());
                 }
@@ -2540,6 +2659,7 @@ public final class App {
             String pseudoRaw = b.str("pseudo", null);
             List<String> challengeWords = b.strList("challenge_words");
             Map<String, Object> diagnostics = b.dict("diagnostics");
+            List<Object> rawBreaks = b.listOfLists("breaks");
             Session s = session(jobId);
             Job job = job(jobId);
             Map<String, Object> meta = job == null ? Map.of() : Json.mapOrEmpty(job.copyOf("interactive"));
@@ -2547,7 +2667,8 @@ public final class App {
                     title, meta.getOrDefault("language", "fr"),
                     meta.getOrDefault("difficulty", "easy"), meta.get("theme"), s.priorityWords, s.seed == null ? 0 : s.seed,
                     pseudoOf(pseudoRaw), s.resumedFrom, meta.get("origin"), meta.get("bilingual_language"),
-                    meta.get("generation_params"), challengeWords, diagnostics);
+                    meta.get("generation_params"), challengeWords, diagnostics,
+                    cleanBreaks(rawBreaks, gridJson.size(), gridJson.isEmpty() ? 0 : Json.asList(gridJson.get(0)).size()));
             return Json.obj("work_id", workId);
         });
         w.get("/api/interactive/work", r -> Json.obj("items", GridStore.listGridWork(r.q("pseudo", ""))));
@@ -2576,6 +2697,7 @@ public final class App {
             String theme = b.str("theme", null);
             List<String> challengeWords = b.strList("challenge_words");
             String patternStyle = b.str("pattern_style", "airy");
+            List<Object> rawBreaks = b.listOfLists("breaks");
             if (!wordlistExists(language)) throw http(400, "langue inconnue ou dictionnaire absent");
             if (bilingual != null && !bilingual.equals(language) && !wordlistExists(bilingual)) {
                 throw http(400, "langue bilingue inconnue ou dictionnaire absent");
@@ -2594,6 +2716,7 @@ public final class App {
             synthetic.put("theme", theme);
             synthetic.put("generation_params", Json.obj("pattern_style", patternStyle));
             synthetic.put("challenge_words", challengeWords);
+            synthetic.put("breaks", rawBreaks);
             synthetic.put("priority_words", new ArrayList<>());
             synthetic.put("seed", 0);
             synthetic.put("origin", null);
@@ -2608,6 +2731,7 @@ public final class App {
             String mode = b.str("mode", "medium");
             int bep = b.integer("black_enrichment_percent", 15, 0, 100);
             int wpn = b.integer("words_per_node", falcon.gen.Filler.WORDS_PER_NODE, 1, MAX_WORDS_PER_NODE);
+            int mwp = b.integer("multi_word_percent", falcon.gen.Filler.MULTI_WORD_PERCENT, 0, 100);
             String symmetry = b.str("symmetry", "none");
             String patternStyle = b.str("pattern_style", "airy");
             int flp = b.integer("force_letters_percent", 0, 0, 100);
@@ -2617,6 +2741,7 @@ public final class App {
             Double reqPrecision = b.has("theme_precision") ? b.dbl("theme_precision", Themes.THEME_MIN_SCORE, 0.0, 1.0) : null;
             List<String> reqChallenge = b.has("challenge_words") ? b.strList("challenge_words") : null;
             List<int[]> zoneCells = b.has("zone_cells") ? b.cells("zone_cells", false) : null;
+            List<Object> rawBreaks = b.listOfLists("breaks");
             Session s = INTERACTIVE_SESSIONS.get(jobId);
             Job job = job(jobId);
             Object metaObj = job == null ? null : job.copyOf("interactive");
@@ -2716,6 +2841,7 @@ public final class App {
             genreq.forceLettersPercent = flp;
             genreq.blackEnrichmentPercent = bep;
             genreq.wordsPerNode = wpn;
+            genreq.multiWordPercent = mwp;
             genreq.symmetry = symmetry;
             genreq.patternStyle = patternStyle;
             genreq.mode = mode;
@@ -2749,6 +2875,7 @@ public final class App {
             a.zoneRevert = zoneRevert;
             a.requiredCells = required;
             a.startGrid = seedGrid;
+            a.preservedBreaks = cleanBreaks(rawBreaks, rows, cols);
             runInBackground("finish-" + id.substring(0, 8), () -> runGenerateJob(id, genreq, a));
             return Json.obj("job_id", id);
         });

@@ -2752,7 +2752,7 @@ class LLMClueGenerator:
 
         Preferred source: a **pure-local** lookup of the exact form,
         `backend/inflection_lookup.py`, which reads
-        `data/inflection/<lang>.jsonl` (built by `data_builder/
+        `data/inflection/<lang>_inflect.jsonl` (built by `data_builder/
         build_inflections.py` from the English-Wiktionary Kaikki dump,
         all 6 languages, filtered to the wordlist; plain uncompressed
         JSON-lines, sorted by form, so it can be inspected by hand).

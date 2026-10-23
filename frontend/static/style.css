@@ -1983,8 +1983,8 @@ button:disabled {
   display: block;
 }
 
-/* "Export" column: the PDF icon, then the .puz icon (blue badge) on its
-   right. */
+/* "Export" column: the PDF icon, then the .puz (blue badge), .ipuz
+   (green) and .jpz (violet) icons on its right. */
 #library-table td.library-export-cell {
   white-space: nowrap;
 }
@@ -2449,6 +2449,17 @@ button:disabled {
 /* "Total ≥ 3" and "Facile" columns (script.js's USAGE_STATS_STRONG_LEVEL). */
 .usage-stats-table .usage-stats-strong {
   font-weight: 700;
+}
+
+/* "Multi-mots" column group (script.js's renderUsageStats): its heading
+   spans the group's columns, centered; a left rule separates the group
+   from the single-word columns. */
+.usage-stats-table th.usage-stats-group {
+  text-align: center;
+}
+
+.usage-stats-table .usage-stats-multi-start {
+  border-left: 1px solid var(--border);
 }
 
 /* Per-length table (script.js's renderUsageLengthStats), under the
@@ -3102,6 +3113,22 @@ button:disabled {
 .cell.move-preview-invalid .interactive-move-ghost {
   background-color: var(--incorrect-bg);
   color: var(--error);
+}
+/* While the "Interactif" move mode is on (script.js's
+   setInteractiveMoveMode): the "move" cursor (two crossed double arrows)
+   on every cell, announcing the Shift+click-drag letter move. */
+#grid.move-cursor .cell {
+  cursor: move;
+}
+/* The move-mode toggle (#interactive-move-btn), next to the direction
+   arrows: an icon-only .toggle-btn. The button keeps the ordinary text
+   line box and its 1em SVG sits on it like a glyph, so it is exactly as
+   tall as the text buttons of its row. */
+.icon-toggle-btn svg {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.125em;
 }
 
 .header-cell {
@@ -4604,4 +4631,34 @@ body.devbot-page .chatbot-message {
 
 body.devbot-page #chatbot-input {
   font-size: 0.95rem;
+}
+
+/* Word breaks (script.js's appendWordBreaks): a thick --fg bar between two
+   cells of a multi-word expression or an author-typed break — on the
+   cell's right edge (across) or bottom edge (down), straddling the grid
+   gap so it reads as a heavier grid line. Absolutely positioned overlays
+   (no pointer events), so they compose with every cell state. */
+.cell .word-break {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  background: var(--fg);
+  --word-break-width: 4px;
+  --word-break-offset: -3px;
+}
+.attempt-preview-grid .cell .word-break {
+  --word-break-width: 3px;
+  --word-break-offset: -2px;
+}
+.cell .word-break-across {
+  top: 0;
+  bottom: 0;
+  right: var(--word-break-offset);
+  width: var(--word-break-width);
+}
+.cell .word-break-down {
+  left: 0;
+  right: 0;
+  bottom: var(--word-break-offset);
+  height: var(--word-break-width);
 }

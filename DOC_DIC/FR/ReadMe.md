@@ -21,7 +21,7 @@ ensuite pour générer une grille et ses définitions :
    reference_corpus_<lang>.tar.xz`), destinée à être publiée sur GitHub —
    voir "Étape 4 — Compresser le corpus pour publication" plus bas ;
 5. une table d'analyse grammaticale des formes fléchies (`data/inflection/
-   <lang>.jsonl`), qui indique pour chaque mot exact sa nature (nom,
+   <lang>_inflect.jsonl`), qui indique pour chaque mot exact sa nature (nom,
    verbe, adjectif…) et sa flexion complète (personne, nombre, genre,
    temps, mode) — voir "Étape 5" plus bas ;
 6. une note d'usage de chaque mot du dictionnaire Scrabble (`data/
@@ -182,7 +182,10 @@ conservés (`build_wordlist_freq.py`, `_count_word_frequencies`).
   deux lettres ASCII (`œ`→`oe`, `æ`→`ae`) : "sœur" donne le MOT `SOEUR`,
   jamais `SŒUR` — le MOT reste ainsi toujours une suite de lettres A-Z
   saisissables individuellement sur un clavier alphabétique simple
-  (`build_wordlist_freq.py`, `strip_accents`).
+  (`build_wordlist_freq.py`, `strip_accents`). Un mot dont le MOT garde un
+  autre caractère, même une lettre d'un autre alphabet (le « µ » grec de
+  « µg », « Ø », « Δ », une apostrophe-lettre U+02BC d'une élision du
+  corpus), est écarté (`build_wordlist_freq.py`, `is_grid_form`).
 - **ACCENTUE** — l'orthographe naturelle telle qu'écrite dans le corpus
   (accents et casse d'origine conservés, mais ligatures remplacées par
   leurs deux lettres simples : « cœur » s'écrit « coeur », « Œdipe »
@@ -382,7 +385,7 @@ langue exige de relancer l'étape 1 en entier.
 
 (`build_inflections.py`)
 
-Cette étape produit `data/inflection/<lang>.jsonl` — un fichier texte
+Cette étape produit `data/inflection/<lang>_inflect.jsonl` — un fichier texte
 brut (non compressé, pour pouvoir être relu et filtré à la main, et qui
 tient largement dans les limites de taille de GitHub), une ligne JSON par
 forme, triée par forme :
@@ -431,7 +434,7 @@ selon la langue, suivie par git comme le dictionnaire de définitions.
 
 ### Utilisation
 
-`data/inflection/<lang>.jsonl` est lu directement et mis en cache par langue au premier accès
+`data/inflection/<lang>_inflect.jsonl` est lu directement et mis en cache par langue au premier accès
 (`backend/inflection_lookup.py`, `_load`). Aucun accès réseau au moment de
 générer une grille : tout est purement local. Une forme absente de la table
 (un lemme sans entrée `form-of` dans Wiktionary, par exemple `JE`) fait
@@ -462,7 +465,9 @@ juste après l'étape 2, après avoir téléchargé les listes brutes de la
 langue si elles manquent, et en complétant juste avant les lemmes des
 graphies sans accents de la liste de fréquences (voir « Graphies sans
 accents » plus bas), puis, en anglais, français et espagnol, la liste des
-mots Hunspell (voir « Liste des mots Hunspell » plus bas) — puis, en dernière étape, alimentent la base
+mots Hunspell (voir « Liste des mots Hunspell » plus bas) et, en anglais et
+en français, la liste des expressions de plusieurs mots (voir « Liste des
+expressions de plusieurs mots » plus bas) — puis, en dernière étape, alimentent la base
 vectorielle Qdrant avec tout le lexique de la langue (la note d'usage de
 chaque mot, voir « Scores d'usage », est calculée juste avant) : les mots de
 `data/wordlist_<lang>_freq.tsv`, puis ceux de
@@ -565,8 +570,15 @@ facile, 1 en moyen (`FREQ_CUT_USAGE_LENIENCY` ; dans les deux critères, un mot 
 Scrabble est noté dans `data/usage_score_<langue>_scrabble_out.tsv`) ; tous
 en difficile (`backend/crossword_gen.py`, `_select_lexicon`). Un mot sans
 score est écarté en facile et en moyen. Le filtre des formes fléchies du
-niveau facile ne s'applique plus ; les quotas des niveaux moyen et
-difficile restent. La génération essaie en priorité ses
+niveau facile ne s'applique plus ; le quota de noms propres s'applique à
+tous les niveaux (en facile, aucun : chaque nom propre probable, hors mot
+Scrabble, est retiré du lexique), celui des mots sans définition en moyen
+et difficile seulement. Au chargement d'un lexique, est nom propre
+probable un mot à majuscule initiale (sauf en allemand) ou un mot dont
+toutes les entrées du dictionnaire de définitions trouvées (sa forme et
+ses lemmes) n'ont que le type « name » (`backend/crossword_gen.py`,
+`_proper_noun_check` ; `backend/gloss_lookup.py`,
+`only_proper_noun_glosses`). La génération essaie en priorité ses
 mots (voir `DOC_ALGO/FR/ReadMe.md`, « Choisir quel mot essayer »).
 
 ## Liste des mots Hunspell
@@ -604,6 +616,111 @@ enclitiques (« chiudetevele », environ 2,6 millions), dérivés portugais
 préfixés et suffixés de chaque racine (« desinteiriçadoramente », environ
 2,1 millions) —, bien au-delà de ce que la notation d'usage peut traiter.
 
+## Liste des expressions de plusieurs mots
+
+`data_builder/build_wordlist_multi.py` écrit `data/wordlist_<langue>_multi.tsv`
+(même format que le dictionnaire Scrabble : `MOT<TAB>ACCENTUE<TAB>CANONIQUE`,
+trié par MOT) : toutes les expressions de plusieurs mots du Wiktionnaire de
+la langue — un mot-vedette formé de plusieurs mots reliés par une espace ou
+un trait d'union (« arc-en-ciel », « quart de finale », « screw cap ») —,
+écrites comme un seul mot de grille (`build`). Elles viennent de deux
+extraits Kaikki : celui du Wiktionnaire de la langue (`<langue>_wiktionary.
+jsonl`, le même que pour les définitions) et celui du Wiktionnaire anglais
+(`<Langue>-en.jsonl.gz`, le même que pour la table des flexions ; pour
+l'anglais, c'est un seul et même extrait, lu une fois) ; seules les
+entrées de la langue elle-même sont lues (`_read_entries`). Un mot-vedette
+est retenu s'il contient une espace ou un trait d'union, si chacun de ses
+morceaux (entre espaces, traits d'union et apostrophes) n'a que des lettres
+(`_is_expression`), et si sa nature grammaticale fait partie de `KEPT_POS`
+(les noms propres, proverbes, abréviations et onomatopées sont gardés ; les
+symboles, affixes, articles, contractions et variantes typographiques sont
+écartés). MOT est sa forme grille sans séparateurs (`_mot`, « arc-en-ciel »
+→ ARCENCIEL), de 20 lettres au plus (`MAX_LENGTH`). Une forme fléchie (dont tous les sens renvoient à un autre mot,
+`form_of`/`alt_of` : « arcs-en-ciel », « screw caps ») est gardée avec son
+ou ses lemmes (`_entry_lemmas`). Une tournure grammaticale est écartée
+(`_is_grammatical_phrase`) : une suite de mots-outils seulement
+(`STOPWORDS` : « ce que », « à la », « to the », « is a »), ou — pour une
+entrée de verbe, de locution ou d'interjection (`VERB_PHRASE_POS`) — des
+mots-outils et une seule forme verbale, précédée du « to » de l'infinitif
+anglais (`INFINITIVE_MARKER`) ou d'un pronom sujet (`SUBJECT_WORDS`, des
+pronoms compléments pouvant s'intercaler, `CLITICS`), ou en français suivie
+d'un pronom sujet après un trait d'union (« je suis », « tu m'étonnes »,
+« sais-tu », « you know », « to be ») ; « un point c'est tout », « go for
+it » et la conjonction « c'est-à-dire » restent. Une tournure verbale
+incomplète est écartée aussi (`_is_incomplete_verbal_phrase`, mêmes types
+d'entrées) : une seule forme verbale en tête (après une négation élidée,
+`NEGATION_LEAD`), suivie seulement de mots-outils dont le dernier attend
+un complément (`DANGLING_WORDS` : « essayer de », « faire avec », « want
+to », « look for »), ou d'une simple négation (`NEGATION_TAIL` : « sais
+pas » ; une négation en tête sans rien après le verbe : « don't know ») ;
+une particule de verbe à particule ne compte pas comme mot en attente
+(« come on », « give up » restent), ni un pronom attaché par un trait
+d'union à un impératif (« ferme-la »). Les mots sont les suites de lettres en minuscules du mot-vedette
+(`_WORD_RE`) ; une forme verbale est une forme ou un lemme que la table des
+flexions ou le dictionnaire de définitions des mots simples donne comme
+verbe (`_verb_forms`). Trois autres filtres écartent (`_left_out`) : un
+groupe déterminant (`_is_determiner_phrase`, toute entrée sauf un nom
+propre : un article, possessif, démonstratif ou numéral, `DETERMINERS`,
+suivi d'un seul mot plein — « un autre », « mon père », « les deux »,
+« the way ») ; une expression finie par une préposition ou une conjonction
+(`TRAILING_FUNCTION_WORDS`, quelle que soit sa nature, les particules des
+verbes à particule anglais n'en faisant pas partie — « près de », « à
+cause de », « because of ») ; une tournure verbale (`_is_verbal_phrase`,
+entrées de verbe, de locution ou d'interjection : un pronom sujet suivi,
+pronoms compléments à part, d'une forme verbale ou d'un auxiliaire — « j'ai
+dit » —, ou un seul verbe dont les autres mots sont tous des pronoms ou des
+adverbes, `VERB_COMPANIONS` — « y aller », « à voir », « screw it » —, sauf
+un verbe pronominal français, « se »/« s' »). Enfin, une entrée sans
+définition propre (une forme fléchie, ou une entrée de lemme sans
+définition) est écartée quand le corpus de référence ne la contient jamais
+(`_corpus_counts`, le comptage de `build_wordlist_freq_multi.py`).
+`--dropped FICHIER` liste chaque mot-vedette écarté avec son filtre.
+ACCENTUE liste tous les mots-vedettes de
+même MOT, le principal en tête (une entrée de lemme avant une forme
+fléchie, puis les minuscules, puis l'ordre alphabétique) ; CANONIQUE
+réunit leurs lemmes (une entrée de lemme est son propre lemme). Un MOT déjà
+présent dans la liste de fréquences ou le dictionnaire Scrabble est gardé :
+le fichier recense les expressions elles-mêmes.
+
+La liste est construite juste après la liste des mots Hunspell, pour le
+français (environ 133 000 expressions) et l'anglais (environ 204 000)
+seulement (`LANGUAGES`). Ses mots entrent dans le lexique des grilles, avec
+la même sélection par score d'usage et fréquence que les autres mots (voir
+`DOC_ALGO/FR/ReadMe.md`).
+
+Trois fichiers l'accompagnent, construits par les mêmes étapes de
+`build_<langue>.sh` et dans le format de leurs équivalents d'un seul mot :
+
+- `data/wordlist_<langue>_freq_multi.tsv` (`build_wordlist_freq_multi.py`,
+  format de la liste de fréquences, `MOT<TAB>ACCENTUE<TAB>FREQUENCE<TAB>
+  CANONIQUE`, trié par FREQUENCE décroissante) : les expressions trouvées
+  au moins une fois dans le corpus de référence — le corpus complet, ou à
+  défaut le corpus plafonné quand le complet n'est pas sur le disque
+  (`_corpus_path`). Corpus et expressions sont découpés en suites de
+  lettres en minuscules (`_WORD_RE`, si bien qu'une espace, un trait
+  d'union et une apostrophe séparent tous des mots : « arc-en-ciel » et
+  « arc en ciel » comptent pareil), et chaque occurrence compte, y compris
+  celle d'une expression incluse dans une plus longue
+  (`_count_expressions`). ACCENTUE est la graphie la plus souvent
+  rencontrée, CANONIQUE celle de la liste des expressions ; FREQUENCE
+  mélange les comptes comme `build_wordlist_freq.py` (0,9 × le compte du
+  lemme le plus fréquent + 0,1 × celui de l'expression, la somme de ses
+  graphies), et réduit à 25 % celui d'une graphie principale à majuscule
+  initiale, nom propre probable.
+- `data/gloss_dictionary/<langue>_glosses_multi.jsonl`
+  (`build_gloss_dictionary.py --multi`) : les définitions, tirées du
+  Wiktionnaire de la langue, des lemmes de la colonne CANONIQUE.
+- `data/inflection/<langue>_inflect_multi.jsonl`
+  (`build_inflections.py --multi`) : les analyses grammaticales, tirées de
+  l'extrait anglais, des graphies de la colonne ACCENTUE (« arcs-en-ciel »,
+  pluriel de « arc-en-ciel »).
+
+La recherche de définitions et d'analyses grammaticales de l'application
+(`backend/gloss_lookup.py`, `backend/inflection_lookup.py`) lit ces deux
+derniers fichiers avec ceux des mots simples, une entrée d'un mot simple
+l'emportant sur une clé partagée. `build_usage_scores.py --source multi`
+note les expressions (voir « Scores d'usage »).
+
 ## Scores d'usage
 
 `data_builder/build_usage_scores.py` note, avec le LLM local, chaque mot de
@@ -617,7 +734,21 @@ ACCENTUE comme forme, CANONIQUE comme lemmes ; `_load_out_entries`), puis
 chaque mot de la liste des mots Hunspell quand elle existe (toutes ses
 graphies, ses lemmes ; `_load_hunspell_entries`), et écrit
 `data/usage_score_<lang>_scrabble_out.tsv`, même format (environ 61 000
-mots en français, à peu près quatre heures). Le barème :
+mots en français, à peu près quatre heures). Avec `--source multi`, il note
+les expressions de `data/wordlist_<lang>_multi.tsv` (celles de la liste de
+fréquences des expressions d'abord, par fréquence décroissante ;
+`_load_multi_entries`) et écrit `data/usage_score_<lang>_multi.tsv`, même
+format : l'entrée est présentée comme « Expression », ses comptes sont ceux
+de l'expression entière dans le corpus (`_multi_corpus_counts`), et le
+prompt gagne une note (`MULTI_WORD_NOTES`) : l'expression est notée comme
+un tout. Avant sa note, chaque expression passe un contrôle séparé
+(`Rater._self_contained`, `SELF_CONTAINED_PROMPT`) : sa graphie seule est
+soumise au LLM, qui répond d'une lettre si elle a un sens clair isolée, hors
+d'une phrase qui en préciserait le sens ; une réponse « N » (« à cause »,
+« c'est pourquoi », « don't know ») la note 0 sans autre appel (exemples
+dans `multi_incomplete_examples`/`multi_established_examples` de
+`data/<lang>_prompt_config.json`). Environ 133 000 expressions en
+français, plus d'une journée. Le barème :
 
 - **5** : vocabulaire courant ;
 - **4** : vocabulaire soutenu ou littéraire ;
@@ -686,9 +817,22 @@ chaque emplacement, que les 60 % de candidats les mieux notés parmi ceux
 qui ont une note, et ajoute la note moins 3 à la longueur de chaque mot du
 score de contenu (voir `DOC_ALGO/FR/ReadMe.md`, « Choisir quel mot
 essayer » et « Le score de contenu »). Le panneau Dictionnaire affiche
-« usage : X/5 » sous chaque forme notée dans l'un ou l'autre fichier
-(`backend/usage_scores.py`). Une langue sans fichier fonctionne comme
+« usage : X/5 » sous chaque forme notée dans l'un ou l'autre fichier, ou,
+pour une expression de plusieurs mots, dans `data/usage_score_<lang>_
+multi.tsv` — lu en premier pour une forme contenant une espace, un tiret
+ou une apostrophe (`backend/usage_scores.py`, `usage_score` ;
+`backend/dictionary_lookup.py`, `search`). Une langue sans fichier fonctionne comme
 avant.
+
+La recherche du panneau Dictionnaire lit toutes les listes donnant les
+orthographes accentuées possibles d'une forme de grille : la liste de
+fréquences, puis chaque orthographe de la colonne ACCENTUE des listes
+Scrabble, Hunspell et multi-mots, une orthographe déjà fournie par une
+liste précédente n'étant pas répétée (`backend/dictionary_lookup.py`,
+`_build_index`, `WORDLIST_SOURCES`). Un mot de grille présent seulement
+dans le dictionnaire Scrabble, tapé sans accents (ETRECIT), retrouve
+ainsi ses orthographes (« étrécit », « étrécît ») et leur lemme
+(« étrécir »).
 
 ## Graphies sans accents
 

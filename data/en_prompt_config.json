@@ -93,6 +93,29 @@
     },
     "rare_forms": "an archaic verb form (second-person singular in -est, third-person singular in -eth, an obsolete strong past tense)",
     "common_forms": "present, past, participle, infinitive, plural, comparative, superlative",
-    "unaccented_example": "\"naive\" = \"naïve\""
+    "unaccented_example": "\"naive\" = \"naïve\"",
+    "multi_incomplete_examples": [
+      "the two",
+      "of the world",
+      "my father",
+      "one day",
+      "as long as",
+      "a good one",
+      "during the",
+      "that's why",
+      "ready to",
+      "to see",
+      "of trust"
+    ],
+    "multi_established_examples": [
+      "screw cap",
+      "wild-goose chase",
+      "make believe",
+      "after all",
+      "in short",
+      "flat out",
+      "thank God",
+      "New Jersey"
+    ]
   }
 }

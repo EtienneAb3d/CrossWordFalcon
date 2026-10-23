@@ -188,8 +188,11 @@ public final class SvgExport {
 
     /** Grid for the puzzle sheets, empty or showing {@code letters} (Python's {@code _puzzle_grid_svg}). */
     static String puzzleGridSvg(List<Object> pattern, List<Object> words, double x0, double y0, double cell) {
-        return puzzleGridSvg(pattern, words, x0, y0, cell, null, false);
+        return puzzleGridSvg(pattern, words, x0, y0, cell, null, false, null);
     }
+
+    /** Width of a word-break line, as a fraction of a cell (Python's {@code WORD_BREAK_WIDTH_FACTOR}). */
+    static final double WORD_BREAK_WIDTH_FACTOR = 0.12;
 
     /** Whether {@code result}'s black cells fill their whole cell: a "grouped" pattern style grid (Python's {@code _full_black}). */
     static boolean fullBlack(Map<String, Object> result) {
@@ -197,9 +200,10 @@ public final class SvgExport {
         return gp instanceof Map<?, ?> m && "grouped".equals(m.get("pattern_style"));
     }
 
-    /** A black cell is a centered half-size square, or fills the whole cell with {@code fullBlack}. */
+    /** A black cell is a centered half-size square, or fills the whole cell with {@code fullBlack}; each word break
+     * of {@code breaks} ([row, col, direction]) is a thick line between that cell and the next one in direction. */
     static String puzzleGridSvg(List<Object> pattern, List<Object> words, double x0, double y0, double cell,
-                                List<Object> letters, boolean fullBlack) {
+                                List<Object> letters, boolean fullBlack, Object breaks) {
         int rows = pattern.size(), cols = rowLength(pattern.get(0));
         Map<String, Object> numberByCell = new HashMap<>();
         for (Object w : words) numberByCell.put(Json.integer(w, "row", 0) + "," + Json.integer(w, "col", 0), Json.get(w, "number"));
@@ -246,6 +250,23 @@ public final class SvgExport {
                             .append("</text>");
                 }
             }
+        }
+        for (Object o : Json.listOrEmpty(breaks)) {
+            List<Object> b = Json.asList(o);
+            int r = ((Number) b.get(0)).intValue(), c = ((Number) b.get(1)).intValue();
+            double x1, y1, x2, y2;
+            if ("across".equals(b.get(2))) {
+                x1 = x2 = gridX0 + (c + 1) * cell;
+                y1 = gridY0 + r * cell;
+                y2 = gridY0 + (r + 1) * cell;
+            } else {
+                x1 = gridX0 + c * cell;
+                x2 = gridX0 + (c + 1) * cell;
+                y1 = y2 = gridY0 + (r + 1) * cell;
+            }
+            parts.append("<line x1=\"").append(n2(x1)).append("\" y1=\"").append(n2(y1)).append("\" x2=\"").append(n2(x2))
+                    .append("\" y2=\"").append(n2(y2)).append("\" stroke=\"#1f2937\" stroke-width=\"")
+                    .append(n2(cell * WORD_BREAK_WIDTH_FACTOR)).append("\"/>");
         }
         return parts.toString();
     }
@@ -398,7 +419,8 @@ public final class SvgExport {
         double fontSize = layout.fontSize(), cell = layout.cell();
 
         return puzzlePageSvg(puzzleHeaderSvg(language, title, difficulty)
-                + puzzleGridSvg(pattern, words, pageW - margin - cell * (cols + 1), bodyTop, cell, null, fullBlack(result))
+                + puzzleGridSvg(pattern, words, pageW - margin - cell * (cols + 1), bodyTop, cell, null, fullBlack(result),
+                        result.get("breaks"))
                 + puzzleClueItemsSvg(layout.items(), fontSize, 0.0)
                 + puzzleFooterSvg(language, gridId));
     }
@@ -513,7 +535,8 @@ public final class SvgExport {
         }
         double cell = Math.min(Math.min((bodyBottom - bodyTop) / (rows + 1), contentW / (cols + 1)), PDF_MAX_CELL_SIZE);
         double gridX0 = margin + (contentW - cell * (cols + 1)) / 2;
-        parts.append(puzzleGridSvg(pattern, words, gridX0, bodyTop, cell, letters, fullBlack(result)));
+        parts.append(puzzleGridSvg(pattern, words, gridX0, bodyTop, cell, letters, fullBlack(result),
+                result.get("breaks")));
         parts.append(puzzleFooterSvg(language, gridId));
         return puzzlePageSvg(parts.toString());
     }

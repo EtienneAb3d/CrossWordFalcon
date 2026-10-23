@@ -116,6 +116,14 @@ public final class LenIndex {
 
     private static final int[] EMPTY = new int[0];
 
+    /** Whether {@code w} is a multi-word expression: its row reference points into the multi-word wordlist
+     * (Words.ROW_SOURCE_MULTI); false without row references. */
+    public boolean isMulti(String w) {
+        if (refs == null) return false;
+        Integer id = ids.get(w);
+        return id != null && (refs[id] & 3) == Words.ROW_SOURCE_MULTI;
+    }
+
     public double dictFreqOf(String w) {
         Integer id = ids.get(w);
         return id == null ? 0.0 : dictFreq[id];

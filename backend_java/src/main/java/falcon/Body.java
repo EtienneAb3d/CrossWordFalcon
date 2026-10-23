@@ -121,6 +121,15 @@ public final class Body {
         return Json.asList(v);
     }
 
+    /** list[list] (word breaks, cleaned afterwards). */
+    public List<Object> listOfLists(String k) {
+        List<Object> rows = list(k, false);
+        for (Object row : rows) {
+            if (!(row instanceof List<?>)) throw Web.validation("body", k, "list_type", "Input should be a valid list", row);
+        }
+        return rows;
+    }
+
     /** list[list[str]] (grids). */
     public List<Object> grid(String k) {
         List<Object> rows = list(k, true);

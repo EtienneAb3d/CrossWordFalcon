@@ -227,13 +227,20 @@ def _full_black(result):
     return (result.get("generation_params") or {}).get("pattern_style") == "grouped"
 
 
-def _puzzle_grid_svg(pattern, words, x0, y0, cell, letters=None, full_black=False):
+# Width of a word-break line, as a fraction of a cell (`_puzzle_grid_svg`).
+WORD_BREAK_WIDTH_FACTOR = 0.12
+
+
+def _puzzle_grid_svg(pattern, words, x0, y0, cell, letters=None, full_black=False, breaks=None):
     """Grid (black/white cells, clue numbers, 1-based row/column headers)
     for the puzzle sheets, with its top-left corner (headers included) at
     (x0, y0) and `cell` px cells, every text sized from `cell`. Empty, or
     showing each white cell's letter of `letters` (the solution) when
     given. A black cell is a centered half-size `BLACK_CELL_FILL` square,
-    or fills the whole cell with `full_black`."""
+    or fills the whole cell with `full_black`. Each word break of `breaks`
+    (`[row, col, direction]`, the record's `breaks`) is a thick line
+    (`WORD_BREAK_WIDTH_FACTOR` of a cell) between that cell and the next
+    one in `direction`."""
     rows, cols = len(pattern), len(pattern[0])
     number_by_cell = {(w["row"], w["col"]): w["number"] for w in words}
     parts = []
@@ -284,6 +291,17 @@ def _puzzle_grid_svg(pattern, words, x0, y0, cell, letters=None, full_black=Fals
                     f'font-size="{_n(cell * 0.55)}" font-family="sans-serif" '
                     f'text-anchor="middle">{escape(letter)}</text>'
                 )
+    for r, c, direction in breaks or ():
+        if direction == "across":
+            x1 = x2 = grid_x0 + (c + 1) * cell
+            y1, y2 = grid_y0 + r * cell, grid_y0 + (r + 1) * cell
+        else:
+            x1, x2 = grid_x0 + c * cell, grid_x0 + (c + 1) * cell
+            y1 = y2 = grid_y0 + (r + 1) * cell
+        parts.append(
+            f'<line x1="{_n(x1)}" y1="{_n(y1)}" x2="{_n(x2)}" y2="{_n(y2)}" '
+            f'stroke="#1f2937" stroke-width="{_n(cell * WORD_BREAK_WIDTH_FACTOR)}"/>'
+        )
     return "".join(parts)
 
 
@@ -460,7 +478,7 @@ def render_puzzle_svg(result, language, title="", difficulty=None):
 
     parts = [_puzzle_header_svg(language, title, difficulty)]
     parts.append(_puzzle_grid_svg(pattern, words, page_w - margin - cell * (cols + 1), body_top, cell,
-                                  full_black=_full_black(result)))
+                                  full_black=_full_black(result), breaks=result.get("breaks")))
     parts.append(_puzzle_clue_items_svg(items, font_size))
     parts.append(_puzzle_footer_svg(language, grid_id))
     return _puzzle_page_svg("".join(parts))
@@ -595,7 +613,7 @@ def _large_grid_page(result, language, title, difficulty, letters=None, heading=
     cell = min((body_bottom - body_top) / (rows + 1), content_w / (cols + 1), PDF_MAX_CELL_SIZE)
     grid_x0 = margin + (content_w - cell * (cols + 1)) / 2
     parts.append(_puzzle_grid_svg(pattern, words, grid_x0, body_top, cell, letters,
-                                  full_black=_full_black(result)))
+                                  full_black=_full_black(result), breaks=result.get("breaks")))
     parts.append(_puzzle_footer_svg(language, grid_id))
     return _puzzle_page_svg("".join(parts))
 

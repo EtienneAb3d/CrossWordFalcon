@@ -36,9 +36,14 @@ rebuild (the wordlist's own CANONICAL column changed, MAX_GLOSSES_PER_
 WORD changed, etc.) doesn't need to re-fetch several gigabytes per
 language from kaikki.org every time.
 
+With --multi, the targets are instead the CANONICAL column of
+data/wordlist_<lang>_multi.tsv (build_wordlist_multi.py, the multi-word
+expressions), written to data/gloss_dictionary/<lang>_glosses_multi.jsonl.
+
 Usage:
     python3 data_builder/build_gloss_dictionary.py fr
     python3 data_builder/build_gloss_dictionary.py en
+    python3 data_builder/build_gloss_dictionary.py fr --multi
 """
 import argparse
 import json
@@ -82,17 +87,20 @@ def _kaikki_url(lang):
     return f"https://kaikki.org/{edition}/{encoded}/kaikki.org-dictionary-{encoded}.jsonl"
 
 
-def _target_lemmas(lang):
+def _target_lemmas(lang, multi=False):
     """Every canonical form (lemma) this project's own dictionaries for
     `lang` actually need a gloss for — the CANONICAL column (one or more
     per word, semicolon-separated) of data/wordlist_<lang>_freq.tsv (4th
     column, build_wordlist_freq.py), of data/wordlist_<lang>_scrabble.
     tsv (3rd column, build_wordlist_scrabble.py) and of data/wordlist_
     <lang>_hunspell.tsv (3rd column, build_wordlist_hunspell.py) when they
-    exist."""
+    exist; with `multi`, the CANONICAL column of data/wordlist_<lang>_
+    multi.tsv (3rd column, build_wordlist_multi.py) alone."""
     lemmas = set()
-    for name, column in ((f"wordlist_{lang}_freq.tsv", 3), (f"wordlist_{lang}_scrabble.tsv", 2),
-                         (f"wordlist_{lang}_hunspell.tsv", 2)):
+    sources = (((f"wordlist_{lang}_multi.tsv", 2),) if multi else
+               ((f"wordlist_{lang}_freq.tsv", 3), (f"wordlist_{lang}_scrabble.tsv", 2),
+                (f"wordlist_{lang}_hunspell.tsv", 2)))
+    for name, column in sources:
         path = DATA_DIR / name
         if not path.exists():
             continue
@@ -109,10 +117,10 @@ def _download(url, dst_path):
     subprocess.run(["curl", "-sL", "--fail", "-o", str(dst_path), url], check=True)
 
 
-def build_gloss_dictionary(lang):
+def build_gloss_dictionary(lang, multi=False):
     if lang not in KAIKKI_SOURCE:
         raise ValueError(f"no Kaikki source configured for {lang!r}")
-    lemmas = _target_lemmas(lang)
+    lemmas = _target_lemmas(lang, multi)
     lemmas_lower = {fold_ligatures(w.lower()) for w in lemmas}
     print(f"Looking for glosses for {len(lemmas)} lemmas", file=sys.stderr)
 
@@ -156,7 +164,7 @@ def build_gloss_dictionary(lang):
                 "glosses": [fold_ligatures(g) for g in glosses[:MAX_GLOSSES_PER_WORD]],
             })
 
-    dst = GLOSS_DIR / f"{lang}_glosses.jsonl"
+    dst = GLOSS_DIR / (f"{lang}_glosses_multi.jsonl" if multi else f"{lang}_glosses.jsonl")
     with open(dst, "w", encoding="utf-8") as out:
         for bucket in found.values():
             out.write(json.dumps(bucket, ensure_ascii=False) + "\n")
@@ -167,8 +175,10 @@ def build_gloss_dictionary(lang):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("language", choices=sorted(KAIKKI_SOURCE))
+    ap.add_argument("--multi", action="store_true",
+                    help="gloss the multi-word expressions (data/wordlist_<lang>_multi.tsv) instead")
     args = ap.parse_args()
-    build_gloss_dictionary(args.language)
+    build_gloss_dictionary(args.language, args.multi)
 
 
 if __name__ == "__main__":

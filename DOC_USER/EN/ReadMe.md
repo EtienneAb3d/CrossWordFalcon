@@ -140,9 +140,10 @@ full again whenever a new generation or an Interactive session starts.
 - **Niveau / Level** (`#difficulty`, first field of the line
   above "Générer les mots croisés", followed by Mots par pose, Mode and
   "Voir les mots (spoiler)") — Easy, Medium, or Hard.
-  Easy and Medium use a smaller, more common vocabulary and never place a
-  word that looks like it could be a proper noun (a person's or place's
-  name); Hard can use the entire dictionary, including proper nouns. The
+  Easy and Medium use a smaller, more common vocabulary; Easy never places
+  a word that looks like it could be a proper noun (a person's or place's
+  name: capitalized, or defined only as a proper name), Medium at most two;
+  Hard can use the entire dictionary, with up to five proper nouns. The
   language's official Scrabble word list is available in full at Medium
   and Hard; at Easy, only its words with a known inflection (listed in the
   project's table of inflected forms) are used (`backend/crossword_gen.py`,
@@ -297,6 +298,16 @@ full again whenever a new generation or an Interactive session starts.
   same as the Thématique field above — though, unlike Thématique, never
   shown anywhere in the Library, since they're meant to stay hidden
   answers to spots you chose yourself.
+- **Multi-mots max (%) / Max multi-words (%)** (`#multi-word-percent`) — right of
+  Mots Défi, the largest share of multi-word expressions ("arc-en-ciel",
+  "screw cap") among the words placed on the grid, 15 by default: once the
+  expressions already placed go above it, no new expression is chosen
+  until more single words are placed (0 = no expression at all, 100 = no
+  limit; a "Mots Défi" word is never limited). Applied by automatic
+  generation, by Interactive mode's **Suivant / Next** and by **Finir la
+  grille / Finish the grid** (`frontend/static/script.js`,
+  `readMultiWordPercent`; `backend/crossword_gen.py`,
+  `Filler._multi_words_blocked`).
 - **Générer les mots croisés : / Generate the crossword:** (`#generate-row`), a row
   of its own below the other buttons, with two buttons
   (`frontend/static/script.js`, the form's `submit` handler):
@@ -498,11 +509,15 @@ those was showing.
 - Type an expression in the field (`#dictionary-input`) and use one of four buttons:
   - **Chercher / Search** (`#dictionary-search-btn`) — lists every word
     sharing the same root as what you typed (accents and case ignored),
-    each with its real definitions, in a table. An inflected form is
-    traced back to its base form(s) even when the main word list lacks
-    it (e.g. "foehna" shows "foehner" and its definition). Under each
+    each with its real definitions, in a table. Every word list the grids
+    draw from is searched (the main frequency list, the Scrabble list,
+    the Hunspell list and the multi-word expressions), so a word typed as
+    it appears in a grid, without accents (ETRECIT), finds its accented
+    spellings ("étrécit") and their family. An inflected form is traced
+    back to its base form(s) even when no word list holds it (e.g.
+    "foehna" shows "foehner" and its definition). Under each
     form and its base form, a small grey line "usage : X/5" gives how
-    common the word is, when it is known: 5 everyday, 4 formal or
+    common the word or multi-word expression is, when it is known: 5 everyday, 4 formal or
     literary, 3 rare form of an everyday word (such as an imperfect
     subjunctive), 2 technical term, 1 dated, 0 practically unknown
     A second grey line lists the levels whose grids can use the word
@@ -646,20 +661,29 @@ A bar-chart icon button (`#usage-stats-btn`, tooltip "Statistiques des
 scores d'usage" / "Usage-score statistics") sits right after
 "Dictionnaire", **only when the page is opened on the machine that runs
 the app itself** (localhost). It opens or closes a panel (`#usage-stats`)
-holding two tables. The first has one row per language, one column per usage score found
+holding two tables, each split into a "Mots simples / Single words" column
+group, which counts single words only, and a "Multi-mots / Multi-words"
+group, which counts the expressions of several words apart. The first has
+one row per language, then, for the single words, one column per usage score found
 (0 practically unknown … 5 everyday), then the words rated 3 or more
 ("Total ≥ 3", the ones an Easy grid can use), then the total — the number of
 words each language's dictionaries rate with that score, both rated word
 lists counted (the Scrabble words and the corpus words absent from them) —
 then one column per difficulty ("Easy", "Medium", "Hard"; the "Total ≥ 3"
 and "Easy" columns in bold): the number of
-words a grid of that difficulty can use, usage score and frequency
+single words a grid of that difficulty can use, usage score and frequency
 selection combined (the first opening after the app starts takes up to a
-minute to measure them).
+minute to measure them). The "Multi-mots / Multi-words" group covers the expressions of several
+words ("arc-en-ciel"): the size of the language's expression glossary, how many
+of them have a usage score, how many are rated 3 or more, then how many
+each difficulty's grids can use (only French and English have
+expressions; "—" while a count is unknown).
 A second table below it ("Words rated ≥ 3 by length / Easy level") splits
 them by word length: one row per length, longest first, one column per
-language, each cell showing the words rated 3 or more, then the words an
-Easy grid can use (`renderUsageLengthStats`).
+language in the "Mots simples / Single words" group, each cell showing the
+single words rated 3 or more, then the single words an Easy grid can use,
+followed by the "Multi-mots / Multi-words" group with the same count over
+the expressions of several words, one column per language that has some (`renderUsageLengthStats`).
 A language with no usage scores yet shows "—" (`frontend/static/
 script.js`, `renderUsageStats`; `GET /api/usage_stats`, gated to loopback
 requests by `frontend/server.py`, `_require_localhost`). **✕**
@@ -737,8 +761,15 @@ across clues, then the down clues, across the full width of the page, in
 the largest text that fits (very long clue lists continue on further
 pages) (`backend/svg_export.py`, `render_two_page_puzzle`). The blue
 **PUZ** icon on its right downloads the grid as an Across Lite `.puz` file
-— grid, answers, clues and title — which most crossword apps open
-(`backend/puz_export.py`, `render_puz`; `renderLibraryList`).
+— grid, answers, clues and title — which most crossword apps open; that
+format cannot draw a word break, so the clue of a multi-word answer ends
+with its word lengths, "(3-2-4)" for ARC-EN-CIEL (`backend/puz_export.py`,
+`render_puz`, `word_enumeration`). The green **IPUZ** and violet **JPZ**
+icons after it download the same grid as an ipuz file and a Crossword
+Compiler `.jpz` file, two formats that draw the word breaks as thick bars
+in the grid and give each multi-word answer its word lengths too
+(`backend/ipuz_export.py`, `render_ipuz`; `backend/jpz_export.py`,
+`render_jpz`; `frontend/static/script.js`, `renderLibraryList`).
 
 A grid created this way (`backend/grid_store.py`, `save_grid_json`'s own
 `origin` field — a snapshot of the original grid's title, author and
@@ -963,6 +994,12 @@ Once generation completes, the search-progress panel disappears and
   is shown whenever there is a title or a difficulty to display.
 - **Stats line** (`#stats`) — the finished grid's own black-cell
   percentage, fill percentage, and unplayable-cell percentage.
+- **Word breaks** — a word of the grid that is an expression of several
+  words ("arc-en-ciel", "screw cap", written ARCENCIEL, SCREWCAP) shows a
+  thicker line between its words, in the grid, in the search previews, in
+  Interactive mode and on the PDF/PNG pages (`frontend/static/script.js`,
+  `appendWordBreaks`; `backend/svg_export.py`, `_puzzle_grid_svg`). It
+  tells the player where one word ends inside the answer.
 - **Generation times** (`#generation-times`) — how long grid generation,
   optimization, and clue writing each took. A grid published from
   Interactive mode ("(Création)") adds "Crossword created manually", or "Crossword
@@ -1102,8 +1139,10 @@ to the left of **Mots / Words** to open it as an overlay panel.
   letters of the selected zone (or, with no zone, of the selected slot);
   black cells stay put (see "Click and drag" and "Shift + click and drag"
   below).
-- Place your letters in the grid. The Space key or any punctuation mark
-  adds or removes a black cell.
+- Place your letters in the grid. The **.** key (or any other punctuation
+  mark) adds or removes a black cell. **Space**, **-** or **_** adds or
+  removes a word break — a thicker line between two words of an
+  expression — right before the selected cell, in the typing direction.
 - The **Suivant / Next** button automatically generates a new word (taking
   any "Mots Défi (personnalisation)" list into account first, then any
   theme glossary — see "Mots Défi (personnalisation) / Challenge Words
@@ -1245,9 +1284,16 @@ real letter. Both update after every edit.
   one step at a time: a typed letter, a black-cell toggle, or a whole
   "Suivant" placement. Disabled once there is nothing left to undo.
 - The grid is fully editable, black cells included. Click any cell, then:
-  type a letter to fill it; press **Space** or any punctuation mark (or
+  type a letter to fill it; press **.** or any other punctuation mark (or
   the **■** key on the virtual keyboard) to turn it black or white — with
   its images under the **Symétrie** setting (`interactiveToggleBlack`);
+  press **Space**, **-** or **_** to add or remove a word break between
+  the previous cell (in the current direction) and the selected one,
+  without moving the cursor — typing ARC, Space, EN, Space, CIEL marks
+  "arc-en-ciel" (`frontend/static/script.js`, `interactiveToggleBreak`).
+  A word placed by **Suivant** that is a multi-word expression brings its
+  own breaks (`applyPlacedWordBreaks`); breaks are undone by **Précédent**
+  and saved with the draft and the published grid;
   press **Backspace** or **Delete** to clear it. The cursor advances in
   the current Across/Down direction after a letter. Clicking the cell
   that is already selected switches between Across and Down, like the
@@ -1446,8 +1492,18 @@ real letter. Both update after every edit.
   complete word that is not moved whole (a full word the moved word
   crosses) stays where it is too, the letters overwrite
   whatever the destination cells held, and the zone, the selected cell,
-  the letter colours and the definition of every word moved whole follow
-  them (other definitions touching a changed cell are dropped). An
+  the letter colours, the word breaks between two moved letters and the
+  definition of every word moved whole follow them (other definitions,
+  and other word breaks, touching a changed cell are dropped). While
+  Shift is held, the pointer over the grid becomes the "move" cursor (two
+  crossed double arrows), and turns back into the usual pointing hand
+  once Shift is released. The **move-mode** icon button (the same crossed
+  double arrows), right after the → / ↓ direction arrows, is a two-state
+  toggle doing the same without the keyboard: while it is on, a plain
+  click and drag moves letters and the grid shows the move cursor.
+  Pressing Shift switches it on and releasing Shift switches it off, so
+  the button always shows whether a drag will move letters
+  (`frontend/static/script.js`, `setInteractiveMoveMode`). An
   impossible move changes nothing and shows a message; **Précédent**
   undoes a move like any other edit
   (`frontend/static/script.js`, `finishInteractiveMove`).
@@ -1535,7 +1591,7 @@ real letter. Both update after every edit.
   it stays available in your "Créations" list. The grid size and the
   language(s) stay those of the session; every other setting is read from
   the generation form at the top of the page as it stands at the moment
-  you click — Niveau, Taux noir, Symétrie, Mots par pose, Mode, Thématique, Précision thématique and the "Mots Défi"
+  you click — Niveau, Taux noir, Symétrie, Mots par pose, Multi-mots max, Mode, Thématique, Précision thématique and the "Mots Défi"
   list — so you can change any of them before finishing. The session's
   theme glossary is reused only while the form still asks for the same
   theme at the same precision; otherwise it is rebuilt from the form's
@@ -1864,10 +1920,16 @@ whole at Medium and Hard, and limited to its words with a known
 inflection at Easy. When the language has its usage scores, the
 difficulty combines that score with the frequency selection: Easy keeps
 every word rated 3 and more (Scrabble or not), plus the words of its frequency
-selection (75 % most frequent, with a definition, no likely proper noun)
-rated 2 and more; Medium every word rated 2 and more, plus the
+selection (75 % most frequent, with a definition) rated 2 and more, never
+a likely proper noun (a capitalized word, or one whose dictionary entries
+are all proper names) unless it is in the Scrabble list; Medium every word rated 2 and more, plus the
 words of the 85 % most frequent rated 1 and more; Hard every word of both
-lists. A word is never
+lists. In French and English the vocabulary also holds expressions of
+several words ("arc-en-ciel", "screw cap"), written as one word in the
+grid and selected the same way (until they are rated, only at Hard); their
+word breaks are drawn as thicker lines, and the "Multi-mots max" field caps
+their share of the placed words: above it, the generator picks single
+words until the share drops back. A word is never
 used twice in a grid, and neither are two words sharing a base form (their
 lemma in the dictionary): once EST ("is") is placed in French, ETE and ETAIT (other forms of "être") are
 no longer candidates anywhere, and once ELM is placed, ELMS is out

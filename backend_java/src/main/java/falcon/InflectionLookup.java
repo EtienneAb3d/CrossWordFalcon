@@ -14,7 +14,9 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Pure-local grammatical analysis of an exact inflected word form, read from
- * data/inflection/&lt;lang&gt;.jsonl (mirrors backend/inflection_lookup.py).
+ * data/inflection/&lt;lang&gt;_inflect.jsonl, then the multi-word expressions' table
+ * (&lt;lang&gt;_inflect_multi.jsonl), a form of the single-word one winning (mirrors
+ * backend/inflection_lookup.py).
  */
 public final class InflectionLookup {
     private InflectionLookup() {}
@@ -48,8 +50,15 @@ public final class InflectionLookup {
         Map<String, List<Analysis>> index = new HashMap<>();
         Map<String, List<String>> lemmas = new HashMap<>();
         Table table = new Table(index, lemmas);
-        Path path = DIR.resolve(language + ".jsonl");
-        if (!Files.exists(path)) return table;
+        readTable(DIR.resolve(language + "_inflect.jsonl"), index, lemmas, false);
+        readTable(DIR.resolve(language + "_inflect_multi.jsonl"), index, lemmas, true);
+        return table;
+    }
+
+    /** Adds one inflection table; a form of the multi-word table already read is skipped (mirrors _read_table). */
+    private static void readTable(Path path, Map<String, List<Analysis>> index, Map<String, List<String>> lemmas,
+                                  boolean multi) {
+        if (!Files.exists(path)) return;
         try (BufferedReader r = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
             String line;
             while ((line = r.readLine()) != null) {
@@ -64,6 +73,7 @@ public final class InflectionLookup {
                 String form = Json.str(rec, "form", null);
                 if (form == null || form.isEmpty()) continue;
                 form = Py.lookupKey(form);
+                if (multi && index.containsKey(form)) continue;
                 List<Analysis> out = new ArrayList<>();
                 List<String> formLemmas = new ArrayList<>();
                 for (Object a : Json.listOrEmpty(rec.get("analyses"))) {
@@ -87,7 +97,6 @@ public final class InflectionLookup {
         } catch (IOException e) {
             Env.log("inflection_lookup: cannot read " + path + ": " + e.getMessage());
         }
-        return table;
     }
 
     /** Analyses of the exact {@code word}, or an empty list. Never throws. */

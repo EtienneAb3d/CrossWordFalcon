@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pure-local grammatical analysis of an exact inflected word form —
 part of speech plus full inflection (person / number / gender / tense /
-mood). Reads `data/inflection/<lang>.jsonl` (built once by
+mood). Reads `data/inflection/<lang>_inflect.jsonl` (built once by
 `data_builder/build_inflections.py` from the English-Wiktionary Kaikki
 dump, filtered to the language's wordlist), lazily per language and
 cached for the process's lifetime — no network, no per-request I/O after
@@ -13,7 +13,10 @@ JSON-lines so it can be inspected by hand:
 
 `describe_form(word, language)` returns `[(pos_code, description), ...]`,
 e.g. `[("verb", 'verb, third-person singular future (of "humer")')]`,
-the exact shape `backend/clues.py`'s `_build_pos_block` consumes. `[]`
+the exact shape `backend/clues.py`'s `_build_pos_block` consumes. The
+multi-word expressions' table (`<lang>_inflect_multi.jsonl`,
+`build_inflections.py --multi`) is read with it, a form of the single-word
+one winning. `[]`
 means the form isn't in the table (a lemma with no `form-of` entry, or a
 form Wiktionary doesn't document) — the caller then falls back to the
 Hunspell-stem + gloss-dictionary part-of-speech line.
@@ -58,7 +61,16 @@ def _load(language):
         return _cache[language]
     index = {}
     lemmas = {}
-    path = _DIR / f"{language}.jsonl"
+    for name in (f"{language}_inflect.jsonl", f"{language}_inflect_multi.jsonl"):
+        _read_table(_DIR / name, index, lemmas, multi=name.endswith("_multi.jsonl"))
+    _cache[language] = index
+    _lemma_cache[language] = lemmas
+    return index
+
+
+def _read_table(path, index, lemmas, multi):
+    """Adds one inflection table to `index`/`lemmas`; a form of the multi-word
+    table (`multi`) already read from the single-word one is skipped."""
     if path.exists():
         with open(path, encoding="utf-8") as fh:
             for line in fh:
@@ -73,6 +85,8 @@ def _load(language):
                 if not form:
                     continue
                 form = _key(form)
+                if multi and form in index:
+                    continue
                 out = []
                 form_lemmas = []
                 for a in rec.get("analyses", []):
@@ -95,9 +109,6 @@ def _load(language):
                 index[form] = out
                 if form_lemmas:
                     lemmas[form] = form_lemmas
-    _cache[language] = index
-    _lemma_cache[language] = lemmas
-    return index
 
 
 def lemmas_of(word, language):

@@ -13,7 +13,7 @@ in prose. These dumps are small (~55-95 MB gzipped) compared to the
 own-language ones, and are cached under data/wiktionary/ like every other raw
 download in this pipeline.
 
-Output: `data/inflection/<lang>.jsonl` — a plain-text (uncompressed, so
+Output: `data/inflection/<lang>_inflect.jsonl` — a plain-text (uncompressed, so
 it can be inspected by hand and still fits well within GitHub's file-size
 limits) JSON-lines file, one object per line, sorted by form:
 
@@ -32,8 +32,14 @@ dump entry with the same grid form are listed under it too — "macerons"
 gets the noun "maceron" and the verb form "macérons" of "macérer"
 (`_unaccented_key`). Read at runtime by `backend/inflection_lookup.py`.
 
+With --multi, the forms kept are instead the ACCENTUE spellings of
+`data/wordlist_<lang>_multi.tsv` (build_wordlist_multi.py, the multi-word
+expressions: "arcs-en-ciel" -> "arc-en-ciel"), written to
+`data/inflection/<lang>_inflect_multi.jsonl`.
+
 Usage:
     .venv/bin/python data_builder/build_inflections.py fr
+    .venv/bin/python data_builder/build_inflections.py fr --multi
     .venv/bin/python data_builder/build_inflections.py de --force
 """
 import argparse
@@ -89,15 +95,18 @@ def _download_dump(lang):
     return dst
 
 
-def _wordlist_forms(lang):
+def _wordlist_forms(lang, multi=False):
     """Every ACCENTED spelling (2nd column, `;`-separated in the Scrabble
     and Hunspell ones) of the language's wordlists — data/wordlist_<lang>_
     freq.tsv and, when they exist, data/wordlist_<lang>_scrabble.tsv and
     data/wordlist_<lang>_hunspell.tsv — lowercased: the inflection table is
-    filtered to just these."""
+    filtered to just these. With `multi`, those of data/wordlist_<lang>_
+    multi.tsv alone."""
     forms = set()
-    for name in (f"wordlist_{lang}_freq.tsv", f"wordlist_{lang}_scrabble.tsv",
-                 f"wordlist_{lang}_hunspell.tsv"):
+    names = ((f"wordlist_{lang}_multi.tsv",) if multi else
+             (f"wordlist_{lang}_freq.tsv", f"wordlist_{lang}_scrabble.tsv",
+              f"wordlist_{lang}_hunspell.tsv"))
+    for name in names:
         path = WORDLIST_DIR / name
         if not path.exists():
             continue
@@ -119,9 +128,9 @@ def _unaccented_key(form):
     return key if key.isascii() else None
 
 
-def build(lang):
+def build(lang, multi=False):
     dump = _download_dump(lang)
-    keep = _wordlist_forms(lang)
+    keep = _wordlist_forms(lang, multi)
     unaccented = {form for form in keep if form.isascii()}
     print(f"{lang}: {len(keep)} wordlist forms to match against {dump.name}",
           file=sys.stderr)
@@ -174,7 +183,7 @@ def build(lang):
                     matched += 1
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out = OUT_DIR / f"{lang}.jsonl"
+    out = OUT_DIR / (f"{lang}_inflect_multi.jsonl" if multi else f"{lang}_inflect.jsonl")
     with open(out, "w", encoding="utf-8") as w:
         for form in sorted(table):
             w.write(json.dumps({"form": form, "analyses": table[form]},
@@ -197,11 +206,15 @@ def main():
         "--force", action="store_true",
         help="re-download the dump even if it is already cached under data/wiktionary/",
     )
+    ap.add_argument(
+        "--multi", action="store_true",
+        help="analyse the multi-word expressions (data/wordlist_<lang>_multi.tsv) instead",
+    )
     args = ap.parse_args()
     if args.force:
         cached = DICS_DIR / f"{DUMP_NAME[args.language]}-en.jsonl.gz"
         cached.unlink(missing_ok=True)
-    build(args.language)
+    build(args.language, args.multi)
     return 0
 
 

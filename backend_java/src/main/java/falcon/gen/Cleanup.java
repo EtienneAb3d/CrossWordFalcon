@@ -223,9 +223,11 @@ public final class Cleanup {
     /** Returns {word, sub cells, boundary cell} or null. */
     static Object[] findShorterWordForZone(char[][] grid, int rows, int cols, int[] cells, List<int[]> curSlots,
                                            Map<Integer, List<Integer>> cellToSlots, int ownIdx, DualIndex index,
-                                           Map<Integer, Character> known, Set<String> used, Rng rng) {
+                                           Map<Integer, Character> known, Set<String> used, Rng rng,
+                                           Integer multiWordPercent) {
         int length = cells.length;
         List<Object[]> options = new ArrayList<>();
+        boolean multiBlocked = Fill.multiWordsBlocked(curSlots, index, knownAssignment(curSlots, known), multiWordPercent);
         for (int m = length - 1; m > 2; m--) {
             for (int side = 0; side < 2; side++) {
                 int[] sub, leftover;
@@ -249,7 +251,9 @@ public final class Cleanup {
                         && Words.slotCandidates(index, leftover.length, leftover, subKnown(leftover, known)).isEmpty()) continue;
                 if (Grids.allKnown(sub, known)) continue;
                 for (String w : Words.slotCandidates(index, m, sub, subKnown(sub, known))) {
-                    if (!used.contains(w)) options.add(new Object[]{w, sub, boundary});
+                    if (!used.contains(w) && !(multiBlocked && Fill.isMultiWord(index, sub, w))) {
+                        options.add(new Object[]{w, sub, boundary});
+                    }
                 }
             }
         }
@@ -326,12 +330,14 @@ public final class Cleanup {
     /** Returns {word, new cells, old boundary, new boundary (Integer or null)} or null. */
     static Object[] findLongerWordForZone(char[][] grid, int rows, int cols, int[] cells, List<int[]> curSlots,
                                           Map<Integer, List<Integer>> cellToSlots, int ownIdx, Set<Integer> protectedCells,
-                                          DualIndex index, Map<Integer, Character> known, Set<String> used, Rng rng) {
+                                          DualIndex index, Map<Integer, Character> known, Set<String> used, Rng rng,
+                                          Integer multiWordPercent) {
         int length = cells.length;
         boolean across = length > 1 && Cells.r(cells[1]) == Cells.r(cells[0]);
         int dr = across ? 0 : 1, dc = across ? 1 : 0;
         int r0 = Cells.r(cells[0]), c0 = Cells.c(cells[0]), r1 = Cells.r(cells[length - 1]), c1 = Cells.c(cells[length - 1]);
         List<Object[]> options = new ArrayList<>();
+        boolean multiBlocked = Fill.multiWordsBlocked(curSlots, index, knownAssignment(curSlots, known), multiWordPercent);
         Object[][] sides = {{"head", r0 - dr, c0 - dc, -dr, -dc}, {"tail", r1 + dr, c1 + dc, dr, dc}};
         for (Object[] s : sides) {
             String side = (String) s[0];
@@ -372,7 +378,9 @@ public final class Cleanup {
                 }
                 int[] nc = newCells.stream().mapToInt(Integer::intValue).toArray();
                 for (String w : Words.slotCandidates(index, nc.length, nc, subKnown(nc, known))) {
-                    if (!used.contains(w)) options.add(new Object[]{w, nc, boundary, newBoundary});
+                    if (!used.contains(w) && !(multiBlocked && Fill.isMultiWord(index, nc, w))) {
+                        options.add(new Object[]{w, nc, boundary, newBoundary});
+                    }
                 }
             }
         }
@@ -397,6 +405,14 @@ public final class Cleanup {
     /** Result of a shorten/lengthen pass. */
     public record Zones(char[][] grid, List<int[]> slots, String[] assignment, List<Integer> impossible,
                         Map<Cells.Key, Link> links) {}
+
+    /** Per slot, the word {@code known} spells when every cell of it is known, else null (mirrors
+     * _known_assignment). */
+    static String[] knownAssignment(List<int[]> slots, Map<Integer, Character> known) {
+        String[] out = new String[slots.size()];
+        for (int k = 0; k < slots.size(); k++) out[k] = Grids.allKnown(slots.get(k), known) ? Grids.wordAt(slots.get(k), known) : null;
+        return out;
+    }
 
     static Map<Integer, Character> knownFromAssignment(List<int[]> slots, String[] assignment,
                                                        Map<Integer, Character> permanentLocked) {
@@ -435,7 +451,8 @@ public final class Cleanup {
 
     public static Zones shortenImpossibleZones(char[][] grid, int rows, int cols, List<int[]> slots, String[] assignment,
                                                List<Integer> impossibleSlots, DualIndex index, Rng rng,
-                                               Map<Integer, Character> permanentLocked, Set<String> challenge) {
+                                               Map<Integer, Character> permanentLocked, Set<String> challenge,
+                                               Integer multiWordPercent) {
         Map<Integer, Character> known = knownFromAssignment(slots, assignment, permanentLocked);
         char[][] newGrid = Grids.copy(grid);
         boolean changed = false;
@@ -451,7 +468,8 @@ public final class Cleanup {
                 int[] cells = cur.get(own);
                 Map<Integer, List<Integer>> c2s = Grids.cellToSlotIndices(cur);
                 Set<String> used = usedFromKnown(cur, known, index);
-                Object[] res = findShorterWordForZone(newGrid, rows, cols, cells, cur, c2s, own, index, known, used, rng);
+                Object[] res = findShorterWordForZone(newGrid, rows, cols, cells, cur, c2s, own, index, known, used, rng,
+                        multiWordPercent);
                 if (res == null) continue;
                 String word = (String) res[0];
                 int[] sub = (int[]) res[1];
@@ -474,7 +492,8 @@ public final class Cleanup {
     public static Zones lengthenImpossibleZones(char[][] grid, int rows, int cols, List<int[]> slots, String[] assignment,
                                                 List<Integer> impossibleSlots, DualIndex index, Rng rng,
                                                 Map<Integer, Character> permanentLocked, Set<Integer> permanentBlack,
-                                                Set<String> challenge, Map<Cells.Key, Link> linksIn) {
+                                                Set<String> challenge, Map<Cells.Key, Link> linksIn,
+                                                Integer multiWordPercent) {
         Map<Integer, Character> known = knownFromAssignment(slots, assignment, permanentLocked);
         char[][] newGrid = Grids.copy(grid);
         boolean changed = false;
@@ -495,7 +514,8 @@ public final class Cleanup {
                     prot = new HashSet<>(prot);
                     prot.addAll(permanentBlack);
                 }
-                Object[] res = findLongerWordForZone(newGrid, rows, cols, cells, cur, c2s, own, prot, index, known, used, rng);
+                Object[] res = findLongerWordForZone(newGrid, rows, cols, cells, cur, c2s, own, prot, index, known, used, rng,
+                        multiWordPercent);
                 if (res == null) continue;
                 String word = (String) res[0];
                 int[] nc = (int[]) res[1];
@@ -1052,15 +1072,16 @@ public final class Cleanup {
                                                  Map<Integer, Character> permanentLocked, Set<Integer> permanentBlack,
                                                  Set<String> challenge) {
         return optimizeBeforeCleanup(candGrid, candDiag, rows, cols, index, rng, deadlineChecks, cancelEvent,
-                permanentLocked, permanentBlack, challenge, null);
+                permanentLocked, permanentBlack, challenge, null, null);
     }
 
     /** symmetry: a black cell is only removed together with every black image of it, each of them removable on its
-     * own, the whole group tried at once. Mirrors _optimize_before_cleanup. */
+     * own, the whole group tried at once; multiWordPercent (null = no limit): the cap both of its tryFill calls
+     * apply. Mirrors _optimize_before_cleanup. */
     public static Object[] optimizeBeforeCleanup(char[][] candGrid, Diag candDiag, int rows, int cols, DualIndex index,
                                                  Rng rng, long deadlineChecks, AtomicBoolean cancelEvent,
                                                  Map<Integer, Character> permanentLocked, Set<Integer> permanentBlack,
-                                                 Set<String> challenge, String symmetry) {
+                                                 Set<String> challenge, String symmetry, Integer multiWordPercent) {
         List<int[]> candSlots = Grids.extractSlots(candGrid, rows, cols);
         char[][] example = candDiag.exampleGrid;
         Set<Cells.Key> emptyTuples = new HashSet<>();
@@ -1115,6 +1136,7 @@ public final class Cleanup {
             fa.excludedSlots = excluded;
             fa.cancelEvent = cancelEvent;
             fa.lockedLetters = permanentLocked == null || permanentLocked.isEmpty() ? null : permanentLocked;
+            fa.multiWordPercent = multiWordPercent;
             return Fill.tryFill(g, rows, cols, index, rng, fa);
         };
         char[][] grid = Grids.copy(candGrid);
@@ -1173,6 +1195,7 @@ public final class Cleanup {
         fa.cancelEvent = cancelEvent;
         fa.lockedLetters = permanentLocked == null || permanentLocked.isEmpty() ? null : permanentLocked;
         fa.diagnostics = lcDiag;
+        fa.multiWordPercent = multiWordPercent;
         Fill.tryFill(grid, rows, cols, index, rng, fa);
         if (lcDiag.assignment != null && lcDiag.assignment.length > 0) absorb.accept(new Fill.Result(lcSlots, lcDiag.assignment));
         List<int[]> finalSlots = Grids.extractSlots(grid, rows, cols);
@@ -1205,7 +1228,7 @@ public final class Cleanup {
                                                            Map<Integer, Character> permanentLocked,
                                                            Set<Integer> permanentBlack, Set<String> challenge) {
         return cleanContinueCandidate(candGrid, candDiag, rows, cols, index, rng, permanentLocked, permanentBlack,
-                challenge, null, false);
+                challenge, null, false, null);
     }
 
     /** symmetry: every black cell this cleanup added, freed or moved (a lengthened word's boundary, the move kept or
@@ -1215,13 +1238,14 @@ public final class Cleanup {
                                                            DualIndex index, Rng rng,
                                                            Map<Integer, Character> permanentLocked,
                                                            Set<Integer> permanentBlack, Set<String> challenge,
-                                                           String symmetry, boolean grouped) {
+                                                           String symmetry, boolean grouped,
+                                                           Integer multiWordPercent) {
         char[][] originalGrid = Grids.copy(candGrid);
         List<int[]> slots0 = Grids.extractSlots(candGrid, rows, cols);
         Zones z = shortenImpossibleZones(candGrid, rows, cols, slots0, candDiag.assignment, candDiag.impossibleSlots,
-                index, rng, permanentLocked, challenge);
+                index, rng, permanentLocked, challenge, multiWordPercent);
         z = lengthenImpossibleZones(z.grid(), rows, cols, z.slots(), z.assignment(), z.impossible(), index, rng,
-                permanentLocked, permanentBlack, challenge, z.links());
+                permanentLocked, permanentBlack, challenge, z.links(), multiWordPercent);
         Map<Integer, Character> known = knownFromAssignment(z.slots(), z.assignment(), null);
         Set<Integer> deadlocked = crossingDeadlockIndices(z.slots(), index, known, challenge);
         Object[] cleaned = cleanBlockedSlots(z.slots(), z.assignment(), z.impossible(), diagLockedLetters(candDiag, z.grid()),

@@ -58,4 +58,4 @@ $PY -m data_builder.qdrant_populate "$LANG_CODE" --recreate \
 
 step "DONE — Spanish data pipeline complete"
 ls -la data/wordlist_es_freq.tsv data/wordlist_es_scrabble.tsv data/wordlist_es_hunspell.tsv data/gloss_dictionary/es_glosses.jsonl \
-       data/reference_corpus_es.tar.xz data/reference_corpus/es_sentences.txt data/inflection/es.jsonl data/usage_score_es_scrabble.tsv data/usage_score_es_scrabble_out.tsv 2>&1
+       data/reference_corpus_es.tar.xz data/reference_corpus/es_sentences.txt data/inflection/es_inflect.jsonl data/usage_score_es_scrabble.tsv data/usage_score_es_scrabble_out.tsv 2>&1

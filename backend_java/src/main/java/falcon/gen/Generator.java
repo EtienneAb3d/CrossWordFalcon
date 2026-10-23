@@ -16,6 +16,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Optional;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -149,11 +150,13 @@ public final class Generator {
     }
 
     /** The words of {@code path}'s lexicon for {@code difficulty} (mirrors _select_lexicon): with no explicit
-     * {@code maxWords} and a language with a usage-score file, the whole freq and Scrabble wordlists cut to the union
-     * of the words rated at least USAGE_DIFFICULTY_MIN_SCORE and the words kept by the freq wordlist's own
-     * DIFFICULTY_PRESETS cut ("easy": definition required, likely proper nouns excluded) rated at least
-     * FREQ_CUT_USAGE_LENIENCY less (an unrated word dropped either way); no cut at "hard"; no
-     * quota word set at "easy". Otherwise cut to {@code maxWords}, else to DIFFICULTY_PRESETS, "easy" filters on at
+     * {@code maxWords} and a language with a usage-score file, the whole freq, Scrabble and multi-word wordlists cut to
+     * the union of the words rated at least USAGE_DIFFICULTY_MIN_SCORE and the words kept by the freq wordlist's own
+     * DIFFICULTY_PRESETS cut, or by the same cut of the expressions' freq wordlist ("easy": definition required,
+     * likely proper nouns excluded) rated at least
+     * FREQ_CUT_USAGE_LENIENCY less (an unrated word dropped either way); no cut at "hard"; the
+     * proper-noun quota at every difficulty ("easy", MAX_PROPER_NOUNS 0: every likely proper noun but a Scrabble word
+     * dropped), the no-gloss one at "medium"/"hard" only. Otherwise cut to {@code maxWords}, else to DIFFICULTY_PRESETS, "easy" filters on at
      * "easy". */
     private static Selection select(String path, Number maxWords, String difficulty) throws IOException {
         String lang = Words.langFromPath(path);
@@ -168,6 +171,8 @@ public final class Generator {
         Set<String> proper = new HashSet<>(lex.properNouns());
         Set<String> nonGloss = new HashSet<>(lex.nonGloss());
         if (byUsage) {
+            // The multi-word expressions join the lexicon (merge_multi_lexicon).
+            Words.mergeMultiLexicon(lang, lex, Grids.NOISE_FREQUENCY_THRESHOLD, proper, nonGloss);
             Integer minScore = Words.USAGE_DIFFICULTY_MIN_SCORE.get(difficulty);
             if (minScore != null) {
                 // Usage criterion (any word), or the freq wordlist's own cut with one point less.
@@ -175,6 +180,17 @@ public final class Generator {
                 Set<String> freqCut = new HashSet<>();
                 for (List<String> ws : Words.loadWordlist(path, Words.DIFFICULTY_PRESETS.get(difficulty),
                         freqEasy, freqEasy).byLength().values()) freqCut.addAll(ws);
+                java.nio.file.Path freqMulti = Words.freqMultiWordlistPath(lang);
+                if (java.nio.file.Files.exists(freqMulti)) {
+                    // The expressions' own freq cut, the same way.
+                    for (List<String> ws : Words.loadWordlist(freqMulti.toString(),
+                            Words.DIFFICULTY_PRESETS.get(difficulty), freqEasy, freqEasy, lang).byLength().values()) {
+                        for (String w : ws) {
+                            Integer ref = lex.refs().get(w);
+                            if (ref != null && (ref & 3) == Words.ROW_SOURCE_MULTI) freqCut.add(w);
+                        }
+                    }
+                }
                 Map<Integer, List<String>> kept = new LinkedHashMap<>();
                 byLength.forEach((len, words) -> {
                     List<String> k = new ArrayList<>();
@@ -187,10 +203,18 @@ public final class Generator {
                 });
                 byLength = kept;
             }
-            // The "medium" and "hard" quotas still apply.
-            if ("easy".equals(difficulty)) {
-                proper.clear();
-                nonGloss.clear();
+            // The no-gloss quota applies at "medium"/"hard" only.
+            if ("easy".equals(difficulty)) nonGloss.clear();
+            if (Integer.valueOf(0).equals(Words.MAX_PROPER_NOUNS.get(difficulty))) {
+                // A zero quota: no proper noun can ever be placed, so none is offered to the search (a Scrabble word
+                // is exempt).
+                Map<Integer, List<String>> kept = new LinkedHashMap<>();
+                byLength.forEach((len, words) -> {
+                    List<String> k = new ArrayList<>();
+                    for (String w : words) if (!proper.contains(w) || scrabble.contains(w)) k.add(w);
+                    if (!k.isEmpty()) kept.put(len, k);
+                });
+                byLength = kept;
             }
         }
         return new Selection(byLength, lex, scrabble, usageScores, proper, nonGloss);
@@ -207,9 +231,15 @@ public final class Generator {
             l = LOADED.get(key);
             if (l != null) return l;
             Selection sel = select(path, maxWords, difficulty);
-            String[] sources = {path, lang == null ? null : Words.scrabbleWordlistPath(lang).toString()};
+            String[] sources = {path, lang == null ? null : Words.scrabbleWordlistPath(lang).toString(),
+                    lang == null ? null : Words.multiWordlistPath(lang).toString()};
+            Map<String, Double> dictionaryFrequencies = Words.loadDictionaryFrequencies(path);
+            if (lang != null && java.nio.file.Files.exists(Words.freqMultiWordlistPath(lang))) {
+                Words.loadDictionaryFrequencies(Words.freqMultiWordlistPath(lang).toString())
+                        .forEach(dictionaryFrequencies::putIfAbsent);
+            }
             Map<Integer, LenIndex> idx = Words.buildIndex(sel.byLength(), sel.lex().frequencies(),
-                    Words.loadDictionaryFrequencies(path), sel.lex().refs(), sources, sel.usageScores());
+                    dictionaryFrequencies, sel.lex().refs(), sources, sel.usageScores());
             Words.attachLemmas(idx, sel.lex().refs(), sources);
             // A Scrabble word is valid at every difficulty: never counted against either quota.
             Set<String> proper = sel.properNouns();
@@ -225,25 +255,28 @@ public final class Generator {
     }
 
     /** The words of one lexicon packed for membership tests (mirrors LexiconWords): sorted, joined by newlines into
-     * one ASCII byte array, with each word's start offset (a final sentinel past the end). */
+     * one UTF-8 byte array, with each word's start offset (a final sentinel past the end). */
     public static final class LexiconWords {
         private final byte[] text;
         private final int[] starts;
 
         LexiconWords(Collection<String> words) {
-            String[] ordered = new TreeSet<>(words).toArray(new String[0]);
+            // UTF-8 bytes in unsigned byte order = Python's code-point order (a lexicon word is not always ASCII).
+            byte[][] ordered = new TreeSet<>(words).stream()
+                    .map(w -> w.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                    .sorted(java.util.Arrays::compareUnsigned)
+                    .toArray(byte[][]::new);
             starts = new int[ordered.length + 1];
             int pos = 0;
             for (int i = 0; i < ordered.length; i++) {
                 starts[i] = pos;
-                pos += ordered[i].length() + 1;
+                pos += ordered[i].length + 1;
             }
             starts[ordered.length] = pos;
             text = new byte[pos];
             for (int i = 0; i < ordered.length; i++) {
-                byte[] w = ordered[i].getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
-                System.arraycopy(w, 0, text, starts[i], w.length);
-                text[starts[i] + w.length] = '\n';
+                System.arraycopy(ordered[i], 0, text, starts[i], ordered[i].length);
+                text[starts[i] + ordered[i].length] = '\n';
             }
         }
 
@@ -254,11 +287,11 @@ public final class Generator {
         private int compareAt(int i, byte[] word) {
             int from = starts[i];
             int len = starts[i + 1] - from - 1;
-            return java.util.Arrays.compare(text, from, from + len, word, 0, word.length);
+            return java.util.Arrays.compareUnsigned(text, from, from + len, word, 0, word.length);
         }
 
         public boolean contains(String word) {
-            byte[] w = word.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+            byte[] w = word.getBytes(java.nio.charset.StandardCharsets.UTF_8);
             int lo = 0;
             int hi = size();
             while (lo < hi) {
@@ -274,7 +307,12 @@ public final class Generator {
         /** {word length: number of words}. */
         public Map<Integer, Integer> lengthCounts() {
             Map<Integer, Integer> counts = new TreeMap<>();
-            for (int i = 0; i < size(); i++) counts.merge(starts[i + 1] - starts[i] - 1, 1, Integer::sum);
+            for (int i = 0; i < size(); i++) {
+                int from = starts[i], len = starts[i + 1] - from - 1;
+                int n = len;
+                for (int k = from; k < from + len; k++) if ((text[k] & 0xC0) == 0x80) n--;  // code points
+                counts.merge(n, 1, Integer::sum);
+            }
             return counts;
         }
     }
@@ -324,6 +362,35 @@ public final class Generator {
         }
     }
 
+    private static final Map<String, Optional<Map<Integer, Integer>>> MULTI_LEXICON_COUNTS = new ConcurrentHashMap<>();
+
+    /** {"path|difficulty": {word length: number of multi-word expressions of the pair's lexicon}}, null for a
+     * language without a multi-word wordlist; each pair counted once per process (mirrors
+     * multi_lexicon_length_counts). */
+    public static Map<String, Map<Integer, Integer>> multiLexiconLengthCounts(List<String[]> pairs) throws IOException {
+        Map<String, LexiconWords> words = lexiconWords(pairs);
+        Map<String, Map<Integer, Integer>> out = new LinkedHashMap<>();
+        for (String[] p : pairs) {
+            String key = p[0] + "|" + p[1];
+            Optional<Map<Integer, Integer>> n = MULTI_LEXICON_COUNTS.get(key);
+            if (n == null) {
+                Words.MultiOnly multi = Words.multiOnlyMots(Words.langFromPath(p[0]));
+                Map<Integer, Integer> counts = null;
+                if (multi != null) {
+                    counts = new TreeMap<>();
+                    LexiconWords lexicon = words.get(key);
+                    for (String m : multi.mots()) {
+                        if (lexicon.contains(m)) counts.merge(m.codePointCount(0, m.length()), 1, Integer::sum);
+                    }
+                }
+                n = Optional.ofNullable(counts);
+                MULTI_LEXICON_COUNTS.put(key, n);
+            }
+            out.put(key, n.orElse(null));
+        }
+        return out;
+    }
+
     /** {"path|difficulty": {word length: number of words}} of each pair's lexicon ({@link #lexiconWords}; mirrors
      * lexicon_length_counts). */
     public static Map<String, Map<Integer, Integer>> lexiconLengthCounts(List<String[]> pairs) throws IOException {
@@ -350,6 +417,8 @@ public final class Generator {
         volatile boolean incrementalFill;
         /** Words placed per search node (Params.wordsPerNode, mirrors _worker_words_per_node). */
         int wordsPerNode = Filler.WORDS_PER_NODE;
+        /** Multi-word expression cap (Params.multiWordPercent, mirrors _worker_multi_word_percent). */
+        int multiWordPercent = Filler.MULTI_WORD_PERCENT;
         /** Black-cell symmetry of the ratio draw (Params.blackSymmetry, mirrors _worker_black_symmetry). */
         String blackSymmetry = null;
         /** Black-cell pattern style of the ratio draw (Params.patternStyle, mirrors _worker_pattern_style). */
@@ -384,6 +453,7 @@ public final class Generator {
         a.requiredCells = requiredCells;
         a.incrementalFill = ctx.incrementalFill;
         a.wordsPerNode = ctx.wordsPerNode;
+        a.multiWordPercent = ctx.multiWordPercent;
         return a;
     }
 
@@ -788,6 +858,8 @@ public final class Generator {
         public Consumer<List<Object>> onLivePreview;
         /** Words every search node places at once (mirrors generate_grid's words_per_node). */
         public int wordsPerNode = Filler.WORDS_PER_NODE;
+        /** The "Multi-mots" field: cap on multi-word expressions (mirrors generate_grid's multi_word_percent). */
+        public int multiWordPercent = Filler.MULTI_WORD_PERCENT;
         /** The "Symétrie" selector (Grids.BLACK_SYMMETRIES, null = none), applied by every attempt's ratio draw. */
         public String blackSymmetry = null;
         /** The "Style de motif" selector (Grids.PATTERN_STYLES, null = airy), applied by every attempt's ratio draw. */
@@ -987,6 +1059,7 @@ public final class Generator {
         ctx.scrabbleWords = scrabble;
         ctx.challengeWords = challenge;
         ctx.wordsPerNode = p.wordsPerNode;
+        ctx.multiWordPercent = p.multiWordPercent;
         ctx.blackSymmetry = p.blackSymmetry;
         ctx.patternStyle = p.patternStyle;
         ctx.cancelEvent = p.cancelEvent;
@@ -1466,7 +1539,8 @@ public final class Generator {
                         final long ts = rng.seed31();
                         trials.add(executor.submit(() -> Fill.minimizeBlackSquares(gcopy, o.result(), rows, cols, index,
                                 new Rng(ts), 6000, p.cancelEvent, properNouns, maxProperNouns, nonGloss, maxNonGloss,
-                                priority, permanentLocked, permanentBlack, challenge, ctx.blackSymmetry)));
+                                priority, permanentLocked, permanentBlack, challenge, ctx.blackSymmetry,
+                                ctx.multiWordPercent)));
                     }
                     Object[] bestScored = null;
                     for (int k = 0; k < accumulatedSuccesses.size(); k++) {
@@ -1622,7 +1696,7 @@ public final class Generator {
                     final Rng taskRng = new Rng(rng.seed31());
                     optimizing.add(executor.submit(() -> Cleanup.optimizeBeforeCleanup(o.grid(), o.diag(), rows, cols,
                             index, taskRng, 6000, p.cancelEvent, permanentLocked, permanentBlack, challenge,
-                            ctx.blackSymmetry)));
+                            ctx.blackSymmetry, ctx.multiWordPercent)));
                 }
                 List<Object[]> optimized = new ArrayList<>();
                 for (Future<Object[]> f : optimizing) optimized.add(await(f));
@@ -1655,7 +1729,7 @@ public final class Generator {
                         final Rng taskRng = new Rng(rng.seed31());
                         cleaning.add(executor.submit(() -> Cleanup.cleanContinueCandidate((char[][]) o[0], (Diag) o[1],
                                 rows, cols, index, taskRng, permanentLocked, permanentBlack, challenge,
-                                ctx.blackSymmetry, "grouped".equals(ctx.patternStyle))));
+                                ctx.blackSymmetry, "grouped".equals(ctx.patternStyle), ctx.multiWordPercent)));
                     }
                     List<Cleanup.ContinueCandidate> cc = new ArrayList<>();
                     for (Future<Cleanup.ContinueCandidate> f : cleaning) cc.add(await(f));
@@ -1836,7 +1910,7 @@ public final class Generator {
                     Fill.challengeWordCellsFromAssignment(bs, ba, challenge), winningProcess, true))));
             Object[] m = Fill.minimizeBlackSquares(best, bestResult, rows, cols, index, rng, 6000, p.cancelEvent,
                     properNouns, maxProperNouns, nonGloss, maxNonGloss, priority, permanentLocked, permanentBlack,
-                    challenge, ctx.blackSymmetry);
+                    challenge, ctx.blackSymmetry, ctx.multiWordPercent);
             grid = (char[][]) m[0];
             @SuppressWarnings("unchecked")
             List<int[]> s = (List<int[]>) m[1];

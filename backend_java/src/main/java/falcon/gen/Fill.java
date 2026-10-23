@@ -66,8 +66,33 @@ public final class Fill {
         return known;
     }
 
+    /** Whether {@code word}, on a slot of cells {@code cells}, is a multi-word expression of the lexicon (mirrors
+     * _is_multi_word_in). */
+    public static boolean isMultiWord(DualIndex index, int[] cells, String word) {
+        LenIndex li = index.forCells(cells).get(cells.length);
+        return li != null && li.isMulti(word);
+    }
+
+    /** Whether a new multi-word expression may not be chosen on {@code assignment} (Filler.MULTI_WORD_PERCENT): the
+     * cap is 0, or the expressions among the words placed exceed {@code cap} % of them; never for a null cap or one
+     * of 100 and more (mirrors _multi_words_blocked_in). */
+    public static boolean multiWordsBlocked(List<int[]> slots, DualIndex index, String[] assignment, Integer cap) {
+        if (cap == null || cap >= 100) return false;
+        if (cap <= 0) return true;
+        long placed = 0, multi = 0;
+        for (int j = 0; j < assignment.length; j++) {
+            String w = assignment[j];
+            if (w == null) continue;
+            placed++;
+            if (isMultiWord(index, slots.get(j), w)) multi++;
+        }
+        return multi * 100 > (long) cap * placed;
+    }
+
+    /** multiWordPercent (null = no limit): a slot whose single candidate is a multi-word expression is left open
+     * while the cap forbids a new one (mirrors _close_implied_slots). */
     public static void closeImpliedSlots(List<int[]> slots, DualIndex index, String[] assignment, Set<String> usedWords,
-                                         Set<Integer> excluded) {
+                                         Set<Integer> excluded, Integer multiWordPercent) {
         Set<Integer> ex = excluded == null ? Set.of() : excluded;
         Map<Integer, Character> known = new HashMap<>();
         for (int i = 0; i < slots.size(); i++) {
@@ -88,6 +113,7 @@ public final class Fill {
                 List<String> real = cands.minus(usedWords);
                 if (real.size() != 1) continue;
                 String word = real.get(0);
+                if (isMultiWord(index, cells, word) && multiWordsBlocked(slots, index, assignment, multiWordPercent)) continue;
                 Map<Integer, Character> trial = new HashMap<>(known);
                 for (int p = 0; p < cells.length; p++) trial.put(cells[p], word.charAt(p));
                 boolean breaks = false;
@@ -423,6 +449,9 @@ public final class Fill {
         public int sameWordLimit;
         /** Words placed per search node (mirrors try_fill's words_per_node, Filler.WORDS_PER_NODE). */
         public int wordsPerNode = Filler.WORDS_PER_NODE;
+        /** Multi-word expression cap (mirrors try_fill's multi_word_percent, Filler.MULTI_WORD_PERCENT); null = no
+         * limit. */
+        public Integer multiWordPercent;
         /** Incremental fill (Filler.INCREMENTAL_FILL_ENABLED, mirrors try_fill's incremental_fill). */
         public boolean incrementalFill;
         /** Cells the early hardclean never clears (mirrors try_fill's permanent_locked_letters). */
@@ -543,6 +572,7 @@ public final class Fill {
         filler.earlyHardcleanPercent = a.earlyHardcleanPercent;
         filler.sameWordLimit = a.sameWordLimit;
         filler.wordsPerNode = a.wordsPerNode;
+        filler.multiWordPercent = a.multiWordPercent;
         filler.incrementalFill = a.incrementalFill;
         filler.permanentLockedLetters = a.permanentLocked == null ? Map.of() : a.permanentLocked;
         filler.permanentBlackCells = a.permanentBlackCells == null ? Set.of() : a.permanentBlackCells;
@@ -627,7 +657,8 @@ public final class Fill {
         filler.adoptBestStructure();
         slots = filler.slots;
         for (int r = 0; r < rows; r++) System.arraycopy(filler.pattern[r], 0, grid[r], 0, cols);
-        closeImpliedSlots(slots, index, filler.bestAssignment, filler.usedWords, filler.excludedSlots);
+        closeImpliedSlots(slots, index, filler.bestAssignment, filler.usedWords, filler.excludedSlots,
+                filler.multiWordPercent);
         filler.assignment = filler.bestAssignment.clone();
         boolean complete = true;
         for (String w : filler.assignment) if (w == null) complete = false;
@@ -728,17 +759,19 @@ public final class Fill {
                                                 Set<String> challengeWords) {
         return minimizeBlackSquares(grid, result, rows, cols, index, rng, deadlineChecks, cancelEvent, properNounWords,
                 maxProperNouns, nonGlossWords, maxNonGloss, priorityWords, permanentLocked, permanentBlack,
-                challengeWords, null);
+                challengeWords, null, null);
     }
 
     /** symmetry: a black cell is only removed together with every black image of it, none of them permanent, the
-     * whole group tried at once (mirrors minimize_black_squares). */
+     * whole group tried at once; multiWordPercent (null = no limit): the cap every trial's tryFill applies (mirrors
+     * minimize_black_squares). */
     public static Object[] minimizeBlackSquares(char[][] grid, Result result, int rows, int cols, DualIndex index,
                                                 Rng rng, long deadlineChecks, AtomicBoolean cancelEvent,
                                                 Set<String> properNounWords, Integer maxProperNouns,
                                                 Set<String> nonGlossWords, Integer maxNonGloss, PW priorityWords,
                                                 Map<Integer, Character> permanentLocked, Set<Integer> permanentBlack,
-                                                Set<String> challengeWords, String symmetry) {
+                                                Set<String> challengeWords, String symmetry,
+                                                Integer multiWordPercent) {
         List<int[]> slots = result.slots();
         String[] assignment = result.assignment();
         boolean improved = true;
@@ -785,6 +818,7 @@ public final class Fill {
                     fa.priorityWords = priorityWords;
                     fa.lockedLetters = merged.isEmpty() ? null : merged;
                     fa.preseedAssignment = preseed;
+                    fa.multiWordPercent = multiWordPercent;
                     Result nr = tryFill(grid, rows, cols, index, rng, fa);
                     if (nr != null) {
                         boolean allReal = true;

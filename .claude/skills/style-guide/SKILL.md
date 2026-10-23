@@ -1772,7 +1772,10 @@ English (see `project-best-practices`).
   `td.library-export-cell`, `white-space: nowrap`), followed on its right
   (`margin-left: 4px`) by the `.puz` download (`/api/library/<id>/puz`,
   `library-pdf-link library-puz-link`): the same document icon with a
-  blue (`#2563eb`) "PUZ" badge, `libraryPuzText` as its label/title.
+  blue (`#2563eb`) "PUZ" badge, `libraryPuzText` as its label/title,
+  then the `.ipuz` (green `#059669` "IPUZ", `libraryIpuzText`) and `.jpz`
+  (violet `#7c3aed` "JPZ", `libraryJpzText`) downloads, same icon, a
+  4-letter badge text at 4.4 instead of 5.4.
   All these links `stopPropagation` on click/keydown so they don't also
   trigger the row's own load-into-player behaviour (the "Lien" opens a
   new tab, the "PDF"/"PUZ" download).
@@ -2609,6 +2612,9 @@ English (see `project-best-practices`).
   uses this exact same wrapping layout too, at the user's request, but
   its outer frame's own fixed height/scroll stays unchanged — see that
   entry for the detail.
+  Right of it, the "Multi-mots max (%)" field (`#multi-word-percent`, a plain
+  `<label>` with a number input, label above input like "Précision
+  thématique") is the next flex item of the same row.
 - **Library "Thématique" column** — a new `<th data-i18n=
   "libraryColTheme">` in `#library-table`, inserted **after the Title
   column** (order: Language, Date, Title, Theme, Difficulty, Size,
@@ -4806,7 +4812,16 @@ end through the real running API (interactive start/step/save,
   column, `USAGE_STATS_STRONG_LEVEL`), the user's rule;
   counts right-aligned in tabular digits with locale thousands
   separators, "—" for a language without scores; thin `--border` row
-  dividers like `.qdrant-admin-table`. No new token. **Visually
+  dividers like `.qdrant-admin-table`. Two column groups, the user's
+  request: "Mots simples" (every column above, single words only) then
+  "Multi-mots" (glossary, rated, ≥ 3, then one column per difficulty), on
+  a two-row header ("Langue" `rowSpan` 2, each group's
+  `th.usage-stats-group` centered over its columns, the column labels on
+  the second row), the "Multi-mots" group separated by a `--border` left
+  rule on its first column (`.usage-stats-multi-start`). The per-length
+  table below it has the same two groups ("Longueur" `rowSpan` 2; one
+  column per language, then one per language with expressions, "rated
+  ≥ 3 / Facile"), built the same way. No new token. **Visually
   confirmed** with Playwright/Chromium at 1400×1000: icon button between
   Dictionnaire and Paraphraseur, table rendered under the form.
 - `.tool-icon-btn[hidden] { display: none }` is mandatory: `.tool-icon-btn`'s
@@ -4820,4 +4835,32 @@ end through the real running API (interactive start/step/save,
   events), on the light-blue `--selected` fill when the move is allowed,
   on `--incorrect-bg` with an `--error` letter (`.move-preview-invalid`)
   when a letter would leave the grid or land on a black cell. No new
-  token. Not yet checked in a real browser.
+  token. Not yet checked in a real browser. While the move mode is on
+  (Shift held, or the `#interactive-move-btn` toggle), every grid cell
+  shows the `move` cursor (two crossed double arrows,
+  `#grid.move-cursor .cell`, toggled by `script.js`'s
+  `setInteractiveMoveMode`), back to `pointer` once it is off. That
+  toggle is an icon-only `.toggle-btn` (`.icon-toggle-btn`: a 1em
+  stroked SVG of the same crossed double arrows, `currentColor`, set
+  inline on the button's ordinary text line box at
+  `vertical-align: -0.125em`, so the button is exactly as tall as the
+  text buttons next to it) placed right after the → / ↓ direction arrows, using
+  the ordinary `.toggle-btn.active` state.
+
+- **Word breaks** (`.word-break`, `.word-break-across`/`.word-break-down`,
+  `script.js`'s `appendWordBreaks`), at the user's explicit request: a
+  thicker line between two words of a multi-word expression (ARC|EN|CIEL),
+  in the playable grid, Interactive mode and the attempt previews. A bar
+  in `--fg` (no new token: a heavier grid line, not a state colour)
+  absolutely positioned on the cell's right edge (across) or bottom edge
+  (down), straddling the gap to the next cell: 4px wide offset −3px in
+  `#grid` (2px gap), 3px offset −2px in the preview mini-grids (1px gap),
+  via `--word-break-width`/`--word-break-offset`; `z-index: 1`, no pointer
+  events, so it composes with every cell overlay. Drawn only on white
+  cells. The PDF/SVG/PNG pages draw the same line (`#1f2937`, 0.12 of a
+  cell thick, `svg_export._puzzle_grid_svg`). In Interactive mode Space,
+  "-" or "_" toggles a break before the selected cell and "." (or any
+  other punctuation) toggles a black cell — the virtual keyboard's ■ key
+  keeps the black-cell role. **Visually confirmed** with
+  Playwright/Chromium: ARCENCIEL placed by "Suivant" shows two 4×28px
+  bars `rgb(31, 35, 32)` after ARC and EN.
