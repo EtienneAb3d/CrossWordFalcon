@@ -55,7 +55,7 @@ from .ipuz_export import IPUZ_MEDIA_TYPE, render_ipuz
 from .jpz_export import JPZ_MEDIA_TYPE, render_jpz
 from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, GenerationPaused,
-    BLACK_SYMMETRIES, PATTERN_STYLES, PREFILL_MIN_WORD_COUNT, style_index, WORDS_PER_NODE, MULTI_WORD_PERCENT, DualIndex, DualSet, build_letters_grid,
+    BLACK_SYMMETRIES, PATTERN_STYLES, valid_pattern_mix, pattern_style_of_mix, PREFILL_MIN_WORD_COUNT, style_index, WORDS_PER_NODE, MULTI_WORD_PERCENT, DualIndex, DualSet, build_letters_grid,
     build_word_entries, challenge_word_grid_form, extract_slots, generate_grid, slot_direction,
     word_forms,
     _interactive_fill_diagnostics, _interactive_letter_stats,
@@ -908,6 +908,11 @@ class GenerateRequest(BaseModel):
         default="airy",
         description=f"Black-cell pattern style: {list(PATTERN_STYLES)}",
     )
+    # The form's three "Style de motif" percentages (airy, grouped,
+    # aligned; crossword_gen.py's `make_pattern`'s `pattern_mix`), summing
+    # to 100; when given, `pattern_style` is derived from it
+    # (`_apply_pattern_mix`).
+    pattern_mix: Optional[list[int]] = None
     # "Effort" selector (see BUDGET_MODES above), at the user's explicit
     # request — directly sets the search budget per
     # attempt, replacing for this request the default formula of
@@ -1298,7 +1303,7 @@ class InteractiveFinishRequest(BaseModel):
     words of that language, so the search must keep its dictionary.
     Every other generation parameter mirrors the generation form's own
     CURRENT values, which the player may have changed since the session
-    started: `mode`/`black_enrichment_percent`/`words_per_node`/`multi_word_percent`/`symmetry`/`pattern_style`/`force_letters_percent`/
+    started: `mode`/`black_enrichment_percent`/`words_per_node`/`multi_word_percent`/`symmetry`/`pattern_style`/`pattern_mix`/`force_letters_percent`/
     `difficulty`/`theme`/`theme_precision`/`challenge_words`. The last four
     fall back to the session's own value when omitted (`None`). The
     session's already-resolved theme glossary is reused only while it
@@ -1313,6 +1318,7 @@ class InteractiveFinishRequest(BaseModel):
     multi_word_percent: int = Field(default=MULTI_WORD_PERCENT, ge=0, le=100)
     symmetry: str = "none"
     pattern_style: str = "airy"
+    pattern_mix: Optional[list[int]] = None
     force_letters_percent: int = Field(default=0, ge=0, le=100)
     difficulty: Optional[str] = None
     theme: Optional[str] = None
@@ -4447,6 +4453,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                         multi_word_percent=req.multi_word_percent,
                         black_symmetry=req.symmetry,
                         pattern_style=req.pattern_style,
+                        pattern_mix=req.pattern_mix,
                         start_grid=start_grid,
                     )
                     break
@@ -4833,6 +4840,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
             "multi_word_percent": req.multi_word_percent,
             "symmetry": req.symmetry,
             "pattern_style": req.pattern_style,
+            "pattern_mix": req.pattern_mix,
             "force_letters_percent": req.force_letters_percent,
             "mode": req.mode,
             "theme_precision": req.theme_precision,
@@ -5062,6 +5070,7 @@ async def _run_interactive_job(job_id, req):
             available_lengths=available_lengths, index=index,
             black_enrichment_fraction=req.black_enrichment_percent / 100,
             symmetry=req.symmetry, pattern_style=req.pattern_style,
+            pattern_mix=req.pattern_mix,
         )
         # "Mots Défi (personnalisation)" typed on the main generation form
         # before switching to "mode == interactive" (GenerateRequest.
@@ -5131,7 +5140,8 @@ async def _run_interactive_job(job_id, req):
             # The "Style de motif" the session's lexicon follows (see
             # _load_interactive_index), saved with its drafts and grids so
             # a resumed session keeps it.
-            "generation_params": {"pattern_style": req.pattern_style},
+            "generation_params": {"pattern_style": req.pattern_style,
+                                  "pattern_mix": req.pattern_mix},
         }
         result_grid = grid if placed["impossible"] else placed["grid"]
         job["result"] = {
@@ -5444,6 +5454,7 @@ def _validate_generate_request(req):
             detail=f"mode inconnu : {req.mode!r} (attendu : {sorted(BUDGET_MODES)})",
         )
     _validate_symmetry(req.symmetry)
+    _apply_pattern_mix(req)
     _validate_pattern_style(req.pattern_style)
 
 
@@ -5453,6 +5464,19 @@ def _validate_symmetry(symmetry):
             status_code=400,
             detail=f"symétrie inconnue : {symmetry!r} (attendu : {list(BLACK_SYMMETRIES)})",
         )
+
+
+def _apply_pattern_mix(req):
+    """Validates the request's "Style de motif" percentages (`pattern_mix`,
+    when given) and derives its `pattern_style` from them."""
+    if req.pattern_mix is None:
+        return
+    if not valid_pattern_mix(req.pattern_mix):
+        raise HTTPException(
+            status_code=400,
+            detail=f"style de motif invalide : {req.pattern_mix!r} (attendu : 3 entiers de 0 à 100 totalisant 100)",
+        )
+    req.pattern_style = pattern_style_of_mix(req.pattern_mix)
 
 
 def _validate_pattern_style(pattern_style):
@@ -5524,6 +5548,7 @@ async def interactive_start(req: GenerateRequest):
     if req.difficulty not in DIFFICULTY_PRESETS:
         raise HTTPException(status_code=400, detail="difficulté inconnue")
     _validate_symmetry(req.symmetry)
+    _apply_pattern_mix(req)
     _validate_pattern_style(req.pattern_style)
     job_id = _new_job()
     task = asyncio.create_task(_run_interactive_job(job_id, req))
@@ -6756,6 +6781,7 @@ async def interactive_finish(req: InteractiveFinishRequest):
         multi_word_percent=req.multi_word_percent,
         symmetry=req.symmetry,
         pattern_style=req.pattern_style,
+        pattern_mix=req.pattern_mix,
         mode=req.mode,
         theme=theme or None,
         theme_precision=theme_precision,

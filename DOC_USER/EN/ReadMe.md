@@ -103,7 +103,7 @@ full again whenever a new generation or an Interactive session starts.
   (6x6, 0 %), Expresso latte (10x10, 10 %), Macchiato (15x10, 12 %),
   Cappuccino (15x15, 15 %), Mocha (21x21, 15 %), Tazza grande (30x20, 15 %),
   Frappuccino (30x30, 15 %), Caffeteria (50x50, 15 %) — every one at
-  18 % while the pattern style is Grouped/aligned (American). Picking one fills Largeur, Hauteur and Taux
+  18 % while the pattern style is American (Sparse below 100 %). Picking one fills Largeur, Hauteur and Taux
   noir at once; the three fields stay editable. The button shows the
   preset matching the current values, or "Personnalisée / Custom" when
   none does. Presets wider or taller than 20 cells are greyed out when the
@@ -172,14 +172,19 @@ full again whenever a new generation or an Interactive session starts.
   was not (`frontend/static/script.js`, `symmetryCells`;
   `backend/crossword_gen.py`, `symmetry_cells`, `make_pattern`,
   `_symmetrize_black_changes`).
-- **Style de motif / Pattern style** (`#pattern-style`, right of
-  Symétrie) — how the pattern draw places its black cells: **Aéré
-  (français) / Sparse (French)**, the default, keeps them as far from each
-  other as possible and never side by side; **Groupé/aligné (américain/NYT)
-  / Grouped/aligned (American/NYT)** first places 40 % of the black rate
+- **Aéré (Français) / Groupé (Américain) / Aligné (Américain)** — **Sparse
+  (French) / Grouped (American) / Aligned (American)**
+  (`#pattern-mix-airy`, `#pattern-mix-grouped`, `#pattern-mix-aligned`,
+  right of Symétrie) — three percentages, always totalling 100, setting
+  how the pattern draw places its black cells. Changing one moves the
+  difference onto the field right of it, then, once that one reaches 0 or
+  100, onto the next, wrapping round to the first (`applyPatternMixChange`).
+  At **100/0/0** the pattern is French: black cells as far from each
+  other as possible and never side by side. Any other mix gives an
+  American pattern: the Sparse share of the black rate is placed
   the Sparse way (far apart, never side by side, but never leaving a
-  2-letter word), the next 40 % preferably diagonal to a black cell
-  (still never side by side), then the rest as close as possible to
+  2-letter word), the Grouped share preferably diagonal to a black cell
+  (still never side by side), then the Aligned share as close as possible to
   the black cells already there, preferably side by side with one, never placing two black cells side by side parallel to a
   border within its first 3 rows or columns, as in an American crossword — once the black rate is reached, a black cell
   touching black cells or the grid border on three sides or more is taken off (opening any
@@ -188,10 +193,11 @@ full again whenever a new generation or an Interactive session starts.
   one, and in Interactive mode a 2-letter word is flagged invalid).
   Such a grid draws its black cells as full squares — on screen, in the
   previews and in the PDF/SVG/PNG pages — instead of the usual centered
-  half-size square. Selecting Grouped/aligned raises Taux noir to 18 % if
-  it was lower (it can then be lowered again by hand). Choosing English
-  as the language selects Grouped/aligned and the Diagonal symmetry (`frontend/static/script.js`,
-  `setUiLanguage`; `backend/crossword_gen.py`, `PATTERN_STYLES`,
+  half-size square. Leaving 100/0/0 raises Taux noir to 18 % if
+  it was lower (it can then be lowered again by hand). Choosing French
+  as the language sets 100/0/0, any other language 40/40/20, English also
+  selecting the Diagonal symmetry (`frontend/static/script.js`,
+  `setUiLanguage`, `setPatternMix`; `backend/crossword_gen.py`, `pattern_mix`, `PATTERN_STYLES`,
   `_place_black_cells`).
 - **Mots par pose / Words per placement** (`#words-per-node`) — the most
   words the search places in one go before checking how the rest of the

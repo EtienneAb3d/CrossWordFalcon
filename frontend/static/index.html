@@ -152,17 +152,37 @@
         </select>
       </label>
 
-      <!-- "Style de motif": the ratio draw's black-cell placement criterion,
-           automatic and Interactive alike (GenerateRequest.pattern_style,
-           crossword_gen.py's PATTERN_STYLES): "airy" keeps black cells
-           apart, "grouped" groups them. script.js selects "grouped" (and a
-           diagonal symmetry) whenever the language becomes English. -->
-      <label for="pattern-style">
-        <span data-i18n="patternStyleLabel">Style de motif</span>
-        <select id="pattern-style" name="pattern_style">
-          <option value="airy" selected data-i18n="patternStyleAiry">Aéré (français)</option>
-          <option value="grouped" data-i18n="patternStyleGrouped">Groupé/aligné (américain/NYT)</option>
-        </select>
+      <!-- "Style de motif": three percentages always totalling 100 — the
+           shares of the ratio draw's black cells placed apart ("Aéré"),
+           diagonally grouped ("Groupé") and side by side ("Aligné"),
+           automatic and Interactive alike (GenerateRequest.pattern_mix,
+           crossword_gen.py's make_pattern; 100/0/0 = the "airy" pattern
+           style, any other mix the "grouped" one). script.js's
+           applyPatternMixChange keeps the total at 100, and setUiLanguage
+           sets 100/0/0 for French, 40/40/20 for every other language. -->
+      <label for="pattern-mix-airy" class="pattern-mix-field">
+        <span data-i18n="patternMixAiry">Aéré (Français)</span>
+        <span class="input-with-suffix">
+          <input type="number" id="pattern-mix-airy" class="pattern-mix-input"
+                 min="0" max="100" step="1" value="100">
+          <span class="input-suffix">%</span>
+        </span>
+      </label>
+      <label for="pattern-mix-grouped" class="pattern-mix-field">
+        <span data-i18n="patternMixGrouped">Groupé (Américain)</span>
+        <span class="input-with-suffix">
+          <input type="number" id="pattern-mix-grouped" class="pattern-mix-input"
+                 min="0" max="100" step="1" value="0">
+          <span class="input-suffix">%</span>
+        </span>
+      </label>
+      <label for="pattern-mix-aligned" class="pattern-mix-field">
+        <span data-i18n="patternMixAligned">Aligné (Américain)</span>
+        <span class="input-with-suffix">
+          <input type="number" id="pattern-mix-aligned" class="pattern-mix-input"
+                 min="0" max="100" step="1" value="0">
+          <span class="input-suffix">%</span>
+        </span>
       </label>
 
       <!-- Action buttons on their own row, below the option combos, at

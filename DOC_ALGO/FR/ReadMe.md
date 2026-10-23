@@ -520,9 +520,13 @@ aucune case valide, le pourcentage est **augmenté de 5 %** (10 %, 15 %…),
 pour les segments retenus (pris plus loin dans le même classement) comme
 pour la fenêtre de score de longueurs et la fenêtre de distance, et le tirage recommence (`_place_black_cells`).
 
-**Style de motif.** Le réglage « Style de motif » (`pattern_style`,
-valeurs `PATTERN_STYLES`) choisit le critère de pose des cases noires
-(`make_pattern`, `_place_black_cells`) :
+**Style de motif.** Le style de motif se règle par trois pourcentages
+totalisant toujours 100 — « Aéré (Français) », « Groupé (Américain) »,
+« Aligné (Américain) » (`pattern_mix`) — qui sont les parts de l'objectif
+« Taux noir » tirées selon chacune des trois phases ci-dessous. Le
+mélange 100/0/0 est le style **Aéré** (`airy`) ; tout autre mélange est
+le style **Groupé/aligné** (`grouped`) dont il fixe les trois phases
+(`pattern_style_of_mix`, `make_pattern`, `_place_black_cells`) :
 
 - **Aéré (français)** (`airy`, par défaut) : le classement ci-dessus,
   les cases les plus **éloignées** des cases noires d'abord, et jamais
@@ -531,17 +535,17 @@ valeurs `PATTERN_STYLES`) choisit le critère de pose des cases noires
   - le tirage se fait en **trois phases**, chaque seuil étant une part de
     l'objectif (cases noires déjà présentes comprises, arrondi au plus
     proche) (`make_pattern`, `_place_black_cells`) :
-    1. jusqu'à `GROUPED_AIRY_PERCENT` (**40 %**), les règles **Aéré** —
+    1. jusqu'à la part « Aéré » (`DEFAULT_PATTERN_MIX` : **40 %**), les règles **Aéré** —
        les cases les plus éloignées d'abord, jamais deux cases noires côte
        à côte, les bords comptant comme des cases noires — en interdisant
        en plus toute case qui laisserait un emplacement de 2 lettres
        (`forbid_short_runs`) ;
-    2. jusqu'à `GROUPED_DIAGONAL_PERCENT` (**80 %**), les règles
+    2. jusqu'aux parts « Aéré » + « Groupé » cumulées (**80 %** par défaut), les règles
        Groupé/aligné ci-dessous, mais deux cases noires côte à côte
        restent interdites et l'on garde de préférence les cases ayant une
        autre case noire dans leur **carré 3x3** centré sur elles, donc une
        voisine en diagonale (`grouped_diagonal`, `_has_black_around`) ;
-    3. jusqu'à l'objectif, les règles Groupé/aligné, adjacence comprise,
+    3. jusqu'à l'objectif (la part « Aligné »), les règles Groupé/aligné, adjacence comprise,
        en gardant de préférence les cases qui touchent une case noire par
        un côté ; cette phase sert aussi aux relances (dégroupage, limite
        des emplacements courts) ;
@@ -622,9 +626,13 @@ tout retrait qui en ferait apparaître un, chaque mot devant exister dans
 le dictionnaire. En mode Interactif, « Suivant » n'y pose jamais de mot
 et un mot de 2 lettres tapé à la main est signalé invalide.
 
-Dans l'interface, choisir l'anglais comme langue sélectionne la symétrie
-« Diagonale » et le style « Groupé/aligné » (`frontend/static/script.js`,
-`setUiLanguage`).
+Dans l'interface, choisir le français comme langue règle le mélange sur
+100/0/0, toute autre langue sur 40/40/20 ; l'anglais sélectionne en plus
+la symétrie « Diagonale » (`frontend/static/script.js`, `setUiLanguage`).
+Modifier un des trois pourcentages reporte la différence sur le champ
+immédiatement à sa droite, puis, une fois celui-ci à 0 ou 100, sur le
+suivant, en revenant au premier (`frontend/static/script.js`,
+`applyPatternMixChange`).
 
 Les contraintes fortes : la case est encore blanche, ne **touche aucune
 autre case noire**, ne fait pas tomber un emplacement touchant une lettre
@@ -647,7 +655,10 @@ atteint, on compte les emplacements de **2 ou 3 lettres**
 touchent un bord (leur longueur n'est pas contrainte). S'il y en a plus de
 `SHORT_SLOT_MAX_COUNT` (**10**), les cases noires posées par ce tirage qui
 les délimitent (la case juste avant ou juste après l'emplacement) sont
-retirées, puis le tirage est relancé jusqu'à retrouver l'objectif ; le
+retirées (avec leurs images par symétrie, dans un ordre aléatoire ; en
+style « grouped », un retrait qui laisserait un emplacement de 2 lettres
+passant par une case libérée est annulé, `_reopen_bounding_blacks`), puis
+le tirage est relancé jusqu'à retrouver l'objectif ; le
 compte est refait après chaque relance, au plus
 `SHORT_SLOT_REDRAW_MAX_ROUNDS` (**10**) fois, après quoi la grille est
 gardée telle quelle. Les cases noires du motif de départ et celles du

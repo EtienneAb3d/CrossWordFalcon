@@ -423,6 +423,8 @@ public final class Generator {
         String blackSymmetry = null;
         /** Black-cell pattern style of the ratio draw (Params.patternStyle, mirrors _worker_pattern_style). */
         String patternStyle = null;
+        /** Its three phase shares (Params.patternMix, mirrors _worker_pattern_mix). */
+        java.util.List<Integer> patternMix = null;
         /** Pattern each original attempt of a fresh-pattern palier drew (patternAttempt), by attempt seed: the
          * palier's "pattern_generated" preview is built from them (mirrors generate_grid's early_patterns). */
         final Map<Long, char[][]> earlyPatterns = new ConcurrentHashMap<>();
@@ -519,7 +521,7 @@ public final class Generator {
             for (int cell : permanentBlack) seedGrid[Cells.r(cell)][Cells.c(cell)] = BLACK;
         }
         char[][] grid = Grids.makePattern(rows, cols, ratio, rng, available, seedGrid, locked, ctx.index, enrichment,
-                ctx.blackSymmetry, ctx.patternStyle);
+                ctx.blackSymmetry, ctx.patternStyle, ctx.patternMix);
         // The palier's "pattern_generated" preview is built from this very pattern (publishPatternPreview).
         if (racing) ctx.earlyPatterns.put(seed, Grids.copy(grid));
         List<int[]> slots = Grids.extractSlots(grid, rows, cols);
@@ -864,6 +866,8 @@ public final class Generator {
         public String blackSymmetry = null;
         /** The "Style de motif" selector (Grids.PATTERN_STYLES, null = airy), applied by every attempt's ratio draw. */
         public String patternStyle = null;
+        /** Its three phase shares under "grouped" (Grids.DEFAULT_PATTERN_MIX when null, mirrors generate_grid's pattern_mix). */
+        public java.util.List<Integer> patternMix = null;
         /** Seed grid of every attempt starting afresh instead of a blank grid (mirrors generate_grid's start_grid):
          *  "Finir la grille"/"Finir la zone" pass the Interactive grid's black cells. */
         public char[][] startGrid = null;
@@ -1062,6 +1066,7 @@ public final class Generator {
         ctx.multiWordPercent = p.multiWordPercent;
         ctx.blackSymmetry = p.blackSymmetry;
         ctx.patternStyle = p.patternStyle;
+        ctx.patternMix = p.patternMix;
         ctx.cancelEvent = p.cancelEvent;
         ctx.attemptDoneEvent = attemptDoneEvent;
         ctx.bestStateQueue = bestStateQueue::add;
@@ -2082,6 +2087,15 @@ public final class Generator {
                 case "--deadline-checks" -> p.deadlineChecks = Long.parseLong(args[++i]);
                 case "--symmetry" -> p.blackSymmetry = args[++i];
                 case "--pattern-style" -> p.patternStyle = args[++i];
+                case "--pattern-mix" -> {
+                    p.patternMix = java.util.List.of(Integer.parseInt(args[++i]), Integer.parseInt(args[++i]),
+                            Integer.parseInt(args[++i]));
+                    if (!Grids.validPatternMix(p.patternMix)) {
+                        System.err.println("--pattern-mix: three integers of 0-100 summing to 100");
+                        System.exit(2);
+                    }
+                    p.patternStyle = Grids.patternStyleOfMix(p.patternMix);
+                }
                 default -> {
                     System.err.println("unknown option " + args[i]);
                     System.exit(2);

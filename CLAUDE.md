@@ -625,7 +625,11 @@ default `WORDS_PER_NODE`], `multi_word_percent` [0-100, default
 "none", 400 otherwise, also applied to an Interactive session's starting
 pattern], `pattern_style` [`PATTERN_STYLES`: airy/grouped, default
 "airy", 400 otherwise, also applied to an Interactive session's starting
-pattern], `mode` [flash/turbo/fast/
+pattern], `pattern_mix` [optional: the "Style de motif" airy/grouped/
+aligned percentages, three integers of 0-100 summing to 100, 400
+otherwise; when given, `pattern_style` is derived from it —
+`_apply_pattern_mix`, Java `App.applyPatternMix`; also taken by
+`InteractiveFinishRequest`, kept in `generation_params`], `mode` [flash/turbo/fast/
 medium/ultra/megatron/gridzilla, default medium], `pseudo`, `theme`, `theme_precision`
 [0.0-1.0, default `THEME_MIN_SCORE`], `source`, `challenge_words`
 [list of free-form "Mots Défi" strings, default empty]); `RecomputeRequest`;
@@ -745,10 +749,15 @@ own rng drawn from the parent's in candidate order:
    draws at random among the same percentage best scored (at least one) —
    under the "grouped" **pattern style** the draw runs in three phases,
    each threshold a share of the target (`max(placed, round(target * p /
-   100))`, seed and pre-fill cells included): up to `GROUPED_AIRY_PERCENT`
+   100))`, seed and pre-fill cells included, the shares given by
+   `pattern_mix` — `make_pattern(pattern_mix=)`, `generate_grid(pattern_
+   mix=)` -> `_worker_pattern_mix`, `GenerateRequest.pattern_mix`, Java
+   `Generator.Params.patternMix`, `DEFAULT_PATTERN_MIX` (40, 40, 20) when
+   `None`; `pattern_style_of_mix`: 100/0/0 is "airy", any other mix
+   "grouped", Java `Grids.patternStyleOfMix`): up to the airy share
    (40) % with these airy rules plus the grouped style's no-2-letter-slot
-   check (`_place_black_cells(forbid_short_runs=True)`); up to
-   `GROUPED_DIAGONAL_PERCENT` (80) % with the grouped rules below but
+   check (`_place_black_cells(forbid_short_runs=True)`); up to the airy
+   plus grouped shares (80) % with the grouped rules below but
    side-by-side black cells refused at every level and the cells with
    another black cell in their 3x3 square (`_has_black_around`, i.e. a
    diagonal neighbour) preferred (`grouped_diagonal=True`); then the
@@ -782,9 +791,14 @@ own rng drawn from the parent's in candidate order:
    increasing spread score, both without the aligned factor and without
    the edges' virtual ring, and adjacency is accepted from the first
    level on (`_place_black_cells(grouped=)`; pre-fill keeps its own
-   never-adjacent rule); the web UI selects "grouped" and the diagonal
-   symmetry whenever the language becomes English (`script.js`'s
-   `setUiLanguage`), and selecting "grouped" raises "Taux noir" to at
+   never-adjacent rule); the web UI's three "Style de motif" fields
+   (`#pattern-mix-airy`/`-grouped`/`-aligned`, `script.js`'s `patternMix`,
+   sent as `pattern_mix` with the derived `pattern_style`) always total
+   100: a change moves the difference onto the field right of it, then
+   the next ones, wrapping to the first (`applyPatternMixChange`);
+   `setUiLanguage` sets 100/0/0 for French, 40/40/20 for every other
+   language, plus the diagonal symmetry for English, and leaving 100/0/0
+   (`setPatternMix`) raises "Taux noir" to at
    least `GROUPED_MIN_BLACK_PERCENT` (18, `applyGroupedBlackMinimum`; the
    player may lower it again). Under "grouped" the grid's lexicon has no word
    shorter than `GROUPED_MIN_SLOT_LENGTH` (`style_index`, Java
@@ -828,7 +842,10 @@ own rng drawn from the parent's in candidate order:
    at most `SHORT_SLOT_MAX_LENGTH` (3) letters (a slot touching the
    border not counted) reopen the black cells this
    draw placed right before or after them (`_short_slot_bounding_blacks`;
-   the seed's and pre-fill's never), which become candidates again, and
+   the seed's and pre-fill's never), each with its images, in shuffled
+   order (`_reopen_bounding_blacks`, Java `Grids.reopenBoundingBlacks`;
+   under "grouped", a reopening after which a run through one of its
+   cells is 2 cells long is undone), which become candidates again, and
    the draw resumes to the target — at most `SHORT_SLOT_REDRAW_MAX_ROUNDS`
    (10) rounds, the grid then kept as it is. This ratio-based draw never
    considers a cell of the four corner 2x2 squares (`_in_corner_square`/

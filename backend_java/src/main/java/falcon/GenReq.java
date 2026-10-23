@@ -17,6 +17,8 @@ public final class GenReq {
     public int multiWordPercent = falcon.gen.Filler.MULTI_WORD_PERCENT;
     public String symmetry = "none";
     public String patternStyle = "airy";
+    /** The form's three "Style de motif" percentages; when given, patternStyle is derived from it (App.applyPatternMix). */
+    public List<Integer> patternMix;
     public String mode = "medium";
     public String pseudo;
     public String theme;
@@ -39,6 +41,7 @@ public final class GenReq {
         r.multiWordPercent = b.integer("multi_word_percent", falcon.gen.Filler.MULTI_WORD_PERCENT, 0, 100);
         r.symmetry = b.str("symmetry", "none");
         r.patternStyle = b.str("pattern_style", "airy");
+        r.patternMix = b.optIntList("pattern_mix");
         r.mode = b.str("mode", "medium");
         r.pseudo = b.str("pseudo", null);
         r.theme = b.str("theme", null);
@@ -62,6 +65,7 @@ public final class GenReq {
         m.put("multi_word_percent", multiWordPercent);
         m.put("symmetry", symmetry);
         m.put("pattern_style", patternStyle);
+        m.put("pattern_mix", patternMix == null ? null : new java.util.ArrayList<>(patternMix));
         m.put("mode", mode);
         m.put("pseudo", pseudo);
         m.put("theme", theme);

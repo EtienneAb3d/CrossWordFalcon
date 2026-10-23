@@ -111,6 +111,32 @@ public final class Body {
         return out;
     }
 
+    /** Optional list[int] (null when absent or null). */
+    public List<Integer> optIntList(String k) {
+        Object v = m.get(k);
+        if (v == null) return null;
+        if (!(v instanceof List<?> l)) throw Web.validation("body", k, "list_type", "Input should be a valid list", v);
+        List<Integer> out = new ArrayList<>();
+        for (Object o : l) {
+            if (o instanceof Number n && n.doubleValue() == Math.rint(n.doubleValue())) {
+                out.add(n.intValue());
+                continue;
+            }
+            if (o instanceof String s) {
+                try {
+                    out.add(Integer.parseInt(s.trim()));
+                    continue;
+                } catch (NumberFormatException e) {
+                    throw new Web.HttpError(422, List.of(Json.obj("type", "int_parsing", "loc", List.of("body", k, out.size()),
+                            "msg", "Input should be a valid integer, unable to parse string as an integer", "input", o)));
+                }
+            }
+            throw new Web.HttpError(422, List.of(Json.obj("type", "int_type", "loc", List.of("body", k, out.size()),
+                    "msg", "Input should be a valid integer", "input", o)));
+        }
+        return out;
+    }
+
     public List<Object> list(String k, boolean required) {
         Object v = m.get(k);
         if (v == null) {

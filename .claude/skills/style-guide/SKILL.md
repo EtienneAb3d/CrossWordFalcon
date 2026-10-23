@@ -4757,9 +4757,13 @@ end through the real running API (interactive start/step/save,
 
 - **Generation form layout** (`frontend/static/index.html`), at the user's
   explicit requests: the option row holds Langue, Largeur, Bilingue,
-  Hauteur, Taux noir, Symétrie and "Style de motif" (`#pattern-style`, a
-  plain `<select>` right of Symétrie: "Aéré (français)" / "Groupé/aligné
-  (américain/NYT)"); "Précision thématique" (`#theme-precision`) is the
+  Hauteur, Taux noir, Symétrie and the three "Style de motif" percentages
+  right of Symétrie (`#pattern-mix-airy`/`-grouped`/`-aligned`, each a
+  number field with a "%" suffix like Taux noir: "Aéré (Français)" /
+  "Groupé (Américain)" / "Aligné (Américain)", each label capped at 6rem,
+  `.pattern-mix-field`, so it wraps before its parenthesis and the option
+  row still fits one line at 1400px — **visually confirmed** with
+  Playwright/Chromium); "Précision thématique" (`#theme-precision`) is the
   first item of `#form-actions`, left of "Thématique", its plain
   label-above-input shape top-aligned with Thématique's label by the row's
   `align-items: flex-start`; "Difficulté", "Mots par pose", "Effort" and the
@@ -4774,7 +4778,7 @@ end through the real running API (interactive start/step/save,
 
 - **Full-size black cells for an American grid** (`.full-black .cell.black
   { background-size: 100% 100% }`), at the user's explicit request: a grid
-  made with the "grouped" pattern style ("Groupé/aligné (américain/NYT)")
+  made with the "grouped" pattern style (any "Style de motif" mix but 100/0/0)
   draws each black cell as a `--black-cell` square filling the whole cell
   instead of the centered half-size square. `script.js` sets `.full-black`
   on `#grid` (play mode: `puzzle.generation_params.pattern_style`;
@@ -4787,8 +4791,8 @@ end through the real running API (interactive start/step/save,
   confirmed** with Playwright/Chromium on a real 9x9 English grid (computed
   `background-size: 100% 100%`, full blue squares) and on its PDF.
 
-- **Presets under the American style**: while "Style de motif" is
-  "Groupé/aligné (américain/NYT)", every "Préconfigurations" option shows
+- **Presets under the American style**: while the "Style de motif" mix is
+  not 100/0/0, every "Préconfigurations" option shows
   and applies an 18 % black rate (`script.js`'s `presetBlack`,
   `GROUPED_MIN_BLACK_PERCENT`); the list is rebuilt whenever the style
   changes. No visual change otherwise. **Visually confirmed** with

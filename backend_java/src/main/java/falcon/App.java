@@ -372,6 +372,7 @@ public final class App {
             throw http(400, "mode inconnu : " + Log.repr(req.mode) + " (attendu : ['fast', 'flash', 'gridzilla', 'medium', 'megatron', 'strong', 'turbo', 'ultra'])");
         }
         validateSymmetry(req.symmetry);
+        applyPatternMix(req);
         validatePatternStyle(req.patternStyle);
     }
 
@@ -380,6 +381,16 @@ public final class App {
             throw http(400, "symétrie inconnue : " + Log.repr(symmetry)
                     + " (attendu : ['none', 'horizontal', 'vertical', 'diagonal', 'bidirectional', 'rotation'])");
         }
+    }
+
+    /** Validates the request's "Style de motif" percentages (pattern_mix, when given) and derives its patternStyle from them. */
+    static void applyPatternMix(GenReq req) {
+        if (req.patternMix == null) return;
+        if (!Grids.validPatternMix(req.patternMix)) {
+            throw http(400, "style de motif invalide : " + Log.repr(req.patternMix)
+                    + " (attendu : 3 entiers de 0 à 100 totalisant 100)");
+        }
+        req.patternStyle = Grids.patternStyleOfMix(req.patternMix);
     }
 
     static void validatePatternStyle(String patternStyle) {
@@ -1080,6 +1091,7 @@ public final class App {
                         p.multiWordPercent = req.multiWordPercent;
                         p.blackSymmetry = req.symmetry;
                         p.patternStyle = req.patternStyle;
+                        p.patternMix = req.patternMix;
                         p.cancelEvent = job.cancel;
                         p.deadlineChecks = BUDGET_MODES.get(req.mode);
                         p.resumeState = gridResume;
@@ -1238,7 +1250,7 @@ public final class App {
             progress.on("saving", new LinkedHashMap<>());
             String pseudo = pseudoOf(req.pseudo);
             Map<String, Object> generationParams = Json.obj("black_enrichment_percent", req.blackEnrichmentPercent,
-                    "words_per_node", req.wordsPerNode, "multi_word_percent", req.multiWordPercent, "symmetry", req.symmetry, "pattern_style", req.patternStyle, "force_letters_percent", req.forceLettersPercent, "mode", req.mode, "theme_precision", req.themePrecision);
+                    "words_per_node", req.wordsPerNode, "multi_word_percent", req.multiWordPercent, "symmetry", req.symmetry, "pattern_style", req.patternStyle, "pattern_mix", req.patternMix, "force_letters_percent", req.forceLettersPercent, "mode", req.mode, "theme_precision", req.themePrecision);
             if (a.publish) {
                 // On the result too: the play view and the SVG/PNG pages draw a "grouped" grid's black cells full
                 // size (pattern_style).
@@ -1380,7 +1392,7 @@ public final class App {
             Rng rng = Rng.of(req.seed);
             int rows = req.height, cols = req.width;
             char[][] grid = Grids.makePattern(rows, cols, 0.0, rng, Words.LengthSets.available(index, Grids.PREFILL_MIN_WORD_COUNT),
-                    null, null, index, req.blackEnrichmentPercent / 100.0, req.symmetry, req.patternStyle);
+                    null, null, index, req.blackEnrichmentPercent / 100.0, req.symmetry, req.patternStyle, req.patternMix);
             Set<String> challenge = challengeSet(req.challengeWords);
             PW scrabble = scrabbleWords(req.language, req.bilingualLanguage, req.difficulty);
             Words.Breaks multi = multiBreaks(req.language, req.bilingualLanguage);
@@ -1403,7 +1415,7 @@ public final class App {
             meta.put("challenge_words", new ArrayList<>(req.challengeWords));
             // The "Style de motif" the session's lexicon follows (loadInteractiveIndex), saved with its drafts and
             // grids so a resumed session keeps it.
-            meta.put("generation_params", Json.obj("pattern_style", req.patternStyle));
+            meta.put("generation_params", Json.obj("pattern_style", req.patternStyle, "pattern_mix", req.patternMix));
             boolean impossible = Boolean.TRUE.equals(placed.get("impossible"));
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("width", req.width);
@@ -2363,6 +2375,7 @@ public final class App {
             }
             if (!Words.DIFFICULTY_PRESETS.containsKey(req.difficulty)) throw http(400, "difficulté inconnue");
             validateSymmetry(req.symmetry);
+            applyPatternMix(req);
             validatePatternStyle(req.patternStyle);
             String id = newJob();
             runInBackground("interactive-" + id.substring(0, 8), () -> runInteractiveJob(id, req));
@@ -2734,6 +2747,7 @@ public final class App {
             int mwp = b.integer("multi_word_percent", falcon.gen.Filler.MULTI_WORD_PERCENT, 0, 100);
             String symmetry = b.str("symmetry", "none");
             String patternStyle = b.str("pattern_style", "airy");
+            List<Integer> patternMix = b.optIntList("pattern_mix");
             int flp = b.integer("force_letters_percent", 0, 0, 100);
             String pseudo = b.str("pseudo", null);
             String reqDifficulty = b.str("difficulty", null);
@@ -2844,6 +2858,7 @@ public final class App {
             genreq.multiWordPercent = mwp;
             genreq.symmetry = symmetry;
             genreq.patternStyle = patternStyle;
+            genreq.patternMix = patternMix;
             genreq.mode = mode;
             genreq.theme = theme.isEmpty() ? null : theme;
             genreq.themePrecision = themePrecision;

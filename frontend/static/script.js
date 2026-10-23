@@ -308,24 +308,82 @@ const wordsPerNodeInput = document.getElementById("words-per-node");
 const multiWordPercentInput = document.getElementById("multi-word-percent");
 const DEFAULT_MULTI_WORD_PERCENT = 15;
 const symmetrySelect = document.getElementById("symmetry");
-// "Style de motif" (GenerateRequest.pattern_style): "airy" or "grouped".
-const patternStyleSelect = document.getElementById("pattern-style");
+// "Style de motif" (GenerateRequest.pattern_mix): three percentages —
+// "Aéré", "Groupé", "Aligné" — always totalling 100. 100/0/0 is the "airy"
+// pattern style, any other mix the "grouped" one (patternStyle).
+const patternMixInputs = ["pattern-mix-airy", "pattern-mix-grouped", "pattern-mix-aligned"]
+  .map((id) => document.getElementById(id));
+// The last valid mix, which every change is measured against.
+let patternMix = [100, 0, 0];
+const FRENCH_PATTERN_MIX = [100, 0, 0];
+const AMERICAN_PATTERN_MIX = [40, 40, 20];
 // Selecting the "grouped" (American) style raises "Taux noir" to at least
 // this percentage; the player may lower it again afterwards.
 const GROUPED_MIN_BLACK_PERCENT = 18;
 
+// The GenerateRequest.pattern_style the current mix stands for.
+function patternStyle() {
+  return patternMix[0] >= 100 ? "airy" : "grouped";
+}
+
+function readPatternMix() {
+  return patternMix.slice();
+}
+
+// Shows `mix` (three percentages totalling 100) in the three fields; a
+// switch to the "grouped" style raises "Taux noir" unless `restoring`.
+function setPatternMix(mix, restoring = false) {
+  const wasGrouped = patternStyle() === "grouped";
+  patternMix = mix.slice();
+  patternMixInputs.forEach((input, i) => { input.value = String(patternMix[i]); });
+  if (!restoring && !wasGrouped && patternStyle() === "grouped") applyGroupedBlackMinimum();
+  else if (gridPresetsReady) renderGridPresets();
+}
+
+// A field changed: its new value (clamped to 0-100) is kept and the
+// difference taken from the field right of it, then — once that one reaches
+// 0 or 100 — from the next ones, wrapping around to the first.
+function applyPatternMixChange(index) {
+  let value = Math.round(Number(patternMixInputs[index].value));
+  if (!Number.isFinite(value)) value = patternMix[index];
+  value = Math.min(100, Math.max(0, value));
+  const mix = patternMix.slice();
+  let excess = value - mix[index];
+  mix[index] = value;
+  for (let step = 1; step < mix.length && excess !== 0; step++) {
+    const j = (index + step) % mix.length;
+    const next = Math.min(100, Math.max(0, mix[j] - excess));
+    excess -= mix[j] - next;
+    mix[j] = next;
+  }
+  setPatternMix(mix);
+}
+
+patternMixInputs.forEach((input, i) => {
+  input.addEventListener("change", () => applyPatternMixChange(i));
+});
+
+// Puts a record's (generation_params or request) "Style de motif" back in
+// the three fields: its pattern_mix, else the mix its pattern_style stands
+// for (an older record).
+function restorePatternMix(params) {
+  if (Array.isArray(params.pattern_mix) && params.pattern_mix.length === 3) {
+    setPatternMix(params.pattern_mix.map(Number), true);
+  } else if (params.pattern_style) {
+    setPatternMix(params.pattern_style === "grouped" ? AMERICAN_PATTERN_MIX : FRENCH_PATTERN_MIX, true);
+  }
+}
+
 function applyGroupedBlackMinimum() {
   // The presets' black rates follow the pattern style (presetBlack).
   if (gridPresetsReady) renderGridPresets();
-  if (patternStyleSelect.value !== "grouped") return;
+  if (patternStyle() !== "grouped") return;
   const current = Number(blackEnrichmentInput.value);
   if (!(current >= GROUPED_MIN_BLACK_PERCENT)) {
     blackEnrichmentInput.value = GROUPED_MIN_BLACK_PERCENT;
     if (gridPresetsReady) syncGridPresetSelection();
   }
 }
-
-patternStyleSelect.addEventListener("change", applyGroupedBlackMinimum);
 // "Thématique" field — shared const so both the generation form's submit
 // handler and Interactive mode's own enterInteractiveMode() (re-filling
 // it from a re-edited grid's own origin theme, at the user's explicit
@@ -1946,7 +2004,7 @@ async function openAttemptPreviewInteractive(exampleGrid, breaks) {
       difficulty,
       theme: theme || undefined,
       challenge_words: generateChallengeWords.length ? generateChallengeWords : undefined,
-      pattern_style: patternStyleSelect.value,
+      pattern_style: patternStyle(),
       breaks: breaks || [],
     },
     "/api/interactive/from-attempt"
@@ -3448,13 +3506,11 @@ function setUiLanguage(lang) {
   uiLanguage = lang;
   languageSelect.value = lang;
   welcomeLanguageSelect.value = lang;
-  // An English grid defaults to the American pattern: diagonal symmetry,
-  // grouped black cells.
-  if (lang === "en") {
-    symmetrySelect.value = "diagonal";
-    patternStyleSelect.value = "grouped";
-    applyGroupedBlackMinimum();
-  }
+  // A French grid defaults to the French pattern (all "Aéré"), every other
+  // language to the American mix; an English grid also to the diagonal
+  // symmetry.
+  setPatternMix(lang === "fr" ? FRENCH_PATTERN_MIX : AMERICAN_PATTERN_MIX);
+  if (lang === "en") symmetrySelect.value = "diagonal";
   // Bilingual grid, at the user's explicit request: "the first language
   // selector sets the interface language, and forces the second language
   // selector to take the same value." A plain interface-language change
@@ -3855,7 +3911,7 @@ function gridPresetAllowed(preset) {
 // A preset's black rate: GROUPED_MIN_BLACK_PERCENT for every preset under
 // the "grouped" (American) pattern style, its own otherwise.
 function presetBlack(preset) {
-  return patternStyleSelect.value === "grouped" ? GROUPED_MIN_BLACK_PERCENT : preset.black;
+  return patternStyle() === "grouped" ? GROUPED_MIN_BLACK_PERCENT : preset.black;
 }
 
 function matchingGridPreset() {
@@ -9164,10 +9220,7 @@ function enterInteractiveMode(state) {
       multiWordPercentInput.value = gp.multi_word_percent;
     }
     if (gp.symmetry) symmetrySelect.value = gp.symmetry;
-    if (gp.pattern_style) {
-      patternStyleSelect.value = gp.pattern_style;
-      if (gridPresetsReady) renderGridPresets();
-    }
+    restorePatternMix(gp);
     if (gp.theme_precision !== undefined && gp.theme_precision !== null) {
       document.getElementById("theme-precision").value = gp.theme_precision;
     }
@@ -9723,10 +9776,7 @@ function applyStopDumpRequest(req) {
   if (req.words_per_node != null) wordsPerNodeInput.value = req.words_per_node;
   if (req.multi_word_percent != null) multiWordPercentInput.value = req.multi_word_percent;
   if (req.symmetry) symmetrySelect.value = req.symmetry;
-  if (req.pattern_style) {
-    patternStyleSelect.value = req.pattern_style;
-    if (gridPresetsReady) renderGridPresets();
-  }
+  restorePatternMix(req);
   syncGridPresetSelection();
   if (req.theme_precision != null) document.getElementById("theme-precision").value = req.theme_precision;
   setThemeWords(req.theme || "");
@@ -10816,7 +10866,8 @@ async function runInteractiveFinish(zoneCells) {
           words_per_node: Number(wordsPerNodeInput.value),
           multi_word_percent: readMultiWordPercent(),
           symmetry: symmetrySelect.value,
-          pattern_style: patternStyleSelect.value,
+          pattern_style: patternStyle(),
+          pattern_mix: readPatternMix(),
           difficulty: document.getElementById("difficulty").value,
           theme: themeKeywords.join(" "),
           theme_precision: readThemePrecision(),
@@ -11152,7 +11203,8 @@ form.addEventListener("submit", async (event) => {
       black_enrichment_percent: blackEnrichmentPercent,
       multi_word_percent: multiWordPercent,
       symmetry: symmetrySelect.value,
-      pattern_style: patternStyleSelect.value,
+      pattern_style: patternStyle(),
+      pattern_mix: readPatternMix(),
       theme: theme || undefined,
       theme_precision: themePrecision,
       pseudo: userPseudo || undefined,
@@ -11186,7 +11238,8 @@ form.addEventListener("submit", async (event) => {
           words_per_node: wordsPerNode,
           multi_word_percent: multiWordPercent,
           symmetry: symmetrySelect.value,
-          pattern_style: patternStyleSelect.value,
+          pattern_style: patternStyle(),
+          pattern_mix: readPatternMix(),
           // Thématique: a word list semantically steering the grid
           // (a backend-side Qdrant pre-search — see backend/app.py's
           // THEME_PRESEARCH_LIMIT). Omitted if empty.

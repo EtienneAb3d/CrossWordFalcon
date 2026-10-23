@@ -1060,9 +1060,22 @@ the current defaults/behavior to know before touching this code.
   keeps the current placement rule; "Groupé (américain/NYT)" inverts
   the black-cell placement criterion, preferring cells adjacent to, or as
   close as possible to, the black cells already placed
-  (`_place_black_cells(grouped=)`, Java `Grids.placeBlackCells`); choosing
-  English as the language selects the diagonal symmetry and the grouped
-  style (`script.js`'s `setUiLanguage`). The user's rule: the grouped
+  (`_place_black_cells(grouped=)`, Java `Grids.placeBlackCells`). The
+  user's rule: the selector is three integer fields of 0-100, "Aéré
+  (Français)" / "Groupé (Américain)" / "Aligné (Américain)", always
+  totalling 100 (`GenerateRequest.pattern_mix`, `make_pattern(pattern_mix=)`);
+  French sets 100/0/0, every other language 40/40/20 (English also the
+  diagonal symmetry, `setUiLanguage`); a change adjusts the field right of
+  it, then — once that one reaches 0 or 100 — the next, wrapping round to
+  the first (`applyPatternMixChange`). Choices made with it, to revisit
+  with the user: the three fields are the shares of the grouped style's
+  three phases below (airy, diagonal, side by side); 100/0/0 is the airy
+  style, any other mix the grouped style with all its rules (no 2-letter
+  word, de-clumping, full-size black cells, 18 % minimum black rate); the
+  de-clumping and short-slot redraws keep the side-by-side rules whatever
+  the mix, so "Groupé" at 100 % still gets some side-by-side cells from
+  them; a record with no mix restores 100/0/0 or 40/40/20 from its
+  `pattern_style`. The user's rule: the grouped
   style draws 40 % of the black cells with the French distribution
   (still forbidding slots of fewer than 3 letters), then 40 % accepting
   diagonal groupings (3x3 square centred on the cell), then the last 20 %
@@ -1166,7 +1179,10 @@ the current defaults/behavior to know before touching this code.
   the drawn black cells bounding them and the draw resumes to the target.
   Choices made with the change, to revisit with the user: only cells this
   draw placed are reopened, they stay candidates for the redraw, and at
-  most `SHORT_SLOT_REDRAW_MAX_ROUNDS` (10) rounds run.
+  most `SHORT_SLOT_REDRAW_MAX_ROUNDS` (10) rounds run. Under the grouped
+  style a reopening that would leave a 2-letter slot is skipped
+  (`_reopen_bounding_blacks`), so the pattern draw never leaves one
+  (choice made with the fix, to revisit with the user).
 - A pre-fill phase runs before ratio-based placement, adding black cells
   (counted toward the ratio target) until every slot has at least
   `PREFILL_MIN_WORD_COUNT` (3) real dictionary candidates — locked-letter

@@ -792,6 +792,31 @@ public final class Grids {
     static final int GROUPED_DIAGONAL_PERCENT = 80;
 
     /**
+     * The web UI's three "Style de motif" percentages ({@link #makePattern}'s {@code patternMix}): the shares of the
+     * black-cell target drawn under the airy, diagonal ("Groupé") and side-by-side ("Aligné") rules, summing to 100.
+     * 100/0/0 is the "airy" pattern style, any other mix the "grouped" one ({@link #patternStyleOfMix}) with these
+     * shares as its three phases.
+     */
+    public static final List<Integer> DEFAULT_PATTERN_MIX = List.of(GROUPED_AIRY_PERCENT,
+            GROUPED_DIAGONAL_PERCENT - GROUPED_AIRY_PERCENT, 100 - GROUPED_DIAGONAL_PERCENT);
+
+    /** True when {@code patternMix} is three integers of 0-100 summing to 100. */
+    public static boolean validPatternMix(List<Integer> patternMix) {
+        if (patternMix == null || patternMix.size() != 3) return false;
+        int sum = 0;
+        for (Integer p : patternMix) {
+            if (p == null || p < 0 || p > 100) return false;
+            sum += p;
+        }
+        return sum == 100;
+    }
+
+    /** The {@link #PATTERN_STYLES} entry a "Style de motif" mix stands for: "airy" when all of it is airy, "grouped" otherwise. */
+    public static String patternStyleOfMix(List<Integer> patternMix) {
+        return patternMix.get(0) >= 100 ? "airy" : "grouped";
+    }
+
+    /**
      * {@link #placeBlackCells}' draw window, in percent, and its widening step: the share of the white runs
      * ({@link #runScore}-ranked) the draw is restricted to, among their valid cells the share with the highest
      * {@link #crossingLengthScore}, and among those the share farthest from every black cell placed.
@@ -900,6 +925,47 @@ public final class Grids {
             if (after >= 0 && removable.contains(after)) bounding.add(after);
         }
         return count;
+    }
+
+    /**
+     * The short-slot limit's reopening ({@link #makePattern}): turns the black cells of {@code bounding} white, in
+     * shuffled order, each with its images of {@code bounding} ({@link #blackGroup}). Under the "grouped" pattern
+     * style, a reopening after which a run through one of its cells is a slot shorter than
+     * {@link #GROUPED_MIN_SLOT_LENGTH} is undone. Updates {@code grid} and the counts in place; returns the cells
+     * turned white, in that order.
+     */
+    static List<Integer> reopenBoundingBlacks(char[][] grid, int rows, int cols, int[] rowBlack, int[] colBlack,
+                                              Set<Integer> bounding, Rng rng, String symmetry, boolean grouped) {
+        List<Integer> order = new ArrayList<>(new java.util.TreeSet<>(bounding));
+        rng.shuffle(order);
+        List<Integer> reopened = new ArrayList<>();
+        for (int cell : order) {
+            if (grid[Cells.r(cell)][Cells.c(cell)] != BLACK) continue;
+            List<Integer> group = new ArrayList<>();
+            for (int g : blackGroup(rows, cols, cell, symmetry)) {
+                if (bounding.contains(g) && grid[Cells.r(g)][Cells.c(g)] == BLACK) group.add(g);
+            }
+            for (int g : group) grid[Cells.r(g)][Cells.c(g)] = WHITE;
+            boolean shortRun = false;
+            if (grouped) {
+                for (int g : group) {
+                    for (int[] d : new int[][] {{0, 1}, {1, 0}}) {
+                        int length = runThrough(grid, rows, cols, Cells.r(g), Cells.c(g), d[0], d[1]);
+                        if (length >= 2 && length < GROUPED_MIN_SLOT_LENGTH) shortRun = true;
+                    }
+                }
+            }
+            if (shortRun) {
+                for (int g : group) grid[Cells.r(g)][Cells.c(g)] = BLACK;
+                continue;
+            }
+            for (int g : group) {
+                rowBlack[Cells.r(g)]--;
+                colBlack[Cells.c(g)]--;
+            }
+            reopened.addAll(group);
+        }
+        return reopened;
     }
 
     /** Number of items a {@code percent} % window keeps out of {@code count} (at least one, at most all). */
@@ -1646,6 +1712,13 @@ public final class Grids {
                 blackEnrichmentFraction, null, null);
     }
 
+    public static char[][] makePattern(int rows, int cols, double blackRatio, Rng rng, LengthSets available,
+                                       char[][] seedGrid, Map<Integer, Character> lockedLetters, DualIndex index,
+                                       double blackEnrichmentFraction, String symmetry, String patternStyle) {
+        return makePattern(rows, cols, blackRatio, rng, available, seedGrid, lockedLetters, index,
+                blackEnrichmentFraction, symmetry, patternStyle, null);
+    }
+
     /**
      * {@link #makePattern} with the ratio draw's black-cell {@code symmetry} ("Symétrie", {@link #BLACK_SYMMETRIES},
      * null = none): every drawn cell comes with its images, and the short-slot limit reopens a bounding cell with its
@@ -1653,11 +1726,13 @@ public final class Grids {
      * "airy"): "grouped" groups the ratio draw's black cells, adjacent cells accepted and preferred, the first
      * {@link #GROUPED_AIRY_PERCENT} % of the target being drawn apart first (the "airy" rules, no slot shorter
      * than {@link #GROUPED_MIN_SLOT_LENGTH} either), then up to {@link #GROUPED_DIAGONAL_PERCENT} % with diagonal
-     * neighbours preferred and side-by-side black cells refused.
+     * neighbours preferred and side-by-side black cells refused — {@code patternMix} (airy, diagonal and side-by-side
+     * shares, {@link #DEFAULT_PATTERN_MIX} when null) replacing those two cumulative thresholds.
      */
     public static char[][] makePattern(int rows, int cols, double blackRatio, Rng rng, LengthSets available,
                                        char[][] seedGrid, Map<Integer, Character> lockedLetters, DualIndex index,
-                                       double blackEnrichmentFraction, String symmetry, String patternStyle) {
+                                       double blackEnrichmentFraction, String symmetry, String patternStyle,
+                                       List<Integer> patternMix) {
         boolean symmetric = symmetry != null && !"none".equals(symmetry);
         boolean grouped = "grouped".equals(patternStyle);
         Map<Integer, Character> locked = lockedLetters == null || lockedLetters.isEmpty() ? lockedLetters
@@ -1701,11 +1776,13 @@ public final class Grids {
             // "Grouped" style: up to GROUPED_AIRY_PERCENT % of the target under the "airy" rules (no 2-letter slot
             // left), then up to GROUPED_DIAGONAL_PERCENT % with diagonal neighbours preferred and side-by-side black
             // cells refused; the grouped rules finish.
-            int airyTarget = (int) Math.max(placed, Math.rint(target * GROUPED_AIRY_PERCENT / 100.0));
+            List<Integer> mix = patternMix == null ? DEFAULT_PATTERN_MIX : patternMix;
+            int airyPercent = mix.get(0), diagonalPercent = mix.get(1);
+            int airyTarget = (int) Math.max(placed, Math.rint(target * airyPercent / 100.0));
             placeBlackCells(grid, rows, cols, rowBlack, colBlack, ratioCandidates, airyTarget, placed, rng, index,
                     locked, available, true, symmetry, false, true, false);
             placed = countBlack(grid);
-            int diagonalTarget = (int) Math.max(placed, Math.rint(target * GROUPED_DIAGONAL_PERCENT / 100.0));
+            int diagonalTarget = (int) Math.max(placed, Math.rint(target * (airyPercent + diagonalPercent) / 100.0));
             placeBlackCells(grid, rows, cols, rowBlack, colBlack, ratioCandidates, diagonalTarget, placed, rng, index,
                     locked, available, true, symmetry, true, false, true);
             placed = countBlack(grid);
@@ -1732,15 +1809,10 @@ public final class Grids {
                 }
                 bounding = closed;
             }
-            List<Integer> reopened = new ArrayList<>(new java.util.TreeSet<>(bounding));
-            rng.shuffle(reopened);
-            for (int cell : reopened) {
-                int r = Cells.r(cell), c = Cells.c(cell);
-                grid[r][c] = WHITE;
-                rowBlack[r]--;
-                colBlack[c]--;
-            }
-            drawn.removeAll(bounding);
+            List<Integer> reopened = reopenBoundingBlacks(grid, rows, cols, rowBlack, colBlack, bounding, rng, symmetry,
+                    grouped);
+            if (reopened.isEmpty()) break;
+            drawn.removeAll(reopened);
             ratioCandidates.addAll(reopened);
             Set<Integer> before = new HashSet<>(ratioCandidates);
             placeBlackCells(grid, rows, cols, rowBlack, colBlack, ratioCandidates, target, countBlack(grid), rng, index,

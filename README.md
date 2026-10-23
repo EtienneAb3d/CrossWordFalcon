@@ -289,11 +289,13 @@ On the page:
    groups (horizontal, vertical, diagonal, both ways, or "Rotation" — four cells turned by quarter turns — for a
    square grid); every black cell the generator later adds, removes or
    moves follows the same symmetry (words in the way are removed first),
-   so the finished grid stays symmetric. The **"Pattern style"** menu,
-   right of it, keeps the black cells apart ("Sparse (French)", the
-   default) or groups them in straight bars with no 2-letter word
-   ("Grouped/aligned (American/NYT)"); choosing English selects
-   Grouped/aligned with a diagonal symmetry.
+   so the finished grid stays symmetric. The three **pattern style**
+   percentages right of it — "Sparse (French)", "Grouped (American)" and
+   "Aligned (American)", always totalling 100 (changing one adjusts the
+   next) — set how many black cells are kept apart, grouped diagonally or
+   lined up side by side; any American share also rules out 2-letter
+   words. French sets 100/0/0, every other language 40/40/20 (English
+   with a diagonal symmetry).
 2. Two optional fields sit above the generate buttons,
    both built the same way: type a word and click **+** (or just type a
    space, comma, or other punctuation right after it) to add it to the

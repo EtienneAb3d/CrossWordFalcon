@@ -1333,6 +1333,28 @@ PATTERN_STYLES = ("airy", "grouped")
 GROUPED_AIRY_PERCENT = 40
 GROUPED_DIAGONAL_PERCENT = 80
 
+# The web UI's three "Style de motif" percentages (`make_pattern`'s
+# `pattern_mix`): the shares of the black-cell target drawn under the airy,
+# diagonal ("Groupé") and side-by-side ("Aligné") rules, summing to 100.
+# 100/0/0 is the "airy" pattern style, any other mix the "grouped" one
+# (`pattern_style_of_mix`) with these shares as its three phases.
+DEFAULT_PATTERN_MIX = (GROUPED_AIRY_PERCENT, GROUPED_DIAGONAL_PERCENT - GROUPED_AIRY_PERCENT,
+                       100 - GROUPED_DIAGONAL_PERCENT)
+
+
+def valid_pattern_mix(pattern_mix):
+    """True when `pattern_mix` is three integers of 0-100 summing to 100."""
+    return (isinstance(pattern_mix, (list, tuple)) and len(pattern_mix) == 3
+            and all(isinstance(p, int) and not isinstance(p, bool) and 0 <= p <= 100
+                    for p in pattern_mix)
+            and sum(pattern_mix) == 100)
+
+
+def pattern_style_of_mix(pattern_mix):
+    """The `PATTERN_STYLES` entry a "Style de motif" mix stands for: "airy"
+    when all of it is airy, "grouped" otherwise."""
+    return "airy" if pattern_mix[0] >= 100 else "grouped"
+
 
 # Black-cell symmetries of the "Symétrie" selector (`make_pattern`'s
 # `symmetry`, `symmetry_cells`): every black cell the ratio draw places
@@ -1505,6 +1527,36 @@ def _short_slot_bounding_blacks(grid, rows, cols, removable):
             if cell in removable:
                 bounding.add(cell)
     return count, bounding
+
+
+def _reopen_bounding_blacks(grid, rows, cols, row_black, col_black, bounding, rng, symmetry,
+                            grouped):
+    """The short-slot limit's reopening (`make_pattern`): turns the black
+    cells of `bounding` white, in shuffled order, each with its images of
+    `bounding` (`_black_group`). Under the "grouped" pattern style, a
+    reopening after which a run through one of its cells is a slot shorter
+    than `GROUPED_MIN_SLOT_LENGTH` is undone. Updates `grid` and the counts
+    in place; returns the cells turned white, in that order."""
+    order = sorted(bounding)
+    rng.shuffle(order)
+    reopened = []
+    for cell in order:
+        if grid[cell[0]][cell[1]] != BLACK:
+            continue
+        group = [g for g in _black_group(rows, cols, cell, symmetry)
+                 if g in bounding and grid[g[0]][g[1]] == BLACK]
+        for r, c in group:
+            grid[r][c] = WHITE
+        if grouped and any(2 <= _run_through(grid, rows, cols, r, c, dr, dc) < GROUPED_MIN_SLOT_LENGTH
+                           for r, c in group for dr, dc in ((0, 1), (1, 0))):
+            for r, c in group:
+                grid[r][c] = BLACK
+            continue
+        for r, c in group:
+            row_black[r] -= 1
+            col_black[c] -= 1
+        reopened.extend(group)
+    return reopened
 
 
 def _window_size(count, percent):
@@ -2511,7 +2563,7 @@ def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates
 def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
                   seed_grid=None, locked_letters=None, index=None,
                   black_enrichment_fraction=POST_PREFILL_BLACK_FRACTION, symmetry=None,
-                  pattern_style=None):
+                  pattern_style=None, pattern_mix=None):
     """Places black cells one at a time, independently unless `symmetry`
     ("Symétrie", `BLACK_SYMMETRIES`) is set — the ratio draw then places
     every drawn cell together with its images (`symmetry_cells`), and the
@@ -2524,7 +2576,9 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     apart first (the "airy" rules, `forbid_short_runs`: no slot shorter
     than `GROUPED_MIN_SLOT_LENGTH` either), then up to
     `GROUPED_DIAGONAL_PERCENT` % with diagonal neighbours preferred and
-    side-by-side black cells refused (`grouped_diagonal`); then, once the target is reached (and after every
+    side-by-side black cells refused (`grouped_diagonal`) — `pattern_mix`
+    (airy, diagonal and side-by-side shares, `DEFAULT_PATTERN_MIX` when
+    `None`) replacing those two cumulative thresholds; then, once the target is reached (and after every
     short-slot redraw), the drawn black cells with more than
     `GROUPED_MAX_BLACK_NEIGHBORS` black neighbours are taken off, the zones
     this closes opened (`_declump_black_cells`), and the draw runs again up
@@ -2776,12 +2830,13 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
         # the "airy" rules (no 2-letter slot left), then up to
         # GROUPED_DIAGONAL_PERCENT % with diagonal neighbours preferred and
         # side-by-side black cells refused; the grouped rules finish.
-        airy_target = max(placed, round(target * GROUPED_AIRY_PERCENT / 100))
+        airy_percent, diagonal_percent, _ = pattern_mix or DEFAULT_PATTERN_MIX
+        airy_target = max(placed, round(target * airy_percent / 100))
         placed, _ = _place_black_cells(
             grid, rows, cols, row_black, col_black, ratio_candidates, airy_target, placed, rng,
             index=index, locked_letters=locked_letters, available_lengths=available_lengths,
             forbid_adjacency=True, symmetry=symmetry, grouped=False, forbid_short_runs=True)
-        diagonal_target = max(placed, round(target * GROUPED_DIAGONAL_PERCENT / 100))
+        diagonal_target = max(placed, round(target * (airy_percent + diagonal_percent) / 100))
         placed, _ = _place_black_cells(
             grid, rows, cols, row_black, col_black, ratio_candidates, diagonal_target, placed, rng,
             index=index, locked_letters=locked_letters, available_lengths=available_lengths,
@@ -2820,13 +2875,11 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
         if symmetry and symmetry != "none":
             bounding = {image for cell in bounding
                         for image in symmetry_cells(rows, cols, *cell, symmetry) if image in drawn}
-        reopened = sorted(bounding)
-        rng.shuffle(reopened)
-        for r, c in reopened:
-            grid[r][c] = WHITE
-            row_black[r] -= 1
-            col_black[c] -= 1
-        drawn -= bounding
+        reopened = _reopen_bounding_blacks(grid, rows, cols, row_black, col_black, bounding, rng,
+                                           symmetry, grouped)
+        if not reopened:
+            break
+        drawn -= set(reopened)
         ratio_candidates.extend(reopened)
         before = set(ratio_candidates)
         _place_black_cells(grid, rows, cols, row_black, col_black, ratio_candidates, target,
@@ -15276,6 +15329,9 @@ _worker_black_symmetry = None
 # Black-cell pattern style of the ratio draw (generate_grid's
 # `pattern_style`, see `make_pattern`'s `pattern_style`), shared the same way.
 _worker_pattern_style = None
+# Its three phase shares (generate_grid's `pattern_mix`, see `make_pattern`'s
+# `pattern_mix`), shared the same way.
+_worker_pattern_mix = None
 # "Stop" button (see CANCEL_CHECK_INTERVAL/Filler.__init__), at the
 # user's explicit request — like `_worker_index` right above, passed once
 # per worker via the pool's initializer rather than as an argument of
@@ -15518,7 +15574,7 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
                   max_proper_nouns=None, non_gloss_words=None, max_non_gloss=None,
                   priority_words=None, challenge_words=None, scrabble_words=None,
                   words_per_node=WORDS_PER_NODE, black_symmetry=None, pattern_style=None,
-                  multi_word_percent=MULTI_WORD_PERCENT):
+                  multi_word_percent=MULTI_WORD_PERCENT, pattern_mix=None):
     # See GENERATION_PROCESS_NICE_INCREMENT (right after PARALLEL_ATTEMPTS)
     # for the full reasoning — applied only once here, the very first time
     # this worker starts up (never per submitted task), since the pool
@@ -15544,12 +15600,14 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
         _worker_proper_noun_words, _worker_max_proper_nouns, \
         _worker_non_gloss_words, _worker_max_non_gloss, _worker_priority_words, \
         _worker_challenge_words, _worker_scrabble_words, _worker_words_per_node, \
-        _worker_black_symmetry, _worker_pattern_style, _worker_multi_word_percent
+        _worker_black_symmetry, _worker_pattern_style, _worker_multi_word_percent, \
+        _worker_pattern_mix
     _worker_index = index
     _worker_words_per_node = words_per_node
     _worker_multi_word_percent = multi_word_percent
     _worker_black_symmetry = black_symmetry
     _worker_pattern_style = pattern_style
+    _worker_pattern_mix = pattern_mix
     _worker_priority_words = priority_words
     _worker_challenge_words = challenge_words
     _worker_scrabble_words = scrabble_words
@@ -16057,7 +16115,8 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
     grid = make_pattern(rows, cols, ratio, rng, available_lengths=available_lengths,
                          seed_grid=seed_grid, locked_letters=locked_letters, index=_worker_index,
                          black_enrichment_fraction=black_enrichment_fraction,
-                         symmetry=_worker_black_symmetry, pattern_style=_worker_pattern_style)
+                         symmetry=_worker_black_symmetry, pattern_style=_worker_pattern_style,
+                         pattern_mix=_worker_pattern_mix)
     # The palier's "pattern_generated" preview is built from this very
     # pattern (see `generate_grid`, `_publish_pattern_preview`).
     if racing and _worker_best_state_queue is not None:
@@ -16714,7 +16773,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                    bilingual_priority_words=None, permanent_locked_letters=None,
                    permanent_black_cells=None, required_cells=None, challenge_words=None,
                    on_live_preview=None, words_per_node=WORDS_PER_NODE, black_symmetry=None,
-                   start_grid=None, pattern_style=None, multi_word_percent=MULTI_WORD_PERCENT):
+                   start_grid=None, pattern_style=None, multi_word_percent=MULTI_WORD_PERCENT,
+                   pattern_mix=None):
     """`start_grid` (`None` by default: a blank grid): the grid every
     attempt that starts afresh starts from instead of a blank grid — the
     reset attempts of a palier, the mid-palier replacement attempts and the
@@ -16740,6 +16800,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     (`make_pattern`'s `pattern_style`); under "grouped", the lexicon has
     no word shorter than `GROUPED_MIN_SLOT_LENGTH` (`style_index`) and
     such a "Mots Défi" word is ignored, so no grid holds a 2-letter word.
+    `pattern_mix` (`None` = `DEFAULT_PATTERN_MIX`): the shares of its three
+    phases under "grouped" (`make_pattern`'s `pattern_mix`).
 
     The Scrabble wordlist of each language (`merge_scrabble_lexicon`)
     is merged into the lexicon loaded for it, whatever `max_words` — whole,
@@ -17749,7 +17811,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         initargs=(index, cancel_event, batch_abandoned_event, attempt_done_event, best_state_queue,
                   checks_progress, attempt_active, warmup_barrier, proper_noun_words, max_proper_nouns,
                   non_gloss_words, max_non_gloss, priority_words, challenge_words, scrabble_words,
-                  words_per_node, black_symmetry, pattern_style, multi_word_percent)
+                  words_per_node, black_symmetry, pattern_style, multi_word_percent, pattern_mix)
     ) as executor:
         # Pool warm-up: forces every worker to finish its real startup
         # before the very first palier (see `_warmup_worker`/`warmup_
@@ -19843,7 +19905,14 @@ def main():
                      help="symétrie des cases noires tirées")
     ap.add_argument("--pattern-style", choices=PATTERN_STYLES, default="airy",
                      help="style de motif : aérée (cases noires éloignées) ou groupée (rapprochées)")
+    ap.add_argument("--pattern-mix", type=int, nargs=3, default=None,
+                     metavar=("AERE", "GROUPE", "ALIGNE"),
+                     help="style de motif en pourcentages (total 100), prioritaire sur --pattern-style")
     args = ap.parse_args()
+    if args.pattern_mix is not None:
+        if not valid_pattern_mix(args.pattern_mix):
+            ap.error("--pattern-mix : trois entiers de 0 à 100 totalisant 100")
+        args.pattern_style = pattern_style_of_mix(args.pattern_mix)
 
     result = generate_grid(
         width=args.width,
@@ -19856,6 +19925,7 @@ def main():
         wordlist_path=args.wordlist,
         black_symmetry=args.symmetry,
         pattern_style=args.pattern_style,
+        pattern_mix=args.pattern_mix,
     )
 
     if result is None:
