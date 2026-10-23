@@ -409,6 +409,25 @@ export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 # export CLUE_LLM_API_KEY="your-anthropic-api-key-here"
 # export CLUE_LLM_BACKUP_SECONDS="300"
 
+# Alternative engine: vLLM (run_vllm.sh, CUDA only), serving Qwen3.5-9B in
+# FP8 (Hyper-AI/Qwen3.5-9B-fp8) as ONE instance tensor-parallel across two
+# 12 GB NVIDIA cards (VLLM_TP_SIZE); every request goes to it on LLM_PORT.
+# Needs a one-time install (its own Python 3.12 venv, `.venv-vllm/`,
+# several GB — see run_vllm.sh's header). Install.sh offers it when it
+# detects 2 NVIDIA cards or more and writes this block into env.sh for you.
+# export LLM_ENGINE="vllm"
+# export VLLM_MODEL="Hyper-AI/Qwen3.5-9B-fp8"
+# export LLM_MODEL="Qwen/Qwen3.5-9B"
+# export LLM_GPU_INDEX="0"
+# export LLM_INTERACTIVE_GPU_INDEX="1"
+# export VLLM_TP_SIZE="2"
+# export VLLM_GPU_MEMORY_UTILIZATION="0.85"
+# export VLLM_MAX_MODEL_LEN="51200"
+# export VLLM_CHAT_TEMPLATE_KWARGS='{"enable_thinking":false}'
+# export VLLM_REASONING_PARSER="qwen3"
+# export VLLM_EXTRA_ARGS="--language-model-only"
+# export LLM_BASE_URL_INTERACTIVE="$LLM_BASE_URL"
+
 # Alternative engine: SGLang instead of llama.cpp (run_llm.sh's own
 # default above). Faster than llama.cpp for the same model, but needs a
 # separate one-time install (its own Python 3.12 venv, `.venv-sglang/`

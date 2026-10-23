@@ -105,8 +105,10 @@ the grid for you.
 
 ## What you need
 
-- **Python 3** installed on your computer (and, only for the optional Java
-  version of the server, Java 21 — installed by `./Install.sh`).
+- **`curl`** on your computer: `./Install.sh` uses it to fetch its own copy
+  of Python 3.12, kept apart from your system's Python so a system upgrade
+  never breaks the app (and, only for the optional Java version of the
+  server, it also installs Java 21).
 - A small local language model generates the clues by default, and needs no
   account or key — see [Generating clues](#generating-clues) below for the
   (optional) cloud alternative.

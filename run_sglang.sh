@@ -5,10 +5,10 @@
 # dispatches here when LLM_ENGINE=sglang (env.sh/env_default.sh), and
 # otherwise keeps using its own llama.cpp path unchanged.
 #
-# Uses its own dedicated virtual environment (.venv-sglang, a separate
-# Python 3.12 venv — SGLang's own MLX/Apple-Silicon support needs Python
-# 3.12, not this project's main .venv's Python 3.14), at the user's
-# explicit request ("Installer SGLang avec un venv spécifique"), and its
+# Uses its own dedicated virtual environment (.venv-sglang, separate from
+# the main .venv, on the same uv-managed Python 3.12 — ~/.local/share/uv/
+# python/, installed by Install.sh; SGLang's own MLX/Apple-Silicon support
+# needs Python 3.12), and its
 # own cloned source checkout (sglang-src/, an editable install — SGLang's
 # Apple Silicon/MLX support is installed from a git clone with the
 # platform-specific pyproject_other.toml swapped in as the active

@@ -3522,10 +3522,18 @@ section for the full variable list and the dual-GPU LLM routing scheme.
 
 - **`Install.sh`** — installs `rsvg-convert` (runtime dependency) and
   `hunspell`/`xz` (data pipeline only), sets
-  up the Python venv, unpacks the reference-corpus archives, installs a JDK 21 + Maven (system package manager,
+  up the Python venv — every venv (`.venv`, `.venv-vllm`, `.venv-sglang`)
+  on a uv-managed Python 3.12 (`~/.local/share/uv/python/`, uv in
+  `~/.local/bin/`), never the system's, which a distribution upgrade can
+  remove; an existing venv whose interpreter is missing or not 3.12 is
+  rebuilt (`venv_on_py312`) —, installs llama-cpp-python built CPU-only
+  (`GGML_CUDA=off`, what the embedding server runs on; `run_llm.sh`
+  rebuilds it with GPU support when llama.cpp is the LLM engine), unpacks the reference-corpus archives, installs a JDK 21 + Maven (system package manager,
   or a user-local Temurin JDK/Apache Maven under `~/.local` without root)
   and builds the Java back end, and interactively configures which local
-  LLM engine/model to run based on detected hardware.
+  LLM engine/model to run based on detected hardware (with 2 NVIDIA cards
+  or more, vLLM + Qwen3.5-9B FP8 tensor-parallel across cards 0 and 1,
+  installed into `.venv-vllm`, is offered first).
 - **`run_Falcon.sh`** — launches the backend (single process) and
   frontend (multiple workers), stopping any prior listener on those
   ports first, including orphaned CSP-worker child processes, and any
@@ -3542,7 +3550,8 @@ section for the full variable list and the dual-GPU LLM routing scheme.
   launchers write to `logs/backend.log`.
 - **`run_llm.sh`** — launches the default local clue-generation LLM
   server (llama.cpp's `llama_cpp.server`), or dispatches to `run_sglang.
-  sh` when `LLM_ENGINE=sglang`. Supports dual-GPU (two independent
+  sh` when `LLM_ENGINE=sglang` and to `run_vllm.sh` when
+  `LLM_ENGINE=vllm`. Supports dual-GPU (two independent
   instances pinned to separate cards).
 - **`run_sglang.sh`** — alternative LLM launcher (SGLang, its own
   `.venv-sglang`), supporting both Apple-Silicon MLX and CUDA GGUF
@@ -3551,6 +3560,12 @@ section for the full variable list and the dual-GPU LLM routing scheme.
   prefix cache (`--enable-hierarchical-cache --hicache-ratio`): KV entries
   evicted from the GPU pool are kept in host RAM and reloaded instead of
   recomputed.
+- **`run_vllm.sh`** — alternative LLM launcher (vLLM, its own
+  `.venv-vllm`, CUDA only), only ever invoked via `run_llm.sh`'s dispatch:
+  `VLLM_MODEL` (a Hugging Face repo, else a GGUF from `VLLM_GGUF_REPO`/
+  `VLLM_GGUF_FILE`), served on `LLM_PORT` as ONE tensor-parallel instance
+  when `VLLM_TP_SIZE` > 1 (cards `VLLM_TP_GPU_INDICES`), else one instance
+  per card like `run_llm.sh`'s dual-GPU routing; log `logs/vllm.log`.
 - **`run_embed.sh`** — launches the local embedding server (CPU by
   default).
 - **`run_qdrant.sh`** — starts/stops/reports the local Qdrant Docker

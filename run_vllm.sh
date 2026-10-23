@@ -3,9 +3,13 @@
 # OpenAI-compatible server on LLM_PORT. Only ever invoked through
 # run_llm.sh's dispatch (LLM_ENGINE=vllm).
 #
-# vLLM lives in its own venv, .venv-vllm/ (Python 3.12), since it pins
-# its own torch/transformers versions:
-#   /usr/bin/python3.12 -m venv .venv-vllm
+# vLLM lives in its own venv, .venv-vllm/, since it pins its own torch/
+# transformers versions. Like every venv of this project it runs on the
+# uv-managed Python 3.12 (~/.local/share/uv/python/), never the system's,
+# which a distribution upgrade can remove. Install.sh sets it up (engine
+# "vLLM", offered with 2 NVIDIA cards or more); by hand:
+#   uv python install 3.12
+#   "$(uv python dir)"/cpython-3.12-*/bin/python3.12 -m venv .venv-vllm
 #   .venv-vllm/bin/pip install "vllm[extra-quant]==0.30.0"
 # The "extra-quant" extra pulls vllm-gguf-plugin, which vLLM needs to
 # load a .gguf file at all.

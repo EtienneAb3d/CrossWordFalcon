@@ -301,6 +301,14 @@ project's engineering language.
   section pointing at it. If the copyright year/holder or the license
   itself ever changes, update the `LICENSE` file, that README section, and
   any SPDX identifier in project metadata together.
+- **Every venv runs on a uv-managed Python 3.12, never the system's**
+  (`.venv`, `.venv-vllm`, `.venv-sglang`; interpreter under
+  `~/.local/share/uv/python/`, uv in `~/.local/bin/`). A distribution
+  upgrade replaces the system Python (Ubuntu 26.04 ships 3.14 only) and
+  leaves every venv built on it pointing at a missing interpreter; vLLM and
+  SGLang also pin a torch built for 3.12. `Install.sh` installs uv and
+  Python 3.12, and rebuilds an existing venv whose interpreter is missing
+  or not 3.12 (`venv_on_py312`). Any new venv must be created the same way.
 - The project is called **CrossWordFalcon** (a former rename target;
   renaming the root folder again requires rebuilding `.venv` from scratch,
   since venv scripts hardcode absolute paths in their shebangs).
@@ -2970,6 +2978,10 @@ the current defaults/behavior to know before touching this code.
   whether the vector dimension happens to match (it does here, 1024 both
   ways) — the vector space itself is model-specific, so old and new
   vectors can never coexist in the same tenant.
+- `Install.sh` builds llama-cpp-python **CPU-only** (`CMAKE_ARGS=
+  "-DGGML_CUDA=off"`), whatever the hardware, so the embedding server runs
+  without any CUDA Toolkit; only `run_llm.sh` rebuilds it with GPU support,
+  when llama.cpp is the chosen LLM engine.
 - `run_embed.sh` is **CPU by default** (`--n_gpu_layers 0` +
   `CUDA_VISIBLE_DEVICES=""`): the request was for a CPU embedder, and on a
   machine where `llama-cpp-python` is a CUDA build (for `run_llm.sh`), not

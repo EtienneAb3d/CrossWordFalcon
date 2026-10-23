@@ -62,7 +62,46 @@ for tool in hunspell unmunch xz; do
     fi
 done
 
-python3 -m venv .venv
+# Python 3.12 for every venv of the project (.venv, .venv-vllm,
+# .venv-sglang), managed by uv under ~/.local/share/uv/python/ instead of
+# the system's: a distribution upgrade replaces the system Python (Ubuntu
+# 26.04 ships 3.14 only) and leaves every venv built on it pointing at a
+# missing interpreter, and vLLM/SGLang pin a torch built for 3.12. uv itself
+# is installed into ~/.local/bin/uv. PY312 is the minor-version path uv keeps
+# current across 3.12 patch releases (never `uv python find`, which returns
+# the project's own .venv when it exists).
+UV_BIN="$(command -v uv || true)"
+if [ -z "$UV_BIN" ] && [ -x "$HOME/.local/bin/uv" ]; then
+    UV_BIN="$HOME/.local/bin/uv"
+fi
+if [ -z "$UV_BIN" ]; then
+    echo "Installing uv (Python version manager, ~/.local/bin/uv)..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    UV_BIN="$HOME/.local/bin/uv"
+fi
+"$UV_BIN" python install 3.12
+PY312="$(ls -d "$("$UV_BIN" python dir)"/cpython-3.12-*/bin/python3.12 2>/dev/null | head -1)"
+if [ -z "$PY312" ] || [ ! -x "$PY312" ]; then
+    echo "Error: Python 3.12 not found after 'uv python install 3.12'."
+    exit 1
+fi
+echo "Python 3.12: $PY312"
+
+# venv_on_py312 DIR — (re)creates DIR on PY312. An existing venv is kept
+# when its interpreter still runs Python 3.12; one whose interpreter is
+# missing (system Python removed) or another version is rebuilt from
+# scratch, its packages reinstalled by the caller.
+venv_on_py312() {
+    local dir="$1"
+    if [ -d "$dir" ] && ! "$dir/bin/python3" -c 'import sys; sys.exit(sys.version_info[:2] != (3, 12))' >/dev/null 2>&1; then
+        echo "  $dir: broken interpreter or not Python 3.12 — rebuilding it."
+        "$PY312" -m venv --clear "$dir"
+    else
+        "$PY312" -m venv "$dir"
+    fi
+}
+
+venv_on_py312 .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
@@ -75,7 +114,14 @@ pip install -r requirements.txt
 # selecting. A build failure here is a warning, not fatal — run_llm.sh's
 # own GPU-aware rebuild step can still recover it, or it can be installed
 # by hand later (pip install -r requirements-llama.txt).
-pip install -r requirements-llama.txt \
+#
+# Built CPU-only (GGML_CUDA off), whatever the hardware: this build also
+# runs the embedding server (run_embed.sh, CPU by default — EMBED_N_GPU_
+# LAYERS 0), which must work without any CUDA Toolkit (a GPU build needs a
+# CUDA Toolkit whose nvcc accepts the system's gcc and glibc headers).
+# run_llm.sh rebuilds it with GPU support only when llama.cpp is chosen as
+# the LLM engine on a GPU machine.
+CMAKE_ARGS="-DGGML_CUDA=off" pip install -r requirements-llama.txt \
     || echo "Warning: 'pip install -r requirements-llama.txt' a echoue — llama-cpp-python devra etre installe a la main ou sera reconstruit par run_llm.sh au premier lancement."
 
 # data/reference_corpus_<lang>.tar.xz (optional, one archive per language) —
@@ -420,20 +466,7 @@ install_sglang() {
     fi
     echo "  Installation de SGLang (peut prendre plusieurs minutes)..."
     if [ "$IS_APPLE_SILICON" = true ]; then
-        py312=""
-        if command -v python3.12 >/dev/null 2>&1; then
-            py312="python3.12"
-        elif command -v brew >/dev/null 2>&1; then
-            brew install python@3.12 || true
-            if command -v python3.12 >/dev/null 2>&1; then
-                py312="python3.12"
-            fi
-        fi
-        if [ -z "$py312" ]; then
-            echo "  Warning: Python 3.12 introuvable (Homebrew absent ou echec de l'installation) — SGLang non installe."
-            return 1
-        fi
-        "$py312" -m venv "$SGLANG_VENV" || return 1
+        venv_on_py312 "$SGLANG_VENV" || return 1
         if [ ! -d "$SGLANG_SRC" ]; then
             git clone --depth 1 "$SGLANG_REPO_URL" "$SGLANG_SRC" || return 1
         fi
@@ -443,7 +476,7 @@ install_sglang() {
         echo "  Warning: installation de SGLang (MLX) echouee."
         return 1
     else
-        python3 -m venv "$SGLANG_VENV" || return 1
+        venv_on_py312 "$SGLANG_VENV" || return 1
         "$SGLANG_VENV/bin/pip" install --upgrade pip uv || return 1
         if "$SGLANG_VENV/bin/uv" pip install --python "$SGLANG_VENV/bin/python3" --prerelease=allow sglang; then
             return 0
@@ -451,6 +484,52 @@ install_sglang() {
         echo "  Warning: installation de SGLang (CUDA) echouee."
         return 1
     fi
+}
+
+# vLLM (run_vllm.sh, LLM_ENGINE=vllm): Qwen3.5-9B in FP8 as ONE instance
+# tensor-parallel across two NVIDIA cards — offered only with 2 GPUs or
+# more. Its own venv, .venv-vllm/, on PY312 (vLLM pins its own torch/
+# transformers).
+VLLM_VENV=".venv-vllm"
+VLLM_PACKAGE="vllm[extra-quant]==0.30.0"
+
+vllm_already_working() {
+    [ -x "$VLLM_VENV/bin/vllm" ] && "$VLLM_VENV/bin/python3" -c "import vllm" >/dev/null 2>&1
+}
+
+install_vllm() {
+    if vllm_already_working; then
+        echo "  vLLM deja installe et fonctionnel ($VLLM_VENV) — pas de reinstallation."
+        return 0
+    fi
+    echo "  Installation de vLLM (plusieurs Go, peut prendre plusieurs minutes)..."
+    venv_on_py312 "$VLLM_VENV" || return 1
+    "$VLLM_VENV/bin/pip" install --upgrade pip || return 1
+    if "$VLLM_VENV/bin/pip" install "$VLLM_PACKAGE"; then
+        return 0
+    fi
+    echo "  Warning: installation de vLLM echouee."
+    return 1
+}
+
+configure_vllm() {
+    append_llm_block <<EOF
+export LLM_ENGINE="vllm"
+export VLLM_MODEL="Hyper-AI/Qwen3.5-9B-fp8"
+export LLM_MODEL="Qwen/Qwen3.5-9B"
+export LLM_BASE_URL="http://127.0.0.1:\${LLM_PORT}/v1/chat/completions"
+export LLM_API_KEY="EMPTY"
+export LLM_GPU_INDEX="0"
+export LLM_INTERACTIVE_GPU_INDEX="1"
+export VLLM_TP_SIZE="2"
+export VLLM_GPU_MEMORY_UTILIZATION="0.85"
+export VLLM_MAX_MODEL_LEN="51200"
+export VLLM_CHAT_TEMPLATE_KWARGS='{"enable_thinking":false}'
+export VLLM_REASONING_PARSER="qwen3"
+export VLLM_EXTRA_ARGS="--language-model-only"
+export LLM_BASE_URL_INTERACTIVE="\$LLM_BASE_URL"
+EOF
+    echo "  env.sh configure : moteur=vllm, modele=Qwen3.5-9B FP8, tensor-parallel sur les cartes 0 et 1"
 }
 
 stop_running_llm_server() {
@@ -482,6 +561,14 @@ apply_choice() {
     # $5 = index GPU pour les requetes interactives (vide = pas de
     #      deuxieme instance — voir env_default.sh's "Dual-GPU LLM")
     case "$1" in
+        vllm)
+            if install_vllm; then
+                configure_vllm
+            else
+                echo "  -> repli sur llama.cpp (Qwen3.5-4B)."
+                configure_llamacpp 4b "${4:-0}" "${5:-}"
+            fi
+            ;;
         sglang_cuda)
             if install_sglang; then
                 configure_sglang_cuda "${4:-0}" "${5:-}"
@@ -533,9 +620,25 @@ else
     MENU_IDS=()
     n=0
     llamacpp_opt=0
+    if [ "$GPU_COUNT" -ge 2 ]; then
+        n=$((n + 1)); MENU_IDS[$n]="vllm"
+        echo "  $n) vLLM + Qwen3.5-9B (FP8), reparti sur 2 cartes   [RECOMMANDE avec 2 cartes 12 Go]"
+        echo "       Une seule instance en tensor-parallel sur les cartes 0 et 1 : toutes les"
+        echo "       requetes (generation automatique et interactives) vont a ce serveur."
+        echo "       Qualite des definitions : meilleure qu'un 4B. Necessite une installation"
+        echo "       vLLM unique (venv Python 3.12 dedie, .venv-vllm/, plusieurs Go) — faite ici."
+        if [ "$GPU_VRAM_MB" -gt 0 ] && [ "$GPU_VRAM_MB" -lt 10000 ]; then
+            echo "       ATTENTION : ${GPU_VRAM_MB} Mo VRAM par carte seulement - peut-etre insuffisant."
+        fi
+        echo
+    fi
     if [ "$HAS_NVIDIA_GPU" = true ]; then
         n=$((n + 1)); MENU_IDS[$n]="sglang_cuda"
-        echo "  $n) SGLang + Qwen3-4B (GGUF Q4_K_M)   [RECOMMANDE sur carte 12 Go type RTX 3060]"
+        if [ "$GPU_COUNT" -ge 2 ]; then
+            echo "  $n) SGLang + Qwen3-4B (GGUF Q4_K_M)"
+        else
+            echo "  $n) SGLang + Qwen3-4B (GGUF Q4_K_M)   [RECOMMANDE sur carte 12 Go type RTX 3060]"
+        fi
         echo "       Vitesse : ~1-2 s/mot, ~11 Go VRAM. Qualite des definitions : correcte (4B)."
         echo "       Le plus rapide des bons choix locaux. Necessite une installation SGLang"
         echo "       unique (venv Python 3.12 dedie, .venv-sglang/, plusieurs minutes) — faite ici."
