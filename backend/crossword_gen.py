@@ -968,7 +968,8 @@ def _black_line_length(grid, rows, cols, r, c):
     """The length of the longest straight run of adjacent black cells,
     across or down, the white cell (r, c) would belong to once blackened
     (1 when it touches no black cell side by side) — the "grouped" pattern
-    style's first ranking criterion (`_place_black_cells`)."""
+    style's line-length limit (`_makes_long_black_line`) and its preference
+    for side-by-side black cells (`_place_black_cells`)."""
     best = 1
     for dr, dc in ((0, 1), (1, 0)):
         length = 1
@@ -979,6 +980,18 @@ def _black_line_length(grid, rows, cols, r, c):
                 rr, cc = rr + sign * dr, cc + sign * dc
         best = max(best, length)
     return best
+
+
+def _has_black_around(grid, rows, cols, r, c):
+    """True when another black cell lies in the 3x3 square centred on
+    (r, c) — side or diagonal neighbour; the grid's border does not count —
+    the preference of the "grouped" pattern style's diagonal phase
+    (`_place_black_cells`' `grouped_diagonal`)."""
+    for rr in range(max(0, r - 1), min(rows, r + 2)):
+        for cc in range(max(0, c - 1), min(cols, c + 2)):
+            if (rr, cc) != (r, c) and grid[rr][cc] == BLACK:
+                return True
+    return False
 
 
 # The "grouped" pattern style never places two side-by-side black cells
@@ -1308,6 +1321,18 @@ def _in_corner_square(rows, cols, r, c):
 # closest first and accepts adjacent black cells (`_place_black_cells`).
 PATTERN_STYLES = ("airy", "grouped")
 
+# The "grouped" pattern style's ratio draw runs in three phases
+# (`make_pattern`): up to GROUPED_AIRY_PERCENT % of the black-cell target
+# under the "airy" rules (farthest first, never two black cells side by
+# side, still no slot shorter than `GROUPED_MIN_SLOT_LENGTH`); then up to
+# GROUPED_DIAGONAL_PERCENT % (cumulative) under the grouped rules with
+# side-by-side black cells still refused, the cells with a black cell in
+# their 3x3 square — i.e. a diagonal neighbour — preferred; then up to the
+# target under the grouped rules, side-by-side black cells accepted and
+# preferred.
+GROUPED_AIRY_PERCENT = 40
+GROUPED_DIAGONAL_PERCENT = 80
+
 
 # Black-cell symmetries of the "Symétrie" selector (`make_pattern`'s
 # `symmetry`, `symmetry_cells`): every black cell the ratio draw places
@@ -1613,7 +1638,8 @@ def _run_score(run, cell_score):
 
 def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, target, placed,
                         rng, index=None, locked_letters=None, available_lengths=None,
-                        forbid_adjacency=False, symmetry=None, grouped=False):
+                        forbid_adjacency=False, symmetry=None, grouped=False,
+                        forbid_short_runs=False, grouped_diagonal=False):
     """Ratio-based black-cell placement of `make_pattern` ("Taux noir"):
     places black cells one at a time until `placed` reaches `target` or no
     candidate can be placed any more.
@@ -1670,26 +1696,34 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     group blackened must stay structurally valid.
 
     `grouped` (the "grouped" `PATTERN_STYLES`, "Style de motif"): before the
-    `_crossing_length_score` window, only the valid cells building a
-    straight run of adjacent black cells, across or down, are kept when
-    some do (`_black_line_length` at least 2); the last ranking is inverted — the cells
+    `_crossing_length_score` window, only the valid cells touching a black
+    cell side by side are kept when some do (`_black_line_length` at least
+    2) — with `grouped_diagonal`, the cells with another black cell in the
+    3x3 square centred on them (`_has_black_around`), side-by-side black
+    cells being refused at every level (`forbid_adjacency` forced); the last ranking is inverted — the cells
     closest to a black cell come first: by increasing plain Euclidean
     distance to the closest black cell
     (`_black_closest_sq`, an adjacent cell first), then by increasing
     `_black_spread_score`, both without `BLACK_ALIGNED_DISTANCE_FACTOR`
     and without the virtual ring of the grid's edges, ties keeping
     `candidates`' shuffled order; adjacency is accepted from the first
-    level on (`forbid_adjacency` ignored); a cell (with its images) is
+    level on (`forbid_adjacency` ignored, unless `grouped_diagonal`); a cell (with its images) is
     valid only if it leaves no slot shorter than `GROUPED_MIN_SLOT_LENGTH`
     next to it (`_leaves_short_run`), builds no line of black cells
     longer than `GROUPED_MAX_BLACK_LINE` (`_makes_long_black_line`) and
     puts no black cell side by side with another along a border less than
     `BORDER_PARALLEL_MIN_DISTANCE` cells away (`_near_border_parallel_pair`).
 
+    `forbid_short_runs`: without `grouped`, a cell (with its images) is
+    still valid only if it leaves no slot shorter than
+    `GROUPED_MIN_SLOT_LENGTH` next to it (`_leaves_short_run`) — the
+    "grouped" style's first, "airy" phase (`make_pattern`).
+
     `candidates` is updated in place (placed cells removed). Returns
     (placed, unplaced cells)."""
     remaining = candidates
     symmetric = bool(symmetry) and symmetry != "none"
+    short_runs = grouped or forbid_short_runs
 
     def _valid_single(r, c, structure, allow_adjacency):
         if grid[r][c] == BLACK:
@@ -1709,7 +1743,7 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
         if not _valid_single(r, c, structure, allow_adjacency):
             return False
         group = _group(r, c) if symmetric else [(r, c)]
-        if len(group) == 1 and not grouped:
+        if len(group) == 1 and not short_runs:
             return True
         if len(group) > 1 and any(
                 cell not in position or not _valid_single(*cell, structure, allow_adjacency)
@@ -1718,8 +1752,9 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
         for cr, cc in group:
             grid[cr][cc] = BLACK
         try:
-            if grouped and (_leaves_short_run(grid, rows, cols, group)
-                            or _makes_long_black_line(grid, rows, cols, group)
+            if short_runs and _leaves_short_run(grid, rows, cols, group):
+                return False
+            if grouped and (_makes_long_black_line(grid, rows, cols, group)
                             or _near_border_parallel_pair(grid, rows, cols, group)):
                 return False
             if len(group) == 1:
@@ -1750,10 +1785,12 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
                     valid.append(i)
             if valid:
                 if grouped:
-                    aligned = [i for i in valid
-                               if _black_line_length(grid, rows, cols, *remaining[i]) >= 2]
-                    if aligned:
-                        valid = aligned
+                    near = [i for i in valid
+                            if (_has_black_around(grid, rows, cols, *remaining[i])
+                                if grouped_diagonal
+                                else _black_line_length(grid, rows, cols, *remaining[i]) >= 2)]
+                    if near:
+                        valid = near
                 valid.sort(key=lambda i: -cell_score[remaining[i]])
                 valid = valid[:_window_size(len(valid), percent)]
                 if grouped:
@@ -1811,7 +1848,8 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
         run_scores = {id(run): _run_score(run, cell_score) for run in run_order}
         run_order.sort(key=lambda run: -run_scores[id(run)])
         chosen = None
-        adjacency_levels = (True,) if grouped else (False,) if forbid_adjacency else (False, True)
+        adjacency_levels = ((False,) if grouped_diagonal else (True,) if grouped
+                            else (False,) if forbid_adjacency else (False, True))
         for allow_adjacency in adjacency_levels:
             for min_free in range(STRUCTURAL_MIN_INTERIOR_FREE, 0, -1):
                 chosen = _draw(run_order, position, min_free, allow_adjacency)
@@ -2482,7 +2520,11 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     apart from each other — or, with `pattern_style` "grouped"
     (`PATTERN_STYLES`, "Style de motif"; `None`/"airy" = apart), biased to
     group them, adjacent cells accepted and preferred (`_place_black_cells`'
-    `grouped`); then, once the target is reached (and after every
+    `grouped`) — up to `GROUPED_AIRY_PERCENT` % of the target being drawn
+    apart first (the "airy" rules, `forbid_short_runs`: no slot shorter
+    than `GROUPED_MIN_SLOT_LENGTH` either), then up to
+    `GROUPED_DIAGONAL_PERCENT` % with diagonal neighbours preferred and
+    side-by-side black cells refused (`grouped_diagonal`); then, once the target is reached (and after every
     short-slot redraw), the drawn black cells with more than
     `GROUPED_MAX_BLACK_NEIGHBORS` black neighbours are taken off, the zones
     this closes opened (`_declump_black_cells`), and the draw runs again up
@@ -2729,6 +2771,21 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     # pre-fill pass below, in their shuffled order.
     ratio_candidates = [cell for cell in candidates if not _in_corner_square(rows, cols, *cell)]
     drawn = set(ratio_candidates)
+    if grouped:
+        # "Grouped" style: up to GROUPED_AIRY_PERCENT % of the target under
+        # the "airy" rules (no 2-letter slot left), then up to
+        # GROUPED_DIAGONAL_PERCENT % with diagonal neighbours preferred and
+        # side-by-side black cells refused; the grouped rules finish.
+        airy_target = max(placed, round(target * GROUPED_AIRY_PERCENT / 100))
+        placed, _ = _place_black_cells(
+            grid, rows, cols, row_black, col_black, ratio_candidates, airy_target, placed, rng,
+            index=index, locked_letters=locked_letters, available_lengths=available_lengths,
+            forbid_adjacency=True, symmetry=symmetry, grouped=False, forbid_short_runs=True)
+        diagonal_target = max(placed, round(target * GROUPED_DIAGONAL_PERCENT / 100))
+        placed, _ = _place_black_cells(
+            grid, rows, cols, row_black, col_black, ratio_candidates, diagonal_target, placed, rng,
+            index=index, locked_letters=locked_letters, available_lengths=available_lengths,
+            forbid_adjacency=True, symmetry=symmetry, grouped=True, grouped_diagonal=True)
     _place_black_cells(grid, rows, cols, row_black, col_black, ratio_candidates, target, placed,
                         rng, index=index, locked_letters=locked_letters, available_lengths=available_lengths,
                         forbid_adjacency=True, symmetry=symmetry, grouped=grouped)

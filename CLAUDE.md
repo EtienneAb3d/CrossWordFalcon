@@ -743,7 +743,19 @@ own rng drawn from the parent's in candidate order:
    `_nearest_black_distances_sq`, kept per candidate and updated as each
    cell is placed; highest first, ties keeping the shuffled order), and
    draws at random among the same percentage best scored (at least one) —
-   under the "grouped" **pattern style** ("Style de motif",
+   under the "grouped" **pattern style** the draw runs in three phases,
+   each threshold a share of the target (`max(placed, round(target * p /
+   100))`, seed and pre-fill cells included): up to `GROUPED_AIRY_PERCENT`
+   (40) % with these airy rules plus the grouped style's no-2-letter-slot
+   check (`_place_black_cells(forbid_short_runs=True)`); up to
+   `GROUPED_DIAGONAL_PERCENT` (80) % with the grouped rules below but
+   side-by-side black cells refused at every level and the cells with
+   another black cell in their 3x3 square (`_has_black_around`, i.e. a
+   diagonal neighbour) preferred (`grouped_diagonal=True`); then the
+   grouped rules below finish the draw (and every de-clumping/short-slot
+   redraw); Java `placeBlackCells(..., forbidShortRuns, groupedDiagonal)`,
+   `Grids.hasBlackAround`;
+   under it ("Style de motif",
    `make_pattern(pattern_style=)`, `generate_grid(pattern_style=)` ->
    `_worker_pattern_style`, `GenerateRequest.pattern_style`,
    `PATTERN_STYLES` airy/grouped; Java `Grids.PATTERN_STYLES`,
@@ -760,9 +772,10 @@ own rng drawn from the parent's in candidate order:
    lies less than `BORDER_PARALLEL_MIN_DISTANCE` (3) cells from — across
    in the first/last 3 rows, down in the first/last 3 columns
    (`_near_border_parallel_pair`, pre-fill too; Java
-   `Grids.nearBorderParallelPair`), only the cells forming a straight
-   bar of at least 2 adjacent black cells are kept before the
-   crossing-length window when some do (`_black_line_length`), and the
+   `Grids.nearBorderParallelPair`), only the cells touching a black cell
+   side by side (a straight bar of at least 2 once placed) are kept
+   before the crossing-length window when some do (`_black_line_length`;
+   the diagonal phase: `_has_black_around`, the border not counting), and the
    last ranking is inverted:
    closest first, by increasing plain Euclidean distance to the closest
    black cell (`_black_closest_sq`, Java `NearestBlacks.closest`), then by

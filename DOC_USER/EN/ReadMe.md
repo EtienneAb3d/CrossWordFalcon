@@ -176,9 +176,11 @@ full again whenever a new generation or an Interactive session starts.
   Symétrie) — how the pattern draw places its black cells: **Aéré
   (français) / Sparse (French)**, the default, keeps them as far from each
   other as possible and never side by side; **Groupé/aligné (américain/NYT)
-  / Grouped/aligned (American/NYT)** places them as close as possible to
-  the black cells already there, preferably extending a straight bar of
-  black cells, never placing two black cells side by side parallel to a
+  / Grouped/aligned (American/NYT)** first places 40 % of the black rate
+  the Sparse way (far apart, never side by side, but never leaving a
+  2-letter word), the next 40 % preferably diagonal to a black cell
+  (still never side by side), then the rest as close as possible to
+  the black cells already there, preferably side by side with one, never placing two black cells side by side parallel to a
   border within its first 3 rows or columns, as in an American crossword — once the black rate is reached, a black cell
   touching black cells or the grid border on three sides or more is taken off (opening any
   area this closes) and the draw tops the rate back up; a grid in this style never holds a 2-letter word
@@ -1755,7 +1757,9 @@ and every later addition, removal or move of a black cell does too) —
 with no symmetry it reaches far sparser layouts (and so grids with far
 more visible letters) than a traditional symmetric crossword would. In
 the default "airy" pattern style each new black cell goes as far as
-possible from the others; in the "grouped" (American) style it goes as
+possible from the others; in the "grouped" (American) style the first
+40 % of the black cells are drawn that same way, the next 40 %
+preferably diagonal to them, then each new one goes as
 close as possible to them, side by side when it can. Every candidate cell has to
 respect a few hard rules: a white cell can never end up boxed in on all
 four sides (it would belong to no word at all and could never receive a

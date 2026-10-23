@@ -1054,9 +1054,24 @@ the current defaults/behavior to know before touching this code.
   close as possible to, the black cells already placed
   (`_place_black_cells(grouped=)`, Java `Grids.placeBlackCells`); choosing
   English as the language selects the diagonal symmetry and the grouped
-  style (`script.js`'s `setUiLanguage`). Further user rules for the
-  grouped ("Groupé/aligné") style: prefer cells building straight bars of
-  adjacent black cells (`_black_line_length`); no 2-letter slot — only
+  style (`script.js`'s `setUiLanguage`). The user's rule: the grouped
+  style draws 40 % of the black cells with the French distribution
+  (still forbidding slots of fewer than 3 letters), then 40 % accepting
+  diagonal groupings (3x3 square centred on the cell), then the last 20 %
+  preferring groupings in line (side-by-side adjacency)
+  (`GROUPED_AIRY_PERCENT`/`GROUPED_DIAGONAL_PERCENT`, `_place_black_cells`'
+  `forbid_short_runs`/`grouped_diagonal`). Choices made with it, to
+  revisit with the user: the thresholds are 40 % and 80 % of the whole
+  objective, black cells already present (seed, pre-fill) included; the
+  first phase keeps every airy rule (no adjacency, edges as virtual black
+  cells, aligned factor); the second uses the grouped ranking (closest
+  first) with side-by-side black cells still refused and the 3x3-square
+  cells preferred, so in practice diagonal neighbours; the third prefers
+  the cells touching a black cell by a side; the de-clumping and
+  short-slot redraws use the third phase's rules only. Further user rules for the
+  grouped ("Groupé/aligné") style: prefer cells touching a black cell side by
+  side (`_black_line_length`; the diagonal phase prefers a black cell in
+  the 3x3 square, `_has_black_around`, the grid border not counting); no 2-letter slot — only
   black cells leaving slots of 3 letters or more (`_leaves_short_run`);
   no candidate building a line of more than 4 adjacent black cells,
   across or down, while the pattern is generated (`GROUPED_MAX_BLACK_LINE`,
@@ -1070,9 +1085,8 @@ the current defaults/behavior to know before touching this code.
   with the user: "less than 3 letters" means rows/columns 0-2 from each
   border, and like the 4-cell line rule it binds the ratio draw and
   pre-fill, not the later repairs and reshapes). Choices made with
-  these rules, to revisit with the user: a bar is preferred whatever its
-  length (keeping only the longest gave walls of 6-7 cells), applied
-  before the crossing-length window (applied after it, it almost never
+  these rules, to revisit with the user: the neighbourhood preference is
+  applied before the crossing-length window (applied after it, it almost never
   mattered: that window leaves 1-2 cells per draw); a 1-cell white zone is
   still allowed. The 2-letter rule applies to every situation of the
   grouped style (the user's rule: "appliquer l'interdiction de mots de 2

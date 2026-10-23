@@ -741,6 +741,19 @@ public final class Grids {
         return false;
     }
 
+    /**
+     * True when another black cell lies in the 3x3 square centred on (r, c) — side or diagonal neighbour; the grid's
+     * border does not count — the preference of the "grouped" pattern style's diagonal phase ({@link #placeBlackCells}).
+     */
+    static boolean hasBlackAround(char[][] grid, int rows, int cols, int r, int c) {
+        for (int rr = Math.max(0, r - 1); rr < Math.min(rows, r + 2); rr++) {
+            for (int cc = Math.max(0, c - 1); cc < Math.min(cols, c + 2); cc++) {
+                if ((rr != r || cc != c) && grid[rr][cc] == BLACK) return true;
+            }
+        }
+        return false;
+    }
+
     static int blackLineLength(char[][] grid, int rows, int cols, int r, int c) {
         int best = 1;
         int[][] directions = {{0, 1}, {1, 0}};
@@ -766,6 +779,17 @@ public final class Grids {
      * black cells ({@link #placeBlackCells}).
      */
     public static final List<String> PATTERN_STYLES = List.of("airy", "grouped");
+
+    /**
+     * The "grouped" pattern style's ratio draw runs in three phases ({@link #makePattern}): up to
+     * {@code GROUPED_AIRY_PERCENT} % of the black-cell target under the "airy" rules (farthest first, never two black
+     * cells side by side, still no slot shorter than {@link #GROUPED_MIN_SLOT_LENGTH}); then up to
+     * {@code GROUPED_DIAGONAL_PERCENT} % (cumulative) under the grouped rules with side-by-side black cells still
+     * refused, the cells with a black cell in their 3x3 square — i.e. a diagonal neighbour — preferred; then up to the
+     * target under the grouped rules, side-by-side black cells accepted and preferred.
+     */
+    static final int GROUPED_AIRY_PERCENT = 40;
+    static final int GROUPED_DIAGONAL_PERCENT = 80;
 
     /**
      * {@link #placeBlackCells}' draw window, in percent, and its widening step: the share of the white runs
@@ -1039,7 +1063,7 @@ public final class Grids {
      * "none" = none) the drawn cell is placed with its images ({@link #symmetryCells}), the hard constraints holding
      * for the whole group: every image still white is a candidate satisfying them on its own, no cell of the group
      * touches a black cell nor another cell of the group, and the grid with the whole group blackened stays
-     * structurally valid. {@code grouped} (the "grouped" {@link #PATTERN_STYLES}) keeps, before the crossing-length window, only the valid cells building a straight run of adjacent black cells ({@link #blackLineLength} at least 2), when
+     * structurally valid. {@code grouped} (the "grouped" {@link #PATTERN_STYLES}) keeps, before the crossing-length window, only the valid cells touching a black cell side by side ({@link #blackLineLength} at least 2), when
      * some do, accepts a cell (with its images) only if it leaves no slot shorter than
      * {@link #GROUPED_MIN_SLOT_LENGTH} next to it ({@link #leavesShortRun}) and builds no line of black cells longer
      * than {@link #GROUPED_MAX_BLACK_LINE} ({@link #makesLongBlackLine}) nor puts a black cell side by side with another
@@ -1052,6 +1076,23 @@ public final class Grids {
                                          List<Integer> candidates, int target, int placed, Rng rng,
                                          DualIndex index, Map<Integer, Character> locked, LengthSets available,
                                          boolean forbidAdjacency, String symmetry, boolean grouped) {
+        return placeBlackCells(grid, rows, cols, rowBlack, colBlack, candidates, target, placed, rng, index, locked,
+                available, forbidAdjacency, symmetry, grouped, false, false);
+    }
+
+    /**
+     * {@link #placeBlackCells} where, without {@code grouped}, {@code forbidShortRuns} still accepts a cell (with its
+     * images) only if it leaves no slot shorter than {@link #GROUPED_MIN_SLOT_LENGTH} next to it
+     * ({@link #leavesShortRun}) — the "grouped" style's first, "airy" phase ({@link #makePattern}); with
+     * {@code grouped}, {@code groupedDiagonal} refuses side-by-side black cells at every level and prefers, instead of
+     * the cells touching a black cell side by side, those with another black cell in their 3x3 square
+     * ({@link #hasBlackAround}) — the style's second, diagonal phase.
+     */
+    static List<Integer> placeBlackCells(char[][] grid, int rows, int cols, int[] rowBlack, int[] colBlack,
+                                         List<Integer> candidates, int target, int placed, Rng rng,
+                                         DualIndex index, Map<Integer, Character> locked, LengthSets available,
+                                         boolean forbidAdjacency, String symmetry, boolean grouped,
+                                         boolean forbidShortRuns, boolean groupedDiagonal) {
         boolean symmetric = symmetry != null && !"none".equals(symmetry);
         List<Integer> remaining = candidates;
         Map<Integer, int[][]> runAt = cellRuns(grid, rows, cols);
@@ -1098,13 +1139,14 @@ public final class Grids {
             for (int[] run : runOrder) runScores.put(run, runScore(run, cellScore));
             runOrder.sort((x, y) -> Double.compare(runScores.get(y), runScores.get(x)));
             Integer chosen = null;
-            int firstAdj = grouped ? 1 : 0;
-            int endAdj = grouped || !forbidAdjacency ? 2 : 1;
+            int firstAdj = grouped && !groupedDiagonal ? 1 : 0;
+            int endAdj = groupedDiagonal ? 1 : grouped || !forbidAdjacency ? 2 : 1;
             for (int adj = firstAdj; adj < endAdj && chosen == null; adj++) {
                 for (int minFree = STRUCTURAL_MIN_INTERIOR_FREE; minFree > 0 && chosen == null; minFree--) {
                     chosen = drawBlackCell(grid, rows, cols, remaining, dist, grouped ? nearest : null, cellScore,
                             runOrder, position, minFree, adj == 1,
-                            rng, index, locked, available, symmetric ? symmetry : null);
+                            rng, index, locked, available, symmetric ? symmetry : null, grouped || forbidShortRuns,
+                            groupedDiagonal);
                 }
             }
             if (chosen == null) break;
@@ -1183,11 +1225,11 @@ public final class Grids {
     private static boolean validBlackGroup(char[][] grid, int rows, int cols, int r, int c, BlackCellValidity structure,
                                            boolean allowAdjacency, DualIndex index, Map<Integer, Character> locked,
                                            LengthSets available, String symmetry, Map<Integer, Integer> position,
-                                           int minFree, boolean grouped) {
+                                           int minFree, boolean grouped, boolean shortRuns) {
         if (!validBlackCell(grid, rows, cols, r, c, structure, allowAdjacency, index, locked, available)) return false;
         List<Integer> group = symmetry == null ? List.of(Cells.of(r, c))
                 : whiteImages(grid, rows, cols, Cells.of(r, c), symmetry);
-        if (group.size() == 1 && !grouped) return true;
+        if (group.size() == 1 && !shortRuns) return true;
         if (group.size() > 1) {
             for (int cell : group) {
                 if (!position.containsKey(cell)) return false;
@@ -1199,7 +1241,8 @@ public final class Grids {
         }
         for (int cell : group) grid[Cells.r(cell)][Cells.c(cell)] = BLACK;
         try {
-            if (grouped && (leavesShortRun(grid, rows, cols, group) || makesLongBlackLine(grid, rows, cols, group)
+            if (shortRuns && leavesShortRun(grid, rows, cols, group)) return false;
+            if (grouped && (makesLongBlackLine(grid, rows, cols, group)
                     || nearBorderParallelPair(grid, rows, cols, group))) {
                 return false;
             }
@@ -1216,7 +1259,8 @@ public final class Grids {
     private static Integer drawBlackCell(char[][] grid, int rows, int cols, List<Integer> remaining, List<Double> dist,
                                          List<NearestBlacks> groupedNearest, Map<Integer, Double> cellScore, List<int[]> runOrder, Map<Integer, Integer> position, int minFree,
                                          boolean allowAdjacency, Rng rng, DualIndex index,
-                                         Map<Integer, Character> locked, LengthSets available, String symmetry) {
+                                         Map<Integer, Character> locked, LengthSets available, String symmetry,
+                                         boolean shortRuns, boolean groupedDiagonal) {
         BlackCellValidity structure = new BlackCellValidity(grid, rows, cols, minFree);
         Map<Integer, Boolean> checked = new HashMap<>(); // candidate index -> valid at this level, during this draw
         for (int percent = BLACK_DRAW_WINDOW_PERCENT; ; percent += BLACK_DRAW_WINDOW_PERCENT) {
@@ -1234,20 +1278,26 @@ public final class Grids {
                 if (ok == null) {
                     int cell = remaining.get(i);
                     ok = validBlackGroup(grid, rows, cols, Cells.r(cell), Cells.c(cell), structure, allowAdjacency,
-                            index, locked, available, symmetry, position, minFree, groupedNearest != null);
+                            index, locked, available, symmetry, position, minFree, groupedNearest != null,
+                            shortRuns);
                     checked.put(i, ok);
                 }
                 if (ok) valid.add(i);
             }
             if (!valid.isEmpty()) {
                 if (groupedNearest != null) {
-                    // "grouped" style: only the cells building a straight run of adjacent black cells, if any.
-                    List<Integer> aligned = new ArrayList<>();
+                    // "grouped" style: only the cells touching a black cell side by side (diagonal phase: with
+                    // another black cell in their 3x3 square), if any.
+                    List<Integer> near = new ArrayList<>();
                     for (int i : valid) {
                         int cell = remaining.get(i);
-                        if (blackLineLength(grid, rows, cols, Cells.r(cell), Cells.c(cell)) >= 2) aligned.add(i);
+                        int r = Cells.r(cell), c = Cells.c(cell);
+                        if (groupedDiagonal ? hasBlackAround(grid, rows, cols, r, c)
+                                : blackLineLength(grid, rows, cols, r, c) >= 2) {
+                            near.add(i);
+                        }
                     }
-                    if (!aligned.isEmpty()) valid = aligned;
+                    if (!near.isEmpty()) valid = near;
                 }
                 valid.sort((x, y) -> Double.compare(cellScore.get(remaining.get(y)), cellScore.get(remaining.get(x))));
                 valid = new ArrayList<>(valid.subList(0, windowSize(valid.size(), percent)));
@@ -1600,7 +1650,10 @@ public final class Grids {
      * {@link #makePattern} with the ratio draw's black-cell {@code symmetry} ("Symétrie", {@link #BLACK_SYMMETRIES},
      * null = none): every drawn cell comes with its images, and the short-slot limit reopens a bounding cell with its
      * images, and pre-fill places each cell with its images too. {@code patternStyle} ({@link #PATTERN_STYLES}, null =
-     * "airy"): "grouped" groups the ratio draw's black cells, adjacent cells accepted and preferred.
+     * "airy"): "grouped" groups the ratio draw's black cells, adjacent cells accepted and preferred, the first
+     * {@link #GROUPED_AIRY_PERCENT} % of the target being drawn apart first (the "airy" rules, no slot shorter
+     * than {@link #GROUPED_MIN_SLOT_LENGTH} either), then up to {@link #GROUPED_DIAGONAL_PERCENT} % with diagonal
+     * neighbours preferred and side-by-side black cells refused.
      */
     public static char[][] makePattern(int rows, int cols, double blackRatio, Rng rng, LengthSets available,
                                        char[][] seedGrid, Map<Integer, Character> lockedLetters, DualIndex index,
@@ -1644,6 +1697,19 @@ public final class Grids {
         List<Integer> ratioCandidates = new ArrayList<>();
         for (int cell : candidates) if (!inCornerSquare(rows, cols, Cells.r(cell), Cells.c(cell))) ratioCandidates.add(cell);
         Set<Integer> drawn = new HashSet<>(ratioCandidates);
+        if (grouped) {
+            // "Grouped" style: up to GROUPED_AIRY_PERCENT % of the target under the "airy" rules (no 2-letter slot
+            // left), then up to GROUPED_DIAGONAL_PERCENT % with diagonal neighbours preferred and side-by-side black
+            // cells refused; the grouped rules finish.
+            int airyTarget = (int) Math.max(placed, Math.rint(target * GROUPED_AIRY_PERCENT / 100.0));
+            placeBlackCells(grid, rows, cols, rowBlack, colBlack, ratioCandidates, airyTarget, placed, rng, index,
+                    locked, available, true, symmetry, false, true, false);
+            placed = countBlack(grid);
+            int diagonalTarget = (int) Math.max(placed, Math.rint(target * GROUPED_DIAGONAL_PERCENT / 100.0));
+            placeBlackCells(grid, rows, cols, rowBlack, colBlack, ratioCandidates, diagonalTarget, placed, rng, index,
+                    locked, available, true, symmetry, true, false, true);
+            placed = countBlack(grid);
+        }
         placeBlackCells(grid, rows, cols, rowBlack, colBlack, ratioCandidates, target, placed, rng, index, locked, available,
                 true, symmetry, grouped);
         drawn.removeAll(new HashSet<>(ratioCandidates));

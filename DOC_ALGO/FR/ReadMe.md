@@ -528,6 +528,23 @@ valeurs `PATTERN_STYLES`) choisit le critère de pose des cases noires
   les cases les plus **éloignées** des cases noires d'abord, et jamais
   deux cases noires côte à côte ;
 - **Groupé/aligné (américain/NYT)** (`grouped`) :
+  - le tirage se fait en **trois phases**, chaque seuil étant une part de
+    l'objectif (cases noires déjà présentes comprises, arrondi au plus
+    proche) (`make_pattern`, `_place_black_cells`) :
+    1. jusqu'à `GROUPED_AIRY_PERCENT` (**40 %**), les règles **Aéré** —
+       les cases les plus éloignées d'abord, jamais deux cases noires côte
+       à côte, les bords comptant comme des cases noires — en interdisant
+       en plus toute case qui laisserait un emplacement de 2 lettres
+       (`forbid_short_runs`) ;
+    2. jusqu'à `GROUPED_DIAGONAL_PERCENT` (**80 %**), les règles
+       Groupé/aligné ci-dessous, mais deux cases noires côte à côte
+       restent interdites et l'on garde de préférence les cases ayant une
+       autre case noire dans leur **carré 3x3** centré sur elles, donc une
+       voisine en diagonale (`grouped_diagonal`, `_has_black_around`) ;
+    3. jusqu'à l'objectif, les règles Groupé/aligné, adjacence comprise,
+       en gardant de préférence les cases qui touchent une case noire par
+       un côté ; cette phase sert aussi aux relances (dégroupage, limite
+       des emplacements courts) ;
   - une case n'est valide que si elle ne laisse, à côté d'elle (avec ses
     images), **aucun emplacement de 2 lettres** : chaque suite de cases
     non noires qui la touche, horizontale ou verticale, fait 1 case ou au
@@ -549,9 +566,10 @@ valeurs `PATTERN_STYLES`) choisit le critère de pose des cases noires
     `_near_border_parallel_pair`) ; le pré-remplissage applique la même
     règle ;
   - avant la fenêtre de score de longueurs cumulées, seules les cases qui
-    forment un **alignement** de cases noires collées (une suite
-    horizontale ou verticale d'au moins 2 cases noires une fois la case
-    posée, `_black_line_length`) sont gardées, quand il y en a ;
+    touchent une case noire **par un côté** (elles forment un alignement
+    d'au moins 2 cases noires une fois posées, `_black_line_length`) sont
+    gardées, quand il y en a — en phase 2, celles qui ont une autre case
+    noire dans leur carré 3x3 (le bord ne compte pas) ;
   - le dernier classement est inversé, les
   cases les plus **proches** des cases noires d'abord — par distance
   euclidienne croissante à la case noire la plus proche (une case
