@@ -1330,8 +1330,8 @@ PATTERN_STYLES = ("airy", "grouped")
 # their 3x3 square — i.e. a diagonal neighbour — preferred; then up to the
 # target under the grouped rules, side-by-side black cells accepted and
 # preferred.
-GROUPED_AIRY_PERCENT = 40
-GROUPED_DIAGONAL_PERCENT = 80
+GROUPED_AIRY_PERCENT = 30
+GROUPED_DIAGONAL_PERCENT = 70
 
 # The web UI's three "Style de motif" percentages (`make_pattern`'s
 # `pattern_mix`): the shares of the black-cell target drawn under the airy,
@@ -2582,7 +2582,11 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     short-slot redraw), the drawn black cells with more than
     `GROUPED_MAX_BLACK_NEIGHBORS` black neighbours are taken off, the zones
     this closes opened (`_declump_black_cells`), and the draw runs again up
-    to the target, at most `GROUPED_DECLUMP_MAX_ROUNDS` rounds.
+    to the target, at most `GROUPED_DECLUMP_MAX_ROUNDS` rounds. Every
+    redraw (de-clumping, short-slot limit) picks its rules by the same
+    thresholds as the first draw, from the black cells present
+    (`_draw_to_target`): under the airy share the airy rules, then the
+    diagonal ones, the side-by-side ones beyond.
 
     A purely random placement order (just shuffling every cell) tends to
     let black cells end up touching each other by chance, forming small
@@ -2826,24 +2830,34 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     ratio_candidates = [cell for cell in candidates if not _in_corner_square(rows, cols, *cell)]
     drawn = set(ratio_candidates)
     if grouped:
-        # "Grouped" style: up to GROUPED_AIRY_PERCENT % of the target under
-        # the "airy" rules (no 2-letter slot left), then up to
-        # GROUPED_DIAGONAL_PERCENT % with diagonal neighbours preferred and
-        # side-by-side black cells refused; the grouped rules finish.
         airy_percent, diagonal_percent, _ = pattern_mix or DEFAULT_PATTERN_MIX
-        airy_target = max(placed, round(target * airy_percent / 100))
-        placed, _ = _place_black_cells(
-            grid, rows, cols, row_black, col_black, ratio_candidates, airy_target, placed, rng,
-            index=index, locked_letters=locked_letters, available_lengths=available_lengths,
-            forbid_adjacency=True, symmetry=symmetry, grouped=False, forbid_short_runs=True)
-        diagonal_target = max(placed, round(target * (airy_percent + diagonal_percent) / 100))
-        placed, _ = _place_black_cells(
-            grid, rows, cols, row_black, col_black, ratio_candidates, diagonal_target, placed, rng,
-            index=index, locked_letters=locked_letters, available_lengths=available_lengths,
-            forbid_adjacency=True, symmetry=symmetry, grouped=True, grouped_diagonal=True)
-    _place_black_cells(grid, rows, cols, row_black, col_black, ratio_candidates, target, placed,
-                        rng, index=index, locked_letters=locked_letters, available_lengths=available_lengths,
-                        forbid_adjacency=True, symmetry=symmetry, grouped=grouped)
+        airy_target = round(target * airy_percent / 100)
+        diagonal_target = round(target * (airy_percent + diagonal_percent) / 100)
+
+    def _draw_to_target():
+        # Draws black cells up to the target. "Grouped" style: the black
+        # cells present decide the phase — under the "airy" share of the
+        # target the "airy" rules (no 2-letter slot left), under the airy
+        # plus diagonal shares diagonal neighbours preferred and side-by-side
+        # black cells refused, the grouped rules beyond — so every redraw
+        # follows the "Style de motif" shares like the first draw.
+        placed = sum(row_black)
+        if grouped:
+            if placed < airy_target:
+                placed, _ = _place_black_cells(
+                    grid, rows, cols, row_black, col_black, ratio_candidates, airy_target, placed, rng,
+                    index=index, locked_letters=locked_letters, available_lengths=available_lengths,
+                    forbid_adjacency=True, symmetry=symmetry, grouped=False, forbid_short_runs=True)
+            if placed < diagonal_target:
+                placed, _ = _place_black_cells(
+                    grid, rows, cols, row_black, col_black, ratio_candidates, diagonal_target, placed, rng,
+                    index=index, locked_letters=locked_letters, available_lengths=available_lengths,
+                    forbid_adjacency=True, symmetry=symmetry, grouped=True, grouped_diagonal=True)
+        _place_black_cells(grid, rows, cols, row_black, col_black, ratio_candidates, target, placed,
+                            rng, index=index, locked_letters=locked_letters, available_lengths=available_lengths,
+                            forbid_adjacency=True, symmetry=symmetry, grouped=grouped)
+
+    _draw_to_target()
     drawn -= set(ratio_candidates)
 
     def _declump_and_redraw():
@@ -2857,10 +2871,7 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
             if sum(row_black) >= target:
                 break
             before = set(ratio_candidates)
-            _place_black_cells(grid, rows, cols, row_black, col_black, ratio_candidates, target,
-                                sum(row_black), rng, index=index, locked_letters=locked_letters,
-                                available_lengths=available_lengths, forbid_adjacency=True,
-                                symmetry=symmetry, grouped=grouped)
+            _draw_to_target()
             drawn.update(before - set(ratio_candidates))
 
     if grouped:
@@ -2882,10 +2893,7 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
         drawn -= set(reopened)
         ratio_candidates.extend(reopened)
         before = set(ratio_candidates)
-        _place_black_cells(grid, rows, cols, row_black, col_black, ratio_candidates, target,
-                            sum(row_black), rng, index=index, locked_letters=locked_letters,
-                            available_lengths=available_lengths, forbid_adjacency=True,
-                            symmetry=symmetry, grouped=grouped)
+        _draw_to_target()
         drawn |= before - set(ratio_candidates)
         if grouped:
             _declump_and_redraw()

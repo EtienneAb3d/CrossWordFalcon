@@ -671,8 +671,11 @@ input {
   gap: 0.4rem;
 }
 
-.input-with-suffix input {
-  width: 4rem;
+/* Every integer field of the generation form (Largeur, Hauteur, Taux noir,
+   the three "Style de motif" shares, Multi-mots max, Mots par pose) has the
+   same width, room for 3 digits next to the browser's spin buttons. */
+#generate-form input[type="number"] {
+  width: 5rem;
 }
 
 .input-suffix {

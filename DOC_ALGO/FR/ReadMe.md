@@ -198,6 +198,8 @@ sessions Interactif (`load_lexicon`, appelé par `generate_grid` et par
 Même démarrage, en cliquant sur **Interactif** (ligne **Générer la
 grille :**) au lieu d'**Automatique**. Le guide ci-dessous
 s'ouvre aussi dans l'interface par le bouton **?** à gauche de **Mots**.
+La session démarre sur le seul motif de cases noires, sans aucun mot posé
+(`backend/app.py`, `_run_interactive_job`).
 
 - Placer ses lettres dans la grille ; « . » (ou toute autre ponctuation)
   ajoute ou supprime une case noire ; Espace, « - » ou « _ » ajoute ou
@@ -535,20 +537,26 @@ le style **Groupé/aligné** (`grouped`) dont il fixe les trois phases
   - le tirage se fait en **trois phases**, chaque seuil étant une part de
     l'objectif (cases noires déjà présentes comprises, arrondi au plus
     proche) (`make_pattern`, `_place_black_cells`) :
-    1. jusqu'à la part « Aéré » (`DEFAULT_PATTERN_MIX` : **40 %**), les règles **Aéré** —
+    1. jusqu'à la part « Aéré » (`DEFAULT_PATTERN_MIX` : **30 %**), les règles **Aéré** —
        les cases les plus éloignées d'abord, jamais deux cases noires côte
        à côte, les bords comptant comme des cases noires — en interdisant
        en plus toute case qui laisserait un emplacement de 2 lettres
        (`forbid_short_runs`) ;
-    2. jusqu'aux parts « Aéré » + « Groupé » cumulées (**80 %** par défaut), les règles
+    2. jusqu'aux parts « Aéré » + « Groupé » cumulées (**70 %** par défaut), les règles
        Groupé/aligné ci-dessous, mais deux cases noires côte à côte
        restent interdites et l'on garde de préférence les cases ayant une
        autre case noire dans leur **carré 3x3** centré sur elles, donc une
        voisine en diagonale (`grouped_diagonal`, `_has_black_around`) ;
     3. jusqu'à l'objectif (la part « Aligné »), les règles Groupé/aligné, adjacence comprise,
        en gardant de préférence les cases qui touchent une case noire par
-       un côté ; cette phase sert aussi aux relances (dégroupage, limite
-       des emplacements courts) ;
+       un côté.
+
+    Les relances (dégroupage, limite des emplacements courts) suivent les
+    mêmes seuils : chaque relance reprend à la phase correspondant au
+    nombre de cases noires présentes (sous la part « Aéré », les règles
+    Aéré, puis la phase diagonale, puis la phase alignée), si bien qu'un
+    mélange 99/1/0 relance avec les règles Aéré (`make_pattern`,
+    `_draw_to_target`) ;
   - une case n'est valide que si elle ne laisse, à côté d'elle (avec ses
     images), **aucun emplacement de 2 lettres** : chaque suite de cases
     non noires qui la touche, horizontale ou verticale, fait 1 case ou au
@@ -627,7 +635,7 @@ le dictionnaire. En mode Interactif, « Suivant » n'y pose jamais de mot
 et un mot de 2 lettres tapé à la main est signalé invalide.
 
 Dans l'interface, choisir le français comme langue règle le mélange sur
-100/0/0, toute autre langue sur 40/40/20 ; l'anglais sélectionne en plus
+100/0/0, toute autre langue sur 30/40/30 ; l'anglais sélectionne en plus
 la symétrie « Diagonale » (`frontend/static/script.js`, `setUiLanguage`).
 Modifier un des trois pourcentages reporte la différence sur le champ
 immédiatement à sa droite, puis, une fois celui-ci à 0 ou 100, sur le

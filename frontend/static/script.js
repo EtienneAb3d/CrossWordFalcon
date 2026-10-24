@@ -316,9 +316,10 @@ const patternMixInputs = ["pattern-mix-airy", "pattern-mix-grouped", "pattern-mi
 // The last valid mix, which every change is measured against.
 let patternMix = [100, 0, 0];
 const FRENCH_PATTERN_MIX = [100, 0, 0];
-const AMERICAN_PATTERN_MIX = [40, 40, 20];
-// Selecting the "grouped" (American) style raises "Taux noir" to at least
-// this percentage; the player may lower it again afterwards.
+const AMERICAN_PATTERN_MIX = [30, 40, 30];
+// In French, selecting the "grouped" (American) style raises "Taux noir" to
+// at least this percentage (the player may lower it again afterwards), and
+// every preset takes it (groupedBlackMinimumApplies).
 const GROUPED_MIN_BLACK_PERCENT = 18;
 
 // The GenerateRequest.pattern_style the current mix stands for.
@@ -374,10 +375,16 @@ function restorePatternMix(params) {
   }
 }
 
+// The 18 % minimum black rate of the "grouped" style: French only — the
+// other languages keep the rate the player or the preset set.
+function groupedBlackMinimumApplies() {
+  return patternStyle() === "grouped" && uiLanguage === "fr";
+}
+
 function applyGroupedBlackMinimum() {
   // The presets' black rates follow the pattern style (presetBlack).
   if (gridPresetsReady) renderGridPresets();
-  if (patternStyle() !== "grouped") return;
+  if (!groupedBlackMinimumApplies()) return;
   const current = Number(blackEnrichmentInput.value);
   if (!(current >= GROUPED_MIN_BLACK_PERCENT)) {
     blackEnrichmentInput.value = GROUPED_MIN_BLACK_PERCENT;
@@ -3909,9 +3916,9 @@ function gridPresetAllowed(preset) {
 }
 
 // A preset's black rate: GROUPED_MIN_BLACK_PERCENT for every preset under
-// the "grouped" (American) pattern style, its own otherwise.
+// the "grouped" (American) pattern style in French, its own otherwise.
 function presetBlack(preset) {
-  return patternStyle() === "grouped" ? GROUPED_MIN_BLACK_PERCENT : preset.black;
+  return groupedBlackMinimumApplies() ? GROUPED_MIN_BLACK_PERCENT : preset.black;
 }
 
 function matchingGridPreset() {

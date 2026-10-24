@@ -553,7 +553,8 @@ json`. Holds all server-side state in plain module dicts/lists:
   {job_id}` (resume from `resume_state`), `POST /api/recompute`
   (regenerate only a stored grid's clues, saved as a new "(Vn)" copy).
 - *Interactive mode* (word-by-word manual authoring): `POST /api/
-  interactive/start`, `/step` (place one word), `/clean` (remove/blacken
+  interactive/start` (the black-cell pattern alone, no word placed,
+  `_run_interactive_job`), `/step` (place one word), `/clean` (remove/blacken
   impossible zones, optional deep mode), `/candidates` (dictionary words
   for a slot), `/crossing` (letter/word options at one cell's crossing),
   `/boundary` (dictionary words that can start or end a slot, even
@@ -752,7 +753,7 @@ own rng drawn from the parent's in candidate order:
    100))`, seed and pre-fill cells included, the shares given by
    `pattern_mix` — `make_pattern(pattern_mix=)`, `generate_grid(pattern_
    mix=)` -> `_worker_pattern_mix`, `GenerateRequest.pattern_mix`, Java
-   `Generator.Params.patternMix`, `DEFAULT_PATTERN_MIX` (40, 40, 20) when
+   `Generator.Params.patternMix`, `DEFAULT_PATTERN_MIX` (30, 40, 30) when
    `None`; `pattern_style_of_mix`: 100/0/0 is "airy", any other mix
    "grouped", Java `Grids.patternStyleOfMix`): up to the airy share
    (40) % with these airy rules plus the grouped style's no-2-letter-slot
@@ -761,8 +762,11 @@ own rng drawn from the parent's in candidate order:
    side-by-side black cells refused at every level and the cells with
    another black cell in their 3x3 square (`_has_black_around`, i.e. a
    diagonal neighbour) preferred (`grouped_diagonal=True`); then the
-   grouped rules below finish the draw (and every de-clumping/short-slot
-   redraw); Java `placeBlackCells(..., forbidShortRuns, groupedDiagonal)`,
+   grouped rules below finish the draw; every de-clumping/short-slot
+   redraw picks its phase the same way from the black cells present
+   (`make_pattern`'s `_draw_to_target`, Java `Grids.drawToTarget`: under
+   the airy share the airy rules, then the diagonal ones, the grouped ones
+   beyond), so a 99/1/0 mix redraws with the airy rules; Java `placeBlackCells(..., forbidShortRuns, groupedDiagonal)`,
    `Grids.hasBlackAround`;
    under it ("Style de motif",
    `make_pattern(pattern_style=)`, `generate_grid(pattern_style=)` ->
@@ -796,11 +800,11 @@ own rng drawn from the parent's in candidate order:
    sent as `pattern_mix` with the derived `pattern_style`) always total
    100: a change moves the difference onto the field right of it, then
    the next ones, wrapping to the first (`applyPatternMixChange`);
-   `setUiLanguage` sets 100/0/0 for French, 40/40/20 for every other
-   language, plus the diagonal symmetry for English, and leaving 100/0/0
-   (`setPatternMix`) raises "Taux noir" to at
-   least `GROUPED_MIN_BLACK_PERCENT` (18, `applyGroupedBlackMinimum`; the
-   player may lower it again). Under "grouped" the grid's lexicon has no word
+   `setUiLanguage` sets 100/0/0 for French, 30/40/30 for every other
+   language, plus the diagonal symmetry for English, and, in French only
+   (`groupedBlackMinimumApplies`), leaving 100/0/0 (`setPatternMix`) raises
+   "Taux noir" to at least `GROUPED_MIN_BLACK_PERCENT` (18,
+   `applyGroupedBlackMinimum`; the player may lower it again). Under "grouped" the grid's lexicon has no word
    shorter than `GROUPED_MIN_SLOT_LENGTH` (`style_index`, Java
    `Words.styleIndex`: a shallow copy of the cached index without those
    lengths, applied by `generate_grid`, which also ignores such a "Mots
@@ -3278,8 +3282,8 @@ state, unlike the backend).
   listbox (`script.js`'s `GRID_PRESETS`/`renderGridPresets`/
   `applyGridPreset`) filling `#width`/`#height`/`#black-enrichment` from
   eight named formats (6x6 0 % to 50x50 15 %; every one at
-  `GROUPED_MIN_BLACK_PERCENT`, 18 %, under the "grouped" pattern style,
-  `presetBlack`), frontend-only; the
+  `GROUPED_MIN_BLACK_PERCENT`, 18 %, under the "grouped" pattern style in
+  French, `presetBlack`), frontend-only; the
   button shows the preset matching the three fields (`syncGridPresetSelection`),
   presets above `REMOTE_MAX_DIMENSION` are disabled off localhost.
   The form ends with the "Générer les mots croisés :" row (`#generate-row`):

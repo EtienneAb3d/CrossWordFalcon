@@ -103,7 +103,7 @@ full again whenever a new generation or an Interactive session starts.
   (6x6, 0 %), Expresso latte (10x10, 10 %), Macchiato (15x10, 12 %),
   Cappuccino (15x15, 15 %), Mocha (21x21, 15 %), Tazza grande (30x20, 15 %),
   Frappuccino (30x30, 15 %), Caffeteria (50x50, 15 %) — every one at
-  18 % while the pattern style is American (Sparse below 100 %). Picking one fills Largeur, Hauteur and Taux
+  18 % while the pattern style is American (Sparse below 100 %) in French. Picking one fills Largeur, Hauteur and Taux
   noir at once; the three fields stay editable. The button shows the
   preset matching the current values, or "Personnalisée / Custom" when
   none does. Presets wider or taller than 20 cells are greyed out when the
@@ -193,9 +193,10 @@ full again whenever a new generation or an Interactive session starts.
   one, and in Interactive mode a 2-letter word is flagged invalid).
   Such a grid draws its black cells as full squares — on screen, in the
   previews and in the PDF/SVG/PNG pages — instead of the usual centered
-  half-size square. Leaving 100/0/0 raises Taux noir to 18 % if
-  it was lower (it can then be lowered again by hand). Choosing French
-  as the language sets 100/0/0, any other language 40/40/20, English also
+  half-size square. In French, leaving 100/0/0 raises Taux noir to 18 %
+  if it was lower (it can then be lowered again by hand); the other
+  languages keep the Taux noir set. Choosing French
+  as the language sets 100/0/0, any other language 30/40/30, English also
   selecting the Diagonal symmetry (`frontend/static/script.js`,
   `setUiLanguage`, `setPatternMix`; `backend/crossword_gen.py`, `pattern_mix`, `PATTERN_STYLES`,
   `_place_black_cells`).
@@ -1228,8 +1229,9 @@ start`) instead of an automatic generation. The form's Language, size,
 Difficulty, Taux noir and Thématique fields still apply — they shape the
 black-cell pattern and, if Thématique is filled in, a preferred-word
 glossary. The status line briefly shows "Building the interactive grid…"
-while the server prepares a pattern with one word already placed, then
-the grid appears in the usual result area with a control strip below it
+while the server prepares the black-cell pattern — no word is placed yet,
+the first one comes from **Suivant / Next** or from typing — then the grid
+appears in the usual result area with a control strip below it
 (`#interactive-controls`). The Dictionary panel (see "Dictionary" above)
 opens automatically the moment the session starts, for looking words up
 while filling in the grid by hand; it never steals keyboard focus away

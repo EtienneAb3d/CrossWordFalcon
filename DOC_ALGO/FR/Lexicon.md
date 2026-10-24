@@ -255,7 +255,7 @@ plusieurs signaux) :
   100 : « Aéré (Français) », « Groupé (Américain) », « Aligné
   (Américain) ». À 100/0/0, style **Aéré** : les cases noires
   sont posées le plus loin possible les unes des autres, jamais côte à
-  côte. Tout autre mélange, style **Groupé/aligné** (40/40/20 par
+  côte. Tout autre mélange, style **Groupé/aligné** (30/40/30 par
   défaut) : la part « Aéré » du taux est posée selon les règles Aéré
   (sans laisser de mot de 2 lettres), la part « Groupé » de préférence en
   diagonale d'une case noire (jamais côte à côte), la part « Aligné » au plus
@@ -265,7 +265,7 @@ plusieurs signaux) :
   seulement en dernier recours ; une fois le taux atteint, une case noire
   touchant par au moins 3 de ses côtés une case noire ou le bord de la grille est retirée et le tirage
   relancé (dégroupage). Le français règle le mélange sur 100/0/0, les
-  autres langues sur 40/40/20, l'anglais avec la symétrie Diagonale.
+  autres langues sur 30/40/30, l'anglais avec la symétrie Diagonale.
   (`backend/crossword_gen.py`, `PATTERN_STYLES`, `pattern_mix`, `make_pattern`,
   `_place_black_cells` ; `frontend/static/script.js`, `setUiLanguage`.)
 

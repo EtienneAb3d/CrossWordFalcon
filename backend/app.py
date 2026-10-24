@@ -5004,8 +5004,8 @@ async def _run_interactive_job(job_id, req):
     """Background job behind POST /api/interactive/start — the "Interactif"
     authoring mode. Unlike _run_generate_job it never runs the parallel
     palier search: it builds the theme glossary (if any), makes ONE black-
-    cell pattern, places ONE first word, and stores the session so
-    POST /api/interactive/step can place further words one at a time.
+    cell pattern — no word is placed — and stores the session so
+    POST /api/interactive/step can place words one at a time.
     No clue generation, no queue, no library save here — that all happens
     later, interactively, driven by the web UI."""
     job = JOBS[job_id]
@@ -5073,12 +5073,8 @@ async def _run_interactive_job(job_id, req):
             pattern_mix=req.pattern_mix,
         )
         # "Mots Défi (personnalisation)" typed on the main generation form
-        # before switching to "mode == interactive" (GenerateRequest.
-        # challenge_words, reused as-is by POST /api/interactive/start) —
-        # same bare-uppercase-grid-form normalization POST /api/
-        # interactive/step already applies to every later "Suivant" call,
-        # so this very first placed word is drawn from the list too, not
-        # just later ones.
+        # (GenerateRequest.challenge_words), normalized like POST /api/
+        # interactive/step's own, for the starting pattern's diagnostics.
         challenge_words = frozenset(
             grid_form
             for w in req.challenge_words
@@ -5086,11 +5082,11 @@ async def _run_interactive_job(job_id, req):
         )
         scrabble_words = await _scrabble_words(req.language, bilingual_language, req.difficulty)
         multi_breaks = await _multi_breaks(req.language, bilingual_language)
-        placed = await asyncio.to_thread(
-            interactive_place_word, grid, rows, cols, index, rng, priority_words,
-            challenge_words, None, scrabble_words, req.multi_word_percent,
+        # Only the black-cell pattern: the first word is placed by the
+        # player's first "Suivant".
+        imp, low, deadlock = await asyncio.to_thread(
+            _interactive_fill_diagnostics, grid, rows, cols, index, challenge_words,
         )
-        _add_placed_breaks(placed.get("placed"), multi_breaks)
 
         INTERACTIVE_SESSIONS[job_id] = {
             "index": index,
@@ -5143,19 +5139,20 @@ async def _run_interactive_job(job_id, req):
             "generation_params": {"pattern_style": req.pattern_style,
                                   "pattern_mix": req.pattern_mix},
         }
-        result_grid = grid if placed["impossible"] else placed["grid"]
         job["result"] = {
             "width": req.width,
             "height": req.height,
-            "grid": result_grid,
-            "placed": None if placed["impossible"] else placed["placed"],
-            "impossible": placed["impossible"],
+            "grid": grid,
+            "placed": None,
+            "impossible": False,
             "has_theme": bool(priority_words),
-            "impossible_cells": placed.get("impossible_cells", []),
-            "low_candidate_cells": placed.get("low_candidate_cells", []),
-            "deadlock_cells": placed.get("deadlock_cells", []),
-            "excluded_cells": placed.get("excluded_cells", []),
-            "window_cells": placed.get("window_cells", []),
+            "impossible_cells": imp,
+            "low_candidate_cells": low,
+            "deadlock_cells": deadlock,
+            # No placement search has run yet — the first "Suivant" click
+            # fills these in.
+            "excluded_cells": [],
+            "window_cells": [],
             # The raw theme string this session started from (already set
             # on job["interactive"]["theme"] above — mirrored here too so
             # the frontend can read it straight off pollJob()'s own return

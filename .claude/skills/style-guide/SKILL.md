@@ -4792,8 +4792,9 @@ end through the real running API (interactive start/step/save,
   `background-size: 100% 100%`, full blue squares) and on its PDF.
 
 - **Presets under the American style**: while the "Style de motif" mix is
-  not 100/0/0, every "Préconfigurations" option shows
-  and applies an 18 % black rate (`script.js`'s `presetBlack`,
+  not 100/0/0 and the language is French, every "Préconfigurations"
+  option shows and applies an 18 % black rate (the other languages keep
+  each preset's own rate) (`script.js`'s `presetBlack`,
   `GROUPED_MIN_BLACK_PERCENT`); the list is rebuilt whenever the style
   changes. No visual change otherwise. **Visually confirmed** with
   Playwright/Chromium: the eight options read "… 18 % noir", picking
@@ -4868,3 +4869,13 @@ end through the real running API (interactive start/step/save,
   keeps the black-cell role. **Visually confirmed** with
   Playwright/Chromium: ARCENCIEL placed by "Suivant" shows two 4×28px
   bars `rgb(31, 35, 32)` after ARC and EN.
+
+- **Integer fields of the generation form share one width**
+  (`#generate-form input[type="number"] { width: 5rem }`), at the user's
+  explicit request: Largeur, Hauteur, Taux noir, the three "Style de
+  motif" shares, "Multi-mots max (%)" and "Mots par pose" are all 5rem
+  wide, room for 3 digits next to the browser's spin buttons. This
+  replaces the former `.input-with-suffix input { width: 4rem }` (and the
+  generic 6rem) for those fields. **Visually confirmed** with
+  Playwright/Chromium at 1400px: all eight fields 80px wide, "100" fits
+  without scrolling, the option row still on one line.

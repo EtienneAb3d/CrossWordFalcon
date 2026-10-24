@@ -1064,7 +1064,8 @@ the current defaults/behavior to know before touching this code.
   user's rule: the selector is three integer fields of 0-100, "Aéré
   (Français)" / "Groupé (Américain)" / "Aligné (Américain)", always
   totalling 100 (`GenerateRequest.pattern_mix`, `make_pattern(pattern_mix=)`);
-  French sets 100/0/0, every other language 40/40/20 (English also the
+  French sets 100/0/0, every other language 30/40/30 (the user's rule;
+  English also the
   diagonal symmetry, `setUiLanguage`); a change adjusts the field right of
   it, then — once that one reaches 0 or 100 — the next, wrapping round to
   the first (`applyPatternMixChange`). Choices made with it, to revisit
@@ -1072,24 +1073,30 @@ the current defaults/behavior to know before touching this code.
   three phases below (airy, diagonal, side by side); 100/0/0 is the airy
   style, any other mix the grouped style with all its rules (no 2-letter
   word, de-clumping, full-size black cells, 18 % minimum black rate); the
-  de-clumping and short-slot redraws keep the side-by-side rules whatever
-  the mix, so "Groupé" at 100 % still gets some side-by-side cells from
-  them; a record with no mix restores 100/0/0 or 40/40/20 from its
+  de-clumping and short-slot redraws follow the mix too — the user's rule:
+  a redraw applies the style rules according to the black cells present,
+  so a 99/1/0 mix gives a grid substantially equivalent to 100/0/0
+  (`_draw_to_target`, Java `Grids.drawToTarget`: a redraw starts at the
+  phase whose threshold the current black count is below; measured on 30
+  patterns 15x15 at 18 %, 0 side-by-side pairs in 99/1/0 as in 100/0/0,
+  against 8.8 before); a record with no mix restores 100/0/0 or 30/40/30 from its
   `pattern_style`. The user's rule: the grouped
-  style draws 40 % of the black cells with the French distribution
-  (still forbidding slots of fewer than 3 letters), then 40 % accepting
-  diagonal groupings (3x3 square centred on the cell), then the last 20 %
+  style draws its "Aéré" share (30 % by default, the user's rule) of the
+  black cells with the French distribution
+  (still forbidding slots of fewer than 3 letters), then its "Groupé" share
+  (40 %) accepting diagonal groupings (3x3 square centred on the cell), then
+  its "Aligné" share (30 %)
   preferring groupings in line (side-by-side adjacency)
   (`GROUPED_AIRY_PERCENT`/`GROUPED_DIAGONAL_PERCENT`, `_place_black_cells`'
   `forbid_short_runs`/`grouped_diagonal`). Choices made with it, to
-  revisit with the user: the thresholds are 40 % and 80 % of the whole
+  revisit with the user: the thresholds (30 % and 70 % by default) are shares of the whole
   objective, black cells already present (seed, pre-fill) included; the
   first phase keeps every airy rule (no adjacency, edges as virtual black
   cells, aligned factor); the second uses the grouped ranking (closest
   first) with side-by-side black cells still refused and the 3x3-square
   cells preferred, so in practice diagonal neighbours; the third prefers
   the cells touching a black cell by a side; the de-clumping and
-  short-slot redraws use the third phase's rules only. Further user rules for the
+  short-slot redraws use the phase of the current black count (see above). Further user rules for the
   grouped ("Groupé/aligné") style: prefer cells touching a black cell side by
   side (`_black_line_length`; the diagonal phase prefers a black cell in
   the 3x3 square, `_has_black_around`, the grid border not counting); no 2-letter slot — only
@@ -2591,10 +2598,14 @@ the current defaults/behavior to know before touching this code.
   from a new grid — the user's rule: when several grids fail, new grids
   are generated so there are always as many grids as processors (a pool
   grid is never resumed by two workers once a pool was built).
-- **Selecting the American ("grouped") style raises "Taux noir" to at
-  least 18 %** (`script.js`'s `GROUPED_MIN_BLACK_PERCENT`), the user's
-  rule; the player may lower it again by hand. Under that style every "Préconfigurations" preset
-  shows and applies 18 % (`presetBlack`), the user's rule.
+- **In French, selecting the American ("grouped") style raises "Taux
+  noir" to at least 18 %** (`script.js`'s `GROUPED_MIN_BLACK_PERCENT`,
+  `groupedBlackMinimumApplies`), the user's rule; the player may lower it
+  again by hand. Under that style every "Préconfigurations" preset shows
+  and applies 18 %, in French too (`presetBlack`). The user's rule: the
+  other languages no longer force it — the rate and the presets' own
+  rates stay. Choice made with it, to revisit with the user: "the
+  language" is the interface/grid language selector (`uiLanguage`).
 - **Both cross-palier resume paths start the next palier the same way**,
   differing only in their cleanup — the user's rule: "La différence est au
   niveau du nettoyage, pas au niveau du démarrage du cycle suivant. Ça

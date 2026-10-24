@@ -1396,9 +1396,8 @@ public final class App {
             Set<String> challenge = challengeSet(req.challengeWords);
             PW scrabble = scrabbleWords(req.language, req.bilingualLanguage, req.difficulty);
             Words.Breaks multi = multiBreaks(req.language, req.bilingualLanguage);
-            Map<String, Object> placed = Interactive.placeWord(grid, rows, cols, index, rng, PW.single(priority), challenge,
-                    scrabble, req.multiWordPercent);
-            addPlacedBreaks(placed.get("placed"), multi);
+            // Only the black-cell pattern: the first word is placed by the player's first "Suivant".
+            List<Object>[] diag = Interactive.fillDiagnostics(grid, rows, cols, index, challenge);
             Session session = new Session(index, priority, rng, req.seed, null, scrabble);
             session.multiBreaks = multi;
             INTERACTIVE_SESSIONS.put(jobId, session);
@@ -1416,19 +1415,19 @@ public final class App {
             // The "Style de motif" the session's lexicon follows (loadInteractiveIndex), saved with its drafts and
             // grids so a resumed session keeps it.
             meta.put("generation_params", Json.obj("pattern_style", req.patternStyle, "pattern_mix", req.patternMix));
-            boolean impossible = Boolean.TRUE.equals(placed.get("impossible"));
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("width", req.width);
             result.put("height", req.height);
-            result.put("grid", impossible ? Grids.toJson(grid) : placed.get("grid"));
-            result.put("placed", impossible ? null : placed.get("placed"));
-            result.put("impossible", impossible);
+            result.put("grid", Grids.toJson(grid));
+            result.put("placed", null);
+            result.put("impossible", false);
             result.put("has_theme", !priority.isEmpty());
-            result.put("impossible_cells", placed.getOrDefault("impossible_cells", List.of()));
-            result.put("low_candidate_cells", placed.getOrDefault("low_candidate_cells", List.of()));
-            result.put("deadlock_cells", placed.getOrDefault("deadlock_cells", List.of()));
-            result.put("excluded_cells", placed.getOrDefault("excluded_cells", List.of()));
-            result.put("window_cells", placed.getOrDefault("window_cells", List.of()));
+            result.put("impossible_cells", diag[0]);
+            result.put("low_candidate_cells", diag[1]);
+            result.put("deadlock_cells", diag[2]);
+            // No placement search has run yet: the first "Suivant" click fills these in.
+            result.put("excluded_cells", List.of());
+            result.put("window_cells", List.of());
             result.put("theme", theme.isEmpty() ? null : theme);
             result.put("language", req.language);
             result.put("bilingual_language", meta.get("bilingual_language"));

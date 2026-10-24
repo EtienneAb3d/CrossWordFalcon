@@ -548,16 +548,43 @@ public final class Grids {
      * "Grouped" style: {@link #declumpBlackCells}, then the ratio draw again up to {@code target}, at most
      * {@link #GROUPED_DECLUMP_MAX_ROUNDS} rounds; the cells taken off are no longer candidates.
      */
+    /**
+     * Draws black cells up to {@code phaseTargets[2]} (mirrors make_pattern's _draw_to_target). "Grouped" style: the
+     * black cells present decide the phase — under phaseTargets[0] (the airy share) the "airy" rules, under
+     * phaseTargets[1] diagonal neighbours preferred and side-by-side black cells refused, the grouped rules beyond — so
+     * every redraw follows the "Style de motif" shares like the first draw.
+     */
+    private static void drawToTarget(char[][] grid, int rows, int cols, int[] rowBlack, int[] colBlack,
+                                     List<Integer> ratioCandidates, int[] phaseTargets, boolean grouped, Rng rng,
+                                     DualIndex index, Map<Integer, Character> locked, LengthSets available,
+                                     String symmetry) {
+        int placed = countBlack(grid);
+        if (grouped) {
+            if (placed < phaseTargets[0]) {
+                placeBlackCells(grid, rows, cols, rowBlack, colBlack, ratioCandidates, phaseTargets[0], placed, rng,
+                        index, locked, available, true, symmetry, false, true, false);
+                placed = countBlack(grid);
+            }
+            if (placed < phaseTargets[1]) {
+                placeBlackCells(grid, rows, cols, rowBlack, colBlack, ratioCandidates, phaseTargets[1], placed, rng,
+                        index, locked, available, true, symmetry, true, false, true);
+                placed = countBlack(grid);
+            }
+        }
+        placeBlackCells(grid, rows, cols, rowBlack, colBlack, ratioCandidates, phaseTargets[2], placed, rng, index,
+                locked, available, true, symmetry, grouped);
+    }
+
     private static void declumpAndRedraw(char[][] grid, int rows, int cols, int[] rowBlack, int[] colBlack,
-                                         List<Integer> ratioCandidates, Set<Integer> drawn, int target, Rng rng,
+                                         List<Integer> ratioCandidates, Set<Integer> drawn, int[] phaseTargets, Rng rng,
                                          DualIndex index, Map<Integer, Character> locked, LengthSets available,
                                          String symmetry) {
         for (int round = 0; round < GROUPED_DECLUMP_MAX_ROUNDS; round++) {
             if (declumpBlackCells(grid, rows, cols, rowBlack, colBlack, drawn, symmetry).isEmpty()) break;
-            if (countBlack(grid) >= target) break;
+            if (countBlack(grid) >= phaseTargets[2]) break;
             Set<Integer> before = new HashSet<>(ratioCandidates);
-            placeBlackCells(grid, rows, cols, rowBlack, colBlack, ratioCandidates, target, countBlack(grid), rng, index,
-                    locked, available, true, symmetry, true);
+            drawToTarget(grid, rows, cols, rowBlack, colBlack, ratioCandidates, phaseTargets, true, rng, index, locked,
+                    available, symmetry);
             before.removeAll(new HashSet<>(ratioCandidates));
             drawn.addAll(before);
         }
@@ -788,8 +815,8 @@ public final class Grids {
      * refused, the cells with a black cell in their 3x3 square — i.e. a diagonal neighbour — preferred; then up to the
      * target under the grouped rules, side-by-side black cells accepted and preferred.
      */
-    static final int GROUPED_AIRY_PERCENT = 40;
-    static final int GROUPED_DIAGONAL_PERCENT = 80;
+    static final int GROUPED_AIRY_PERCENT = 30;
+    static final int GROUPED_DIAGONAL_PERCENT = 70;
 
     /**
      * The web UI's three "Style de motif" percentages ({@link #makePattern}'s {@code patternMix}): the shares of the
@@ -1772,27 +1799,20 @@ public final class Grids {
         List<Integer> ratioCandidates = new ArrayList<>();
         for (int cell : candidates) if (!inCornerSquare(rows, cols, Cells.r(cell), Cells.c(cell))) ratioCandidates.add(cell);
         Set<Integer> drawn = new HashSet<>(ratioCandidates);
+        int airyTarget = 0, diagonalTarget = 0;
         if (grouped) {
-            // "Grouped" style: up to GROUPED_AIRY_PERCENT % of the target under the "airy" rules (no 2-letter slot
-            // left), then up to GROUPED_DIAGONAL_PERCENT % with diagonal neighbours preferred and side-by-side black
-            // cells refused; the grouped rules finish.
             List<Integer> mix = patternMix == null ? DEFAULT_PATTERN_MIX : patternMix;
             int airyPercent = mix.get(0), diagonalPercent = mix.get(1);
-            int airyTarget = (int) Math.max(placed, Math.rint(target * airyPercent / 100.0));
-            placeBlackCells(grid, rows, cols, rowBlack, colBlack, ratioCandidates, airyTarget, placed, rng, index,
-                    locked, available, true, symmetry, false, true, false);
-            placed = countBlack(grid);
-            int diagonalTarget = (int) Math.max(placed, Math.rint(target * (airyPercent + diagonalPercent) / 100.0));
-            placeBlackCells(grid, rows, cols, rowBlack, colBlack, ratioCandidates, diagonalTarget, placed, rng, index,
-                    locked, available, true, symmetry, true, false, true);
-            placed = countBlack(grid);
+            airyTarget = (int) Math.rint(target * airyPercent / 100.0);
+            diagonalTarget = (int) Math.rint(target * (airyPercent + diagonalPercent) / 100.0);
         }
-        placeBlackCells(grid, rows, cols, rowBlack, colBlack, ratioCandidates, target, placed, rng, index, locked, available,
-                true, symmetry, grouped);
+        int[] phaseTargets = {airyTarget, diagonalTarget, target};
+        drawToTarget(grid, rows, cols, rowBlack, colBlack, ratioCandidates, phaseTargets, grouped, rng, index, locked,
+                available, symmetry);
         drawn.removeAll(new HashSet<>(ratioCandidates));
         if (grouped) {
-            declumpAndRedraw(grid, rows, cols, rowBlack, colBlack, ratioCandidates, drawn, target, rng, index, locked,
-                    available, symmetry);
+            declumpAndRedraw(grid, rows, cols, rowBlack, colBlack, ratioCandidates, drawn, phaseTargets, rng, index,
+                    locked, available, symmetry);
         }
         // Short-slot limit: once the target is reached, too many slots of at most SHORT_SLOT_MAX_LENGTH letters
         // reopen the drawn black cells bounding them, and the draw runs again to reach the target.
@@ -1815,13 +1835,13 @@ public final class Grids {
             drawn.removeAll(reopened);
             ratioCandidates.addAll(reopened);
             Set<Integer> before = new HashSet<>(ratioCandidates);
-            placeBlackCells(grid, rows, cols, rowBlack, colBlack, ratioCandidates, target, countBlack(grid), rng, index,
-                    locked, available, true, symmetry, grouped);
+            drawToTarget(grid, rows, cols, rowBlack, colBlack, ratioCandidates, phaseTargets, grouped, rng, index,
+                    locked, available, symmetry);
             before.removeAll(new HashSet<>(ratioCandidates));
             drawn.addAll(before);
             if (grouped) {
-                declumpAndRedraw(grid, rows, cols, rowBlack, colBlack, ratioCandidates, drawn, target, rng, index,
-                        locked, available, symmetry);
+                declumpAndRedraw(grid, rows, cols, rowBlack, colBlack, ratioCandidates, drawn, phaseTargets, rng,
+                        index, locked, available, symmetry);
             }
         }
         Set<Integer> stillCandidates = new HashSet<>(ratioCandidates);

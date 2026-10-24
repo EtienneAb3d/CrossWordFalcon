@@ -294,7 +294,7 @@ On the page:
    "Aligned (American)", always totalling 100 (changing one adjusts the
    next) — set how many black cells are kept apart, grouped diagonally or
    lined up side by side; any American share also rules out 2-letter
-   words. French sets 100/0/0, every other language 40/40/20 (English
+   words. French sets 100/0/0, every other language 30/40/30 (English
    with a diagonal symmetry).
 2. Two optional fields sit above the generate buttons,
    both built the same way: type a word and click **+** (or just type a
