@@ -63,7 +63,7 @@ public final class Filler {
      * that starts from locked letters resets the zone to its start window once, the first time a hardclean leaves
      * it no locked letter at all (attentionAfterUnlock). */
     public static final boolean INCREMENTAL_FILL_ENABLED = true;
-    public static final int INCREMENTAL_FILL_STEP = 16;
+    public static final int INCREMENTAL_FILL_STEP = 21;
     /** Attention-zone fallback (mirrors ATTENTION_FALLBACK_ENABLED), with incremental fill: optional, currently off
      * (the zone only moves forward along a descent). On, every node falls back on entry on the first window holding
      * a free cell (fallbackAttention). */

@@ -45,6 +45,9 @@ public final class Themes {
     public static final Path THEME_LOG_DIR = Env.path("LOG_THEME");
 
     public static final QdrantStore QDRANT = new QdrantStore(SIMILAR_TIMEOUT_S);
+    /** The multi-word expressions' collection ("words_multi", English and French only),
+     *  searched next to QDRANT by every similarity search (multiScoredPoints). */
+    public static final QdrantStore QDRANT_MULTI = new QdrantStore(SIMILAR_TIMEOUT_S, QdrantStore.multiCollectionName());
     public static final Embedder EMBEDDER = new Embedder(null, null, null, SIMILAR_TIMEOUT_S);
 
     static final Pattern THEME_TOKEN_RE = Pattern.compile("[^\\W\\d_]+(?:['’\\-][^\\W\\d_]+)*", Pattern.UNICODE_CHARACTER_CLASS);
@@ -106,55 +109,105 @@ public final class Themes {
 
     public record ScoredKw(String word, Double score, String keyword) {}
 
-    static List<Scored> iterScoredWords(double[] vec, String lang, double minScore) {
-        List<Scored> out = new ArrayList<>();
+    /** A word or expression: its grid form, score and every accented spelling. */
+    public record ScoredSpellings(String word, Double score, List<String> spellings) {}
+
+    /** {words, expressions} of compiledSimilarWords. */
+    public record Similar(List<ScoredSpellings> words, List<ScoredSpellings> expressions) {}
+
+    /** (word, score, payload) hits of `store` (backend/app.py's _iter_scored_points). */
+    record Point(String word, Double score, Object payload) {}
+
+    static List<Point> iterScoredPoints(double[] vec, String lang, double minScore, QdrantStore store) {
+        List<Point> out = new ArrayList<>();
         Set<String> seen = new HashSet<>();
         int offset = 0;
         while (true) {
-            List<Object> hits = QDRANT.search(vec, lang, THEME_LENGTH_SEARCH_PAGE, offset);
+            List<Object> hits = store.search(vec, lang, THEME_LENGTH_SEARCH_PAGE, offset);
             if (hits.isEmpty()) return out;
             for (Object hit : hits) {
                 Object sc = Json.get(hit, "score");
                 Double score = sc instanceof Number n ? n.doubleValue() : null;
                 if (score != null && score < minScore) return out;
-                String word = Json.str(Json.get(hit, "payload"), "word", null);
-                if (word != null && !word.isEmpty() && seen.add(word)) out.add(new Scored(word, score));
+                Object payload = Json.get(hit, "payload");
+                String word = Json.str(payload, "word", null);
+                if (word != null && !word.isEmpty() && seen.add(word)) out.add(new Point(word, score, payload));
             }
             offset += hits.size();
             if (hits.size() < THEME_LENGTH_SEARCH_PAGE) return out;
         }
     }
 
+    static List<Scored> iterScoredWords(double[] vec, String lang, double minScore) {
+        List<Scored> out = new ArrayList<>();
+        for (Point p : iterScoredPoints(vec, lang, minScore, QDRANT)) out.add(new Scored(p.word(), p.score()));
+        return out;
+    }
+
+    /** The "words_multi" hits of `vec`; empty when that collection or the language's tenant
+     *  is missing or does not answer (backend/app.py's _multi_scored_points). */
+    static List<Point> multiScoredPoints(double[] vec, String lang, double minScore) {
+        try {
+            return iterScoredPoints(vec, lang, minScore, QDRANT_MULTI);
+        } catch (QdrantStore.QdrantStoreError e) {
+            return List.of();
+        }
+    }
+
+    /** Every `;`-separated spelling of a point's `accented` (main one first), else its
+     *  word (backend/app.py's _spellings). */
+    static List<String> spellings(Object payload, String word) {
+        String acc = Json.str(payload, "accented", "");
+        List<String> out = new ArrayList<>();
+        for (String a : (acc == null ? "" : acc).split(";", -1)) {
+            String sp = Py.strip(a);
+            if (!sp.isEmpty()) out.add(sp);
+        }
+        return out.isEmpty() ? List.of(word) : out;
+    }
+
     static boolean isStoreError(RuntimeException e) {
         return e instanceof QdrantStore.QdrantStoreError || e instanceof Embedder.EmbedderError;
     }
 
-    public static List<Scored> compiledSimilarWords(List<String> keywords, String lang, double minScore) {
-        Map<String, Double> merged = new LinkedHashMap<>();
+    public static Similar compiledSimilarWords(List<String> keywords, String lang, double minScore) {
+        Map<String, ScoredSpellings> merged = new LinkedHashMap<>();
+        Map<String, ScoredSpellings> mergedMulti = new LinkedHashMap<>();
         boolean anyOk = false;
         for (String kw : keywords) {
-            List<Scored> pairs;
+            double[] vec;
+            List<Point> points;
             try {
-                pairs = iterScoredWords(EMBEDDER.embed(kw), lang, minScore);
+                vec = EMBEDDER.embed(kw);
+                points = iterScoredPoints(vec, lang, minScore, QDRANT);
             } catch (RuntimeException e) {
                 if (!isStoreError(e) || !anyOk) throw e;
                 continue;
             }
             anyOk = true;
-            for (Scored s : pairs) {
-                if (!merged.containsKey(s.word())) merged.put(s.word(), s.score());
-                else if (s.score() != null && (merged.get(s.word()) == null || s.score() > merged.get(s.word()))) merged.put(s.word(), s.score());
-            }
+            for (Point p : points) keepBest(merged, p);
+            for (Point p : multiScoredPoints(vec, lang, minScore)) keepBest(mergedMulti, p);
         }
-        List<Scored> out = new ArrayList<>();
-        merged.forEach((w, s) -> out.add(new Scored(w, s)));
+        return new Similar(ranked(merged), ranked(mergedMulti));
+    }
+
+    private static void keepBest(Map<String, ScoredSpellings> into, Point p) {
+        ScoredSpellings best = into.get(p.word());
+        if (best == null || (p.score() != null && (best.score() == null || p.score() > best.score()))) {
+            into.put(p.word(), new ScoredSpellings(p.word(), p.score(), spellings(p.payload(), p.word())));
+        }
+    }
+
+    private static List<ScoredSpellings> ranked(Map<String, ScoredSpellings> entries) {
+        List<ScoredSpellings> out = new ArrayList<>(entries.values());
         out.sort((a, b) -> Double.compare(b.score() == null ? 0.0 : b.score(), a.score() == null ? 0.0 : a.score()));
         return out;
     }
 
-    /** Returns {keywords, scored}. */
+    /** Returns {keywords, Similar}. */
     public static Object[] similarWordsImpl(Clues clueGen, String query, String lang, double minScore) {
         String desc;
+        long llmStarted = System.nanoTime();
         try {
             desc = clueGen.describeTheme(query, lang, SIMILAR_DESCRIBE_TIMEOUT_S, null, 0.7, false);
         } catch (RuntimeException e) {
@@ -165,18 +218,31 @@ public final class Themes {
         Set<String> seen = new HashSet<>();
         for (String kw : splitKeywords(desc, lang)) if (seen.add(kw.toLowerCase(Locale.ROOT))) keywords.add(kw);
         if (keywords.isEmpty()) keywords.add(query);
-        Log.info("similar_words: %s -> %d keywords (min_score=%s)", Log.repr(query), keywords.size(), minScore);
+        Log.info("similar_words: %s -> %d keywords (min_score=%s, LLM expansion %.1fs)", Log.repr(query), keywords.size(),
+                minScore, (System.nanoTime() - llmStarted) / 1e9);
         return new Object[]{keywords, compiledSimilarWords(keywords, lang, minScore)};
     }
 
     static List<Scored> themeWordsByLength(String query, String lang, double minScore) {
         double[] vec = EMBEDDER.embed(query);
-        List<Scored> words = new ArrayList<>();
-        for (Scored s : iterScoredWords(vec, lang, minScore)) {
+        List<Scored> hits = new ArrayList<>(iterScoredWords(vec, lang, minScore));
+        for (Point p : multiScoredPoints(vec, lang, minScore)) hits.add(new Scored(p.word(), p.score()));
+        Map<String, Double> best = new LinkedHashMap<>();
+        for (Scored s : hits) {
             int len = s.word().length();
-            if (len >= THEME_LENGTH_MIN && len <= THEME_LENGTH_MAX) words.add(s);
+            if (len < THEME_LENGTH_MIN || len > THEME_LENGTH_MAX) continue;
+            if (!best.containsKey(s.word())
+                    || (s.score() != null && (best.get(s.word()) == null || s.score() > best.get(s.word())))) {
+                best.put(s.word(), s.score());
+            }
         }
-        words.sort((a, b) -> Integer.compare(a.word().length(), b.word().length()));
+        List<Scored> words = new ArrayList<>();
+        best.forEach((w, s) -> words.add(new Scored(w, s)));
+        words.sort((a, b) -> {
+            int c = Integer.compare(a.word().length(), b.word().length());
+            if (c != 0) return c;
+            return Double.compare(b.score() == null ? 0.0 : b.score(), a.score() == null ? 0.0 : a.score());
+        });
         return words;
     }
 
@@ -217,6 +283,16 @@ public final class Themes {
         List<double[]> themeVecs = new ArrayList<>();
         for (String tok : themeWords) themeVecs.add(EMBEDDER.embed(tok));
         Map<String, double[]> wordVecs = QDRANT.retrieveWordVectors(lang, words, 2000);
+        List<String> missing = new ArrayList<>();
+        for (String w : words) if (!wordVecs.containsKey(w)) missing.add(w);
+        if (!missing.isEmpty()) {
+            // A multi-word expression's vector lives in the "words_multi" collection.
+            try {
+                wordVecs.putAll(QDRANT_MULTI.retrieveWordVectors(lang, missing, 2000));
+            } catch (QdrantStore.QdrantStoreError e) {
+                // no expression vector
+            }
+        }
         wordVecs.forEach((w, vec) -> {
             double best = Double.NEGATIVE_INFINITY;
             for (double[] tv : themeVecs) {

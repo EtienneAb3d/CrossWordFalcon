@@ -16,6 +16,11 @@ and a language-filtered search stays fast as the collection grows across
 all six languages. A per-language search is a normal search with a
 `filter` on `lang`; there is no separate collection per language.
 
+A second collection ("words_multi", `multi_collection_name()`) holds the
+multi-word expressions of `data/wordlist_<lang>_multi.tsv` ("arc-en-ciel",
+"screw cap"), with the same shape, tenants and point ids; a `QdrantStore`
+built with `collection=multi_collection_name()` targets it.
+
 Vector dimension is whatever the embedding model produces. By default
 `ensure_collection()` probes the live embedder (`backend/embedder.py`,
 BAAI/bge-m3 -> 1024). Set `QDRANT_VECTOR_SIZE` in `env.sh` to skip the
@@ -26,6 +31,7 @@ Configuration (env.sh at the project root — every value has a fallback):
   - QDRANT_HOST        default 127.0.0.1
   - QDRANT_PORT        default 6333 (REST)
   - QDRANT_COLLECTION  default "words"
+  - QDRANT_COLLECTION_MULTI  default "words_multi" (multi-word expressions)
   - QDRANT_API_KEY     sent as the `api-key` header when non-empty (Qdrant Cloud)
   - QDRANT_DISTANCE    default "Cosine"
   - QDRANT_VECTOR_SIZE optional; overrides the embedder probe
@@ -42,6 +48,7 @@ CLI:
   python -m backend.qdrant_store --init                 # collection + tenant index
   python -m backend.qdrant_store --info
   python -m backend.qdrant_store --search "oiseau de proie" --lang fr
+  python -m backend.qdrant_store --multi --info         # the "words_multi" collection
 """
 import argparse
 import os
@@ -55,6 +62,7 @@ import httpx
 DEFAULT_QDRANT_HOST = "127.0.0.1"
 DEFAULT_QDRANT_PORT = "6333"
 DEFAULT_COLLECTION = "words"
+DEFAULT_MULTI_COLLECTION = "words_multi"
 DEFAULT_DISTANCE = "Cosine"
 DEFAULT_TIMEOUT = 30.0
 TENANT_FIELD = "lang"
@@ -73,6 +81,11 @@ _POINT_ID_NAMESPACE = uuid.UUID("9f1c0b2a-3d4e-5f60-8a90-b0c1d2e3f405")
 
 class QdrantStoreError(RuntimeError):
     """Raised when Qdrant is unreachable or returns an unusable response."""
+
+
+def multi_collection_name():
+    """Name of the multi-word expressions' collection (QDRANT_COLLECTION_MULTI)."""
+    return os.environ.get("QDRANT_COLLECTION_MULTI", DEFAULT_MULTI_COLLECTION)
 
 
 def word_point_id(lang, word):
@@ -192,7 +205,10 @@ class QdrantStore:
         # bulk delete running at the same time), losing nothing in terms
         # of already-written data (upserts are idempotent) but forcing a
         # manual restart of a long background job over one blip. Only
-        # httpx's own timeout/connect exceptions are retried — a 4xx/5xx
+        # httpx's own timeout/connect exceptions and a connection the
+        # server dropped without answering (RemoteProtocolError, seen live
+        # on a bulk upsert) are retried — every request here is idempotent
+        # (searches, reads, upserts by deterministic id) — a 4xx/5xx
         # response (handled by `_ok`, not here) or any other error is
         # never worth retrying, since it would just fail identically
         # again.
@@ -202,7 +218,8 @@ class QdrantStore:
                 return self._http().request(
                     method, f"{self.base_url}{path}", **kwargs
                 )
-            except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            except (httpx.TimeoutException, httpx.ConnectError,
+                    httpx.RemoteProtocolError) as exc:
                 last_exc = exc
                 if attempt < QDRANT_REQUEST_RETRIES:
                     time.sleep(QDRANT_REQUEST_RETRY_DELAY_S * (attempt + 1))
@@ -553,13 +570,15 @@ def main(argv=None):
                         help="embed TEXT and print the nearest words")
     parser.add_argument("--lang", help="restrict --search to this language tenant")
     parser.add_argument("--limit", type=int, default=10)
+    parser.add_argument("--multi", action="store_true",
+                        help="target the multi-word expressions' collection")
     args = parser.parse_args(argv)
 
     if not any((args.init, args.info, args.search)):
         parser.print_help()
         return 0
 
-    with QdrantStore() as store:
+    with QdrantStore(collection=multi_collection_name() if args.multi else None) as store:
         if not store.ping():
             print(f"Qdrant not reachable at {store.base_url} — start it with "
                   "./run_qdrant.sh", file=sys.stderr)

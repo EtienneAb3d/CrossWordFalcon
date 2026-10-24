@@ -1244,11 +1244,11 @@ groupes de pose se mesure sur toute la grille et le nettoyage de zone
 Activé : à chaque palier (`generate_grid`), pour
 toutes ses tentatives — grilles reprises comme grilles neuves —, les temps
 1 et 2 se déroulent d'abord dans une **zone d'attention** : une **fenêtre**
-de `INCREMENTAL_FILL_STEP` (16) lignes × 16 colonnes, rognée par la
+de `INCREMENTAL_FILL_STEP` (21) lignes × 21 colonnes, rognée par la
 grille, donc plus petite le long des bords droit et bas
 (`Filler._in_attention` ; la zone est le couple ligne du haut, colonne de
 gauche de la fenêtre). Elle part du **coin haut gauche**
-(`Filler._initial_attention`) ; une grille d'au plus 16 × 16 est entière
+(`Filler._initial_attention`) ; une grille d'au plus 21 × 21 est entière
 dès le départ. Seul un emplacement ayant au moins une
 case encore libre (ni mot posé, ni lettre verrouillée) dans cette fenêtre
 peut recevoir une pose.
@@ -1268,13 +1268,13 @@ concerné, ou tous essayés, écartés libérés compris —, il tente d'abord u
 nettoyage doux de zone sur un emplacement impossible ayant une case libre
 dans la zone (voir « Nettoyage doux de zone », chapitre 5) ; à défaut, la
 fenêtre **se déplace** (`Filler._next_attention`) de
-`INCREMENTAL_FILL_STEP` (16) colonnes vers la droite, en gardant sa
-taille ; au-delà du bord droit, elle repart du bord gauche 16 lignes plus
+`INCREMENTAL_FILL_STEP` (21) colonnes vers la droite, en gardant sa
+taille ; au-delà du bord droit, elle repart du bord gauche 21 lignes plus
 bas (`Filler._attention_shape`). Une fois la fenêtre du coin bas droit
-traitée, la zone devient toute la grille (sur une grille de 40 colonnes ×
-20 lignes : lignes 0 à 15 × colonnes 0 à 15, puis × colonnes 16 à 31, puis
-× colonnes 32 à 39, puis lignes 16 à 19 × colonnes 0 à 15, puis × colonnes
-16 à 31, puis × colonnes 32 à 39, puis toute la grille). Les cases restées
+traitée, la zone devient toute la grille (sur une grille de 50 colonnes ×
+30 lignes : lignes 0 à 20 × colonnes 0 à 20, puis × colonnes 21 à 41, puis
+× colonnes 42 à 49, puis lignes 21 à 29 × colonnes 0 à 20, puis × colonnes
+21 à 41, puis × colonnes 42 à 49, puis toute la grille). Les cases restées
 libres dans une fenêtre quittée ne sont reprises qu'une fois la zone
 étendue à toute la grille. Le nœud reprend alors au temps 1 sur la
 nouvelle zone (les emplacements déjà essayés par ce nœud le restent),

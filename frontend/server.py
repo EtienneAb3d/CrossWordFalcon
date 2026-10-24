@@ -14,6 +14,7 @@ Usage:
     uvicorn frontend.server:app --port 3000
 """
 import json
+import logging
 import os
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -42,6 +43,38 @@ BACKEND_URL = os.environ.get("CROSSWORDFALCON_BACKEND_URL", "http://127.0.0.1:30
 # frontend/static/script.js, which must stay strictly greater so it never
 # times out on the browser side before this delay does on the proxy side.
 PROXY_TIMEOUT_S = 30.0
+
+# Every relay failure is written to this server's own log (logs/frontend.log,
+# with a timestamp — uvicorn configures only its own loggers): the browser
+# shows an error, so the log must say which call failed and why
+# (_backend_failure).
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger("crosswordfalcon.proxy")
+
+
+def _backend_failure(exc: httpx.RequestError) -> HTTPException:
+    """Logs a relay to the back end that got no answer, and returns the
+    error the browser receives: 504 `backend_timeout` when the back end did
+    not answer within the route's timeout (it may still be working on the
+    request, and finish later with nobody listening), 502
+    `backend_unavailable` when it could not be reached at all (connection
+    refused, connection timeout, connection dropped)."""
+    try:
+        target = f"{exc.request.method} {exc.request.url}"
+    except RuntimeError:
+        target = "?"
+    timeout = exc.request.extensions.get("timeout", {}).get("read") if target != "?" else None
+    if isinstance(exc, httpx.TimeoutException) and not isinstance(exc, httpx.ConnectTimeout):
+        logger.warning(
+            "proxy: back end did not answer within %ss (%s) — %s returned to the browser: %s",
+            timeout, target, "504 backend_timeout", type(exc).__name__,
+        )
+        return HTTPException(status_code=504, detail={"code": "backend_timeout"})
+    logger.warning(
+        "proxy: back end unreachable (%s) — %s returned to the browser: %s: %s",
+        target, "502 backend_unavailable", type(exc).__name__, exc,
+    )
+    return HTTPException(status_code=502, detail={"code": "backend_unavailable"})
 
 # Loopback names accepted by _require_localhost() below. This middleware
 # server binds 0.0.0.0 (run_Falcon.sh, LAN-reachable), so `request.client.
@@ -102,11 +135,11 @@ async def proxy_generate(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
+    except httpx.RequestError as exc:
         # Structured, not a plain string, so the frontend's i18n config
         # (describeErrorCode() in script.js) can show this in the UI's
         # current language instead of always-French text.
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -118,8 +151,8 @@ async def proxy_rss():
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/rss")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -134,8 +167,8 @@ async def proxy_presence(request: Request):
                 f"{BACKEND_URL}/api/presence", content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -151,8 +184,8 @@ async def proxy_pseudo_claim(request: Request):
                 f"{BACKEND_URL}/api/pseudo/claim", content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -164,8 +197,8 @@ async def proxy_scrapp():
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/scrapp")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -174,8 +207,8 @@ async def proxy_generate_status(job_id: str):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/generate/status/{job_id}")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -184,8 +217,8 @@ async def proxy_generate_phase(job_id: str):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/generate/phase/{job_id}")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -196,8 +229,8 @@ async def proxy_generate_cancel(job_id: str):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.post(f"{BACKEND_URL}/api/generate/cancel/{job_id}")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -213,8 +246,8 @@ async def proxy_generate_choose(job_id: str, request: Request):
                 content=body,
                 headers={"Content-Type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -264,8 +297,9 @@ def _relay_chat_stream(path, body):
                 ) as resp:
                     async for chunk in resp.aiter_bytes():
                         yield chunk
-        except httpx.RequestError:
-            yield f"data: {json.dumps({'error': 'backend_unavailable'})}\n\n".encode()
+        except httpx.RequestError as exc:
+            code = _backend_failure(exc).detail["code"]
+            yield f"data: {json.dumps({'error': code})}\n\n".encode()
 
     return StreamingResponse(relay(), media_type="text/event-stream")
 
@@ -289,8 +323,8 @@ async def proxy_generate_continue(job_id: str):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.post(f"{BACKEND_URL}/api/generate/continue/{job_id}")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -308,8 +342,8 @@ async def proxy_recompute(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -326,8 +360,8 @@ async def proxy_health():
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/health")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail="Serveur back indisponible.")
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -336,8 +370,8 @@ async def proxy_system_info():
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/system_info")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -353,8 +387,8 @@ async def proxy_library_list(request: Request):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/library", params=request.query_params)
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -372,8 +406,8 @@ async def proxy_library_list_filtered(request: Request):
                 content=body,
                 headers={"Content-Type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -388,8 +422,8 @@ async def proxy_library_get(grid_id: str, request: Request):
             resp = await client.get(
                 f"{BACKEND_URL}/api/library/{grid_id}", params=request.query_params
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -402,8 +436,8 @@ async def proxy_library_get_pdf(grid_id: str):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/library/{grid_id}/pdf")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     if resp.status_code != 200:
         try:
             return JSONResponse(status_code=resp.status_code, content=resp.json())
@@ -426,8 +460,8 @@ async def proxy_library_get_puz(grid_id: str):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/library/{grid_id}/puz")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     if resp.status_code != 200:
         try:
             return JSONResponse(status_code=resp.status_code, content=resp.json())
@@ -450,8 +484,8 @@ async def proxy_library_get_ipuz(grid_id: str):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/library/{grid_id}/ipuz")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     if resp.status_code != 200:
         try:
             return JSONResponse(status_code=resp.status_code, content=resp.json())
@@ -474,8 +508,8 @@ async def proxy_library_get_jpz(grid_id: str):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/library/{grid_id}/jpz")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     if resp.status_code != 200:
         try:
             return JSONResponse(status_code=resp.status_code, content=resp.json())
@@ -503,8 +537,8 @@ async def proxy_game_save(request: Request):
                 content=body,
                 headers={"Content-Type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -518,8 +552,8 @@ async def proxy_game_leaderboard(grid_id: str, request: Request):
             resp = await client.get(
                 f"{BACKEND_URL}/api/game/leaderboard/{grid_id}", params=request.query_params
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -531,8 +565,8 @@ async def proxy_dictionary(request: Request):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/dictionary", params=request.query_params)
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -555,8 +589,8 @@ async def proxy_dictionary_define(request: Request):
     try:
         async with httpx.AsyncClient(timeout=DEFINE_PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/dictionary/define", params=request.query_params)
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -574,8 +608,8 @@ async def proxy_similar_words(request: Request):
     try:
         async with httpx.AsyncClient(timeout=SIMILAR_PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/similar_words", params=request.query_params)
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -588,8 +622,8 @@ async def proxy_synonyms(request: Request):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/synonyms", params=request.query_params)
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -608,8 +642,8 @@ async def proxy_paraphrase(request: Request):
     try:
         async with httpx.AsyncClient(timeout=PARAPHRASE_PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/paraphrase", params=request.query_params)
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -621,8 +655,8 @@ async def proxy_correct(request: Request):
     try:
         async with httpx.AsyncClient(timeout=PARAPHRASE_PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/correct", params=request.query_params)
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -643,8 +677,8 @@ async def proxy_random_theme(request: Request):
     try:
         async with httpx.AsyncClient(timeout=RANDOM_THEME_PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/theme/random", params=request.query_params)
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -659,8 +693,8 @@ async def proxy_qdrant_admin(request: Request):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/qdrant/admin")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -669,9 +703,11 @@ async def proxy_qdrant_admin_recreate(request: Request):
     _require_localhost(request)
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
-            resp = await client.post(f"{BACKEND_URL}/api/qdrant/admin/recreate")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+            resp = await client.post(
+                f"{BACKEND_URL}/api/qdrant/admin/recreate", params=request.query_params,
+            )
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -683,11 +719,12 @@ async def proxy_qdrant_admin_delete_tenant(request: Request):
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.post(
                 f"{BACKEND_URL}/api/qdrant/admin/delete-tenant",
+                params=request.query_params,
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -705,8 +742,8 @@ async def proxy_usage_stats(request: Request):
     try:
         async with httpx.AsyncClient(timeout=USAGE_STATS_PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/usage_stats")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -719,8 +756,8 @@ async def proxy_stop_dumps_list(request: Request):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/stop_dumps")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -730,8 +767,8 @@ async def proxy_stop_dumps_get(dump_id: str, request: Request):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/stop_dumps/{dump_id}")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -744,8 +781,8 @@ async def proxy_library_archive_versions(request: Request):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/library_archive/versions")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -760,8 +797,8 @@ async def proxy_library_archive(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -778,8 +815,8 @@ async def proxy_interactive_start(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -794,8 +831,8 @@ async def proxy_interactive_step(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -811,8 +848,8 @@ async def proxy_interactive_clean(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -828,8 +865,8 @@ async def proxy_interactive_candidates(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -846,8 +883,8 @@ async def proxy_interactive_crossing(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -864,8 +901,8 @@ async def proxy_interactive_boundary(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -882,8 +919,8 @@ async def proxy_interactive_impossible(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -900,8 +937,8 @@ async def proxy_interactive_stats(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -917,8 +954,8 @@ async def proxy_interactive_verify(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -934,8 +971,8 @@ async def proxy_interactive_title(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -950,8 +987,8 @@ async def proxy_interactive_save(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -967,8 +1004,8 @@ async def proxy_interactive_save_work(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -979,8 +1016,8 @@ async def proxy_interactive_work_list(request: Request):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/interactive/work", params=request.query_params)
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -995,8 +1032,8 @@ async def proxy_interactive_work_delete(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -1011,8 +1048,8 @@ async def proxy_interactive_resume(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -1028,8 +1065,8 @@ async def proxy_interactive_from_library(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -1045,8 +1082,8 @@ async def proxy_interactive_from_attempt(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
@@ -1063,8 +1100,8 @@ async def proxy_interactive_finish(request: Request):
                 content=body,
                 headers={"content-type": "application/json"},
             )
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 

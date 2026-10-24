@@ -267,6 +267,8 @@ const usageStatsBtn = document.getElementById("usage-stats-btn");
 const usageStatsPanel = document.getElementById("usage-stats");
 const usageStatsBody = document.getElementById("usage-stats-body");
 const usageStatsCloseBtn = document.getElementById("usage-stats-close-btn");
+const dictionaryStatsBtn = document.getElementById("dictionary-stats-btn");
+const dictionaryStats = document.getElementById("dictionary-stats");
 const qdrantAdminBtn = document.getElementById("qdrant-admin-btn");
 const qdrantAdminPanel = document.getElementById("qdrant-admin");
 const qdrantAdminBody = document.getElementById("qdrant-admin-body");
@@ -1241,6 +1243,7 @@ function refreshBilingualOption(selectEl) {
 function defaultToBilingualOption(selectEl) {
   const value = refreshBilingualOption(selectEl);
   if (value) selectEl.value = value;
+  if (selectEl === dictionaryLanguage) renderDictionaryStats();
 }
 
 // Follows the "Dictionnaire" panel's own language selector to the
@@ -1267,6 +1270,7 @@ function updateDictionaryLanguageForDirection(direction) {
     ? puzzle.bilingual_language
     : (puzzle.language || languageSelect.value);
   if (lang) dictionaryLanguage.value = lang;
+  renderDictionaryStats();
 }
 
 // Re-syncs (and selects the combination by default, see
@@ -3595,6 +3599,7 @@ function setUiLanguage(lang) {
   // so it's re-rendered if it's open.
   if (!qdrantAdminPanel.hidden) loadQdrantAdmin();
   if (!usageStatsPanel.hidden) loadUsageStats();
+  renderDictionaryStats();
 }
 
 languageSelect.addEventListener("change", () => setUiLanguage(languageSelect.value));
@@ -4541,6 +4546,8 @@ function describeErrorCode(t, code, fallbackText, duringGeneration = false) {
       return t.errorClueGenerationFailed;
     case "internal_error":
       return t.errorInternal;
+    case "backend_timeout":
+      return t.errorBackendTimeout;
     case "backend_unavailable":
       return duringGeneration
         ? t.errorBackendUnavailableDuringGeneration
@@ -5837,14 +5844,57 @@ dictionaryForm.addEventListener("submit", async (event) => {
   }
 });
 
-// "Mots similaires" / "Synonymes": the words closest to the typed
-// expression in the "words" Qdrant collection (tenant = the chosen
-// language), sorted from most to least similar, shown on a single line
-// separated by commas. Stacked at the top like the dictionary results.
-// See GET /api/similar_words / GET /api/synonyms (backend/app.py) +
+// The two side-by-side columns of a Qdrant similarity result: the single
+// words of the "words" collection, then the multi-word expressions of the
+// "words_multi" one, each shown by every accented spelling it has, capitals
+// kept as written, joined by " / " ("sur / sûr", "Paris", "arc-en-ciel";
+// the bare grid form when it has none).
+// Each entry gets its Qdrant score in parentheses with 2 decimals, at the
+// user's explicit request; a column with nothing shows the "no results"
+// line. In a bilingual lookup, each language's half holds its own pair.
+function buildSimilarColumnsNode(query, words, multiWords) {
+  const t = I18N[uiLanguage];
+  const cols = document.createElement("div");
+  cols.className = "dictionary-similar-cols";
+  const columns = [
+    [t.usageStatsColSingle, words],
+    [t.usageStatsColMulti, multiWords],
+  ];
+  for (const [title, entries] of columns) {
+    const col = document.createElement("div");
+    col.className = "dictionary-similar-col";
+    const colTitle = document.createElement("h4");
+    colTitle.className = "dictionary-similar-col-title";
+    colTitle.textContent = title;
+    col.appendChild(colTitle);
+    const line = document.createElement("p");
+    if (!entries || !entries.length) {
+      line.className = "dictionary-empty";
+      line.textContent = `${t.dictionaryNoResults} « ${query} »`;
+    } else {
+      line.className = "dictionary-similar-line";
+      line.textContent = entries
+        .map((x) => {
+          const s = typeof x.score === "number" ? ` (${x.score.toFixed(2)})` : "";
+          const label = x.spellings && x.spellings.length ? x.spellings.join(" / ") : x.word;
+          return `${label}${s}`;
+        })
+        .join(", ");
+    }
+    col.appendChild(line);
+    cols.appendChild(col);
+  }
+  return cols;
+}
+
+// "Similaires": the words and expressions closest to the typed
+// expression in the "words"/"words_multi" Qdrant collections (tenant =
+// the chosen language), most similar first, in two columns
+// (buildSimilarColumnsNode). Stacked at the top like the dictionary
+// results. See GET /api/synonyms (backend/app.py) +
 // backend/qdrant_store.py. Returns the node without attaching it to the
 // page — same reason as buildDictionaryResultNode() above.
-function buildSimilarWordsResultNode(query, words) {
+function buildSimilarWordsResultNode(query, words, multiWords) {
   const t = I18N[uiLanguage];
   const block = document.createElement("div");
   block.className = "dictionary-result";
@@ -5852,39 +5902,20 @@ function buildSimilarWordsResultNode(query, words) {
   const heading = document.createElement("h3");
   heading.textContent = `${t.dictionarySimilarHeading} « ${query} »`;
   block.appendChild(heading);
-
-  if (!words || !words.length) {
-    const empty = document.createElement("p");
-    empty.className = "dictionary-empty";
-    empty.textContent = `${t.dictionaryNoResults} « ${query} »`;
-    block.appendChild(empty);
-  } else {
-    const line = document.createElement("p");
-    line.className = "dictionary-similar-line";
-    // Each entry is {word, score} — the Qdrant score is shown in
-    // parentheses with 2 decimals next to the word, at the user's
-    // explicit request.
-    line.textContent = words
-      .map((x) => {
-        const s = typeof x.score === "number" ? ` (${x.score.toFixed(2)})` : "";
-        return `${x.word}${s}`;
-      })
-      .join(", ");
-    block.appendChild(line);
-  }
+  block.appendChild(buildSimilarColumnsNode(query, words, multiWords));
   return block;
 }
 
-// "Thématique": unlike buildSimilarWordsResultNode() above (reused as-is
-// by "Synonymes", a single-stage direct Qdrant search), this button's
+// "Thématique": unlike buildSimilarWordsResultNode() above (used by
+// "Similaires", a single-stage direct Qdrant search), this button's
 // search runs in two stages — see backend/app.py's _similar_words_impl —
 // and both are shown, stacked in the same result block, at the user's
 // explicit request: the LLM's own raw keyword expansion first, under
-// "Champ lexical", then the Qdrant-compiled word list (scores included,
-// same rendering as buildSimilarWordsResultNode) under "Glossaire
-// thématique". Returns the node without attaching it to the page — same
-// reason as buildDictionaryResultNode() above.
-function buildThematicResultNode(query, keywords, words) {
+// "Champ lexical", then the Qdrant-compiled words and expressions
+// (scores included, the same two columns as buildSimilarWordsResultNode)
+// under "Glossaire thématique". Returns the node without attaching it to
+// the page — same reason as buildDictionaryResultNode() above.
+function buildThematicResultNode(query, keywords, words, multiWords) {
   const t = I18N[uiLanguage];
   const block = document.createElement("div");
   block.className = "dictionary-result";
@@ -5908,23 +5939,7 @@ function buildThematicResultNode(query, keywords, words) {
   const glossaryHeading = document.createElement("h3");
   glossaryHeading.textContent = `${t.dictionaryThematicGlossaryHeading} « ${query} »`;
   block.appendChild(glossaryHeading);
-
-  if (!words || !words.length) {
-    const empty = document.createElement("p");
-    empty.className = "dictionary-empty";
-    empty.textContent = `${t.dictionaryNoResults} « ${query} »`;
-    block.appendChild(empty);
-  } else {
-    const glossaryLine = document.createElement("p");
-    glossaryLine.className = "dictionary-similar-line";
-    glossaryLine.textContent = words
-      .map((x) => {
-        const s = typeof x.score === "number" ? ` (${x.score.toFixed(2)})` : "";
-        return `${x.word}${s}`;
-      })
-      .join(", ");
-    block.appendChild(glossaryLine);
-  }
+  block.appendChild(buildSimilarColumnsNode(query, words, multiWords));
   return block;
 }
 
@@ -5967,23 +5982,37 @@ function readMultiWordPercent() {
 
 // Queries /api/similar_words or /api/synonyms for a given language and
 // returns the already-built result node — factored out so it can be
-// called once or twice (bilingual) by "Thématique"/"Synonymes" below.
-// "Thématique" (similar_words) additionally returns the LLM's own raw
-// keyword expansion (`data.keywords`), rendered as its own "Champ
-// lexical" section ahead of the Qdrant-compiled one — see
-// buildThematicResultNode(); "Synonymes" (synonyms) has no such stage,
-// so it keeps the plain single-list rendering.
+// called once or twice (bilingual) by "Thématique"/"Similaires" below.
+// Both return `data.words` and `data.multi_words` (the "words" and
+// "words_multi" collections, shown side by side). "Thématique"
+// (similar_words) additionally returns the LLM's own raw keyword
+// expansion (`data.keywords`), rendered as its own "Champ lexical"
+// section ahead of the Qdrant-compiled one — see
+// buildThematicResultNode(); "Similaires" (synonyms) has no such stage.
 async function fetchSimilarWordsResultNode(query, lang, endpoint, timeoutMs, errorMessage) {
   const prec = readThemePrecision();
   let url = `/api/${endpoint}?q=${encodeURIComponent(query)}&lang=${encodeURIComponent(lang)}`;
   if (prec !== undefined) url += `&min_score=${prec}`;
   const response = await fetchWithTimeout(url, {}, timeoutMs);
-  if (!response.ok) throw new Error(errorMessage);
+  if (!response.ok) {
+    // The error carries the server's code, so a proxy timeout
+    // ("backend_timeout") is not shown as the vector database being down.
+    const err = new Error(errorMessage);
+    try {
+      const body = await response.json();
+      err.code = body && body.detail && body.detail.code;
+    } catch (parseErr) {
+      err.code = undefined;
+    }
+    throw err;
+  }
   const data = await response.json();
   if (endpoint === "similar_words") {
-    return buildThematicResultNode(query, (data && data.keywords) || [], (data && data.words) || []);
+    return buildThematicResultNode(
+      query, (data && data.keywords) || [], (data && data.words) || [], (data && data.multi_words) || [],
+    );
   }
-  return buildSimilarWordsResultNode(query, (data && data.words) || []);
+  return buildSimilarWordsResultNode(query, (data && data.words) || [], (data && data.multi_words) || []);
 }
 
 dictionarySimilarBtn.addEventListener("click", async () => {
@@ -6014,14 +6043,14 @@ dictionarySimilarBtn.addEventListener("click", async () => {
   } catch (err) {
     const line = document.createElement("p");
     line.className = "dictionary-empty";
-    line.textContent = t.dictionarySimilarError;
+    line.textContent = err && err.code === "backend_timeout" ? t.errorBackendTimeout : t.dictionarySimilarError;
     dictionaryResults.prepend(line);
   } finally {
     dictionarySimilarBtn.disabled = false;
   }
 });
 
-// "Synonymes": the same rendering as "Thématique"
+// "Similaires": the same columns as "Thématique"
 // (buildSimilarWordsResultNode), but a direct Qdrant search on the typed
 // word/expression, with NO LLM call to expand the search — at the user's
 // explicit request. Generic timeout (FETCH_TIMEOUT_MS), not "Thématique"'s
@@ -6049,7 +6078,7 @@ dictionarySynonymsBtn.addEventListener("click", async () => {
   } catch (err) {
     const line = document.createElement("p");
     line.className = "dictionary-empty";
-    line.textContent = t.dictionarySynonymsError;
+    line.textContent = err && err.code === "backend_timeout" ? t.errorBackendTimeout : t.dictionarySynonymsError;
     dictionaryResults.prepend(line);
   } finally {
     dictionarySynonymsBtn.disabled = false;
@@ -6332,13 +6361,15 @@ function qdrantAdminCount(n) {
   return typeof n === "number" ? n.toLocaleString(uiLanguage) : "—";
 }
 
-function qdrantAdminRecreateButton() {
+// `multi`: the action targets the "words_multi" collection (the
+// multi-word expressions) instead of "words" — sent as `?multi=true`.
+function qdrantAdminRecreateButton(name, multi) {
   const t = I18N[uiLanguage];
   const b = document.createElement("button");
   b.type = "button";
   b.className = "nav-btn";
   b.textContent = t.qdrantAdminRecreateBtn;
-  b.addEventListener("click", qdrantAdminRecreate);
+  b.addEventListener("click", () => qdrantAdminRecreate(name, multi));
   return b;
 }
 
@@ -6351,33 +6382,50 @@ function qdrantAdminAppendExtras(data) {
   a.className = "qdrant-admin-dashboard-link";
   a.textContent = t.qdrantAdminDashboardLink;
   qdrantAdminBody.appendChild(a);
-  qdrantAdminBody.appendChild(
-    qdrantAdminPara(t.qdrantAdminPopulateHint, "qdrant-admin-hint"),
-  );
+  for (const cmd of [
+    "python -m data_builder.qdrant_populate --all",
+    "python -m data_builder.qdrant_populate fr en --multi",
+  ]) {
+    qdrantAdminBody.appendChild(
+      qdrantAdminPara(t.qdrantAdminPopulateHint(cmd), "qdrant-admin-hint"),
+    );
+  }
 }
 
-// Builds the panel body from GET /api/qdrant/admin. Pure DOM (textContent
-// only); the one bit of dynamic markup is the dashboard <a>, whose href is
-// the server-provided base_url + "/dashboard".
+// Builds the panel body from GET /api/qdrant/admin: one section per
+// collection — "words", then "words_multi" (the response's `multi`
+// field) —, then the dashboard link and the populate commands. Pure DOM
+// (textContent only); the one bit of dynamic markup is the dashboard <a>,
+// whose href is the server-provided base_url + "/dashboard".
 function renderQdrantAdmin(data) {
   const t = I18N[uiLanguage];
   qdrantAdminBody.replaceChildren();
-  qdrantAdminBody.appendChild(
-    qdrantAdminPara(`${data.base_url} · ${data.collection}`, "qdrant-admin-endpoint"),
-  );
-
   if (!data.reachable) {
+    qdrantAdminBody.appendChild(
+      qdrantAdminPara(`${data.base_url} · ${data.collection}`, "qdrant-admin-endpoint"),
+    );
     qdrantAdminBody.appendChild(
       qdrantAdminPara(t.qdrantAdminUnreachable, "qdrant-admin-empty"),
     );
     return;
   }
+  renderQdrantAdminCollection(data, false);
+  if (data.multi) renderQdrantAdminCollection(data.multi, true);
+  qdrantAdminAppendExtras(data);
+}
+
+// One collection's section: its endpoint line, then its state, per-language
+// table and "Recréer" button (or only that button when it does not exist).
+function renderQdrantAdminCollection(data, multi) {
+  const t = I18N[uiLanguage];
+  qdrantAdminBody.appendChild(
+    qdrantAdminPara(`${data.base_url} · ${data.collection}`, "qdrant-admin-endpoint"),
+  );
   if (!data.exists) {
     qdrantAdminBody.appendChild(
-      qdrantAdminPara(t.qdrantAdminNoCollection, "qdrant-admin-empty"),
+      qdrantAdminPara(t.qdrantAdminNoCollection(data.collection), "qdrant-admin-empty"),
     );
-    qdrantAdminBody.appendChild(qdrantAdminRecreateButton());
-    qdrantAdminAppendExtras(data);
+    qdrantAdminBody.appendChild(qdrantAdminRecreateButton(data.collection, multi));
     return;
   }
 
@@ -6435,7 +6483,7 @@ function renderQdrantAdmin(data) {
     del.className = "nav-btn";
     del.textContent = t.qdrantAdminDeleteTenantBtn;
     del.disabled = !langs[code];
-    del.addEventListener("click", () => qdrantAdminDeleteTenant(code));
+    del.addEventListener("click", () => qdrantAdminDeleteTenant(code, data.collection, multi));
     c3.appendChild(del);
     tr.append(c1, c2, c3);
     tbody.appendChild(tr);
@@ -6446,10 +6494,8 @@ function renderQdrantAdmin(data) {
 
   const actions = document.createElement("div");
   actions.className = "qdrant-admin-actions";
-  actions.appendChild(qdrantAdminRecreateButton());
+  actions.appendChild(qdrantAdminRecreateButton(data.collection, multi));
   qdrantAdminBody.appendChild(actions);
-
-  qdrantAdminAppendExtras(data);
 }
 
 async function loadQdrantAdmin() {
@@ -6468,12 +6514,12 @@ async function loadQdrantAdmin() {
   }
 }
 
-async function qdrantAdminRecreate() {
+async function qdrantAdminRecreate(name, multi) {
   const t = I18N[uiLanguage];
-  if (!window.confirm(t.qdrantAdminRecreateConfirm)) return;
+  if (!window.confirm(t.qdrantAdminRecreateConfirm(name))) return;
   try {
     const response = await fetchWithTimeout(
-      "/api/qdrant/admin/recreate", { method: "POST" }, FETCH_TIMEOUT_MS,
+      `/api/qdrant/admin/recreate${multi ? "?multi=true" : ""}`, { method: "POST" }, FETCH_TIMEOUT_MS,
     );
     if (!response.ok) throw new Error();
   } catch (err) {
@@ -6482,12 +6528,12 @@ async function qdrantAdminRecreate() {
   loadQdrantAdmin();
 }
 
-async function qdrantAdminDeleteTenant(lang) {
+async function qdrantAdminDeleteTenant(lang, name, multi) {
   const t = I18N[uiLanguage];
-  if (!window.confirm(t.qdrantAdminDeleteTenantConfirm(lang))) return;
+  if (!window.confirm(t.qdrantAdminDeleteTenantConfirm(lang, name))) return;
   try {
     const response = await fetchWithTimeout(
-      "/api/qdrant/admin/delete-tenant",
+      `/api/qdrant/admin/delete-tenant${multi ? "?multi=true" : ""}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -6522,7 +6568,9 @@ qdrantAdminCloseBtn.addEventListener("click", hideQdrantAdminPanel);
 // (GET /api/usage_stats).
 // ---------------------------------------------------------------------------
 (function showUsageStatsOnLocalhost() {
-  if (isLocalhostOrigin()) usageStatsBtn.hidden = false;
+  if (!isLocalhostOrigin()) return;
+  usageStatsBtn.hidden = false;
+  dictionaryStatsBtn.hidden = false;
 })();
 
 function hideUsageStatsPanel() {
@@ -6539,7 +6587,9 @@ const USAGE_STATS_STRONG_LEVEL = "easy";
 // I18N key of each difficulty's name.
 const DIFFICULTY_LABEL_KEYS = { easy: "difficultyEasy", medium: "difficultyMedium", hard: "difficultyHard" };
 
-function renderUsageStats(data) {
+// Both statistics tables of GET /api/usage_stats's `data` (the per-score
+// table, then the per-length one), for #usage-stats and #dictionary-stats.
+function buildUsageStatsTables(data) {
   const t = I18N[uiLanguage];
   const fmt = (n) => (n == null ? "—" : Number(n).toLocaleString(uiLanguage));
   const table = document.createElement("table");
@@ -6619,7 +6669,33 @@ function renderUsageStats(data) {
     });
     body.appendChild(tr);
   }
-  usageStatsBody.replaceChildren(table, renderUsageLengthStats(data, fmt));
+  return [table, renderUsageLengthStats(data, fmt)];
+}
+
+function renderUsageStats(data) {
+  usageStatsBody.replaceChildren(...buildUsageStatsTables(data));
+}
+
+// `data` restricted to the languages `langs`: their rows only, and only the
+// word lengths where one of them counts a word (every per-length array
+// sliced alike).
+function usageStatsForLanguages(data, langs) {
+  const languages = data.languages.filter((row) => langs.includes(row.language));
+  const lengthKeys = ["length_counts", "easy_length_counts",
+    "multi_length_counts", "multi_easy_length_counts"];
+  const kept = (data.lengths || []).map((_, i) => i).filter((i) =>
+    languages.some((row) => lengthKeys.some((key) => row[key] && row[key][i])));
+  return {
+    ...data,
+    lengths: kept.map((i) => data.lengths[i]),
+    languages: languages.map((row) => {
+      const copy = { ...row };
+      for (const key of lengthKeys) {
+        if (row[key]) copy[key] = kept.map((i) => row[key][i]);
+      }
+      return copy;
+    }),
+  };
 }
 
 // Words rated at least USAGE_STATS_MIN_SCORE per word length (the backend's
@@ -6721,6 +6797,69 @@ usageStatsBtn.addEventListener("click", () => {
   }
 });
 usageStatsCloseBtn.addEventListener("click", hideUsageStatsPanel);
+
+// Dictionnaire panel's statistics button (localhost only): the same tables,
+// for the #dictionary-language selection only — one language, or both of a
+// "<lang1>/<lang2>" pair. Fetched once per opening, then re-rendered from
+// `dictionaryStatsData` whenever the selection or the UI language changes.
+let dictionaryStatsData = null;
+// Selection (#dictionary-language value) and UI language the block was
+// last rendered for.
+let dictionaryStatsKey = null;
+
+function usageStatsMessage(text) {
+  const p = document.createElement("p");
+  p.className = "usage-stats-empty";
+  p.textContent = text;
+  return p;
+}
+
+function renderDictionaryStats() {
+  if (dictionaryStats.hidden || !dictionaryStatsData) return;
+  const key = `${dictionaryLanguage.value}|${uiLanguage}`;
+  if (key === dictionaryStatsKey) return;
+  dictionaryStatsKey = key;
+  const langs = dictionaryLanguage.value.split("/");
+  dictionaryStats.replaceChildren(
+    ...buildUsageStatsTables(usageStatsForLanguages(dictionaryStatsData, langs)));
+}
+
+async function loadDictionaryStats() {
+  dictionaryStatsData = null;
+  dictionaryStatsKey = null;
+  dictionaryStats.replaceChildren(usageStatsMessage(I18N[uiLanguage].usageStatsLoading));
+  try {
+    const response = await fetchWithTimeout("/api/usage_stats", {}, USAGE_STATS_FETCH_TIMEOUT_MS);
+    if (!response.ok) throw new Error();
+    const data = await response.json();
+    if (dictionaryStats.hidden) return;
+    dictionaryStatsData = data;
+    renderDictionaryStats();
+  } catch (err) {
+    if (!dictionaryStats.hidden) {
+      dictionaryStats.replaceChildren(usageStatsMessage(I18N[uiLanguage].usageStatsError));
+    }
+  }
+}
+
+function hideDictionaryStats() {
+  dictionaryStats.hidden = true;
+  dictionaryStats.replaceChildren();
+  dictionaryStatsData = null;
+  dictionaryStatsKey = null;
+  dictionaryStatsBtn.classList.remove("active");
+}
+
+dictionaryStatsBtn.addEventListener("click", () => {
+  if (dictionaryStats.hidden) {
+    dictionaryStats.hidden = false;
+    dictionaryStatsBtn.classList.add("active");
+    loadDictionaryStats();
+  } else {
+    hideDictionaryStats();
+  }
+});
+dictionaryLanguage.addEventListener("change", renderDictionaryStats);
 
 // "David FALCON" chat widget, at the user's explicit request: "Bottom
 // right of the interface, add a ChatBot (open by default) with the

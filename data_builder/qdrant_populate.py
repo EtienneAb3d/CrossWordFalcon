@@ -29,11 +29,20 @@ CLI (run from the repo root):
   python -m data_builder.qdrant_populate de --batch 128 --offset 800000
   python -m data_builder.qdrant_populate fr --source scrabble
   python -m data_builder.qdrant_populate --init-only
+  python -m data_builder.qdrant_populate fr --multi --recreate
 
 `--source` picks the words sent: `all` (default: the freq wordlist, then
 the Scrabble words it lacks), `freq` or `scrabble` (only the Scrabble words
 the freq wordlist lacks — adds them without re-embedding the rest).
 `--offset` counts words of that stream.
+
+`--multi` fills the "words_multi" collection instead
+(`qdrant_store.multi_collection_name()`, same shape, tenants and point
+ids) with every expression of `data/wordlist_<lang>_multi.tsv`
+(`MOT<TAB>ACCENTUE<TAB>CANONIQUE`, English and French only — another
+language is skipped), each with its FREQUENCE from
+`data/wordlist_<lang>_freq_multi.tsv` when it has one; `--source` does not
+apply there.
 """
 import argparse
 import pathlib
@@ -45,22 +54,30 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from backend.embedder import Embedder, EmbedderError          # noqa: E402
-from backend.qdrant_store import QdrantStore, QdrantStoreError  # noqa: E402
+from backend.qdrant_store import (                              # noqa: E402
+    QdrantStore, QdrantStoreError, multi_collection_name,
+)
 
 LANGUAGES = ("fr", "en", "de", "es", "it", "pt")
 DATA_DIR = _REPO_ROOT / "data"
 WORDLIST_TEMPLATE = "wordlist_{lang}_freq.tsv"
 SCRABBLE_TEMPLATE = "wordlist_{lang}_scrabble.tsv"
+MULTI_TEMPLATE = "wordlist_{lang}_multi.tsv"
+FREQ_MULTI_TEMPLATE = "wordlist_{lang}_freq_multi.tsv"
 SOURCES = ("all", "freq", "scrabble")
 
 
 class WordEmbeddingIndexer:
     """Reads a `wordlist_<lang>_freq.tsv` and feeds every word into the
-    Qdrant "words" collection as an embedded, language-tenanted point."""
+    Qdrant "words" collection as an embedded, language-tenanted point —
+    or, with `multi`, every expression of `wordlist_<lang>_multi.tsv` into
+    the "words_multi" collection."""
 
     def __init__(self, store=None, embedder=None, batch_size=64,
-                 data_dir=DATA_DIR):
-        self.store = store or QdrantStore()
+                 data_dir=DATA_DIR, multi=False):
+        self.multi = multi
+        self.store = store or QdrantStore(
+            collection=multi_collection_name() if multi else None)
         self.embedder = embedder or Embedder()
         self.batch_size = batch_size
         self.data_dir = pathlib.Path(data_dir)
@@ -82,6 +99,12 @@ class WordEmbeddingIndexer:
 
     def scrabble_path(self, lang):
         return self.data_dir / SCRABBLE_TEMPLATE.format(lang=lang)
+
+    def source_path(self, lang):
+        """The wordlist this indexer mirrors for `lang`."""
+        if self.multi:
+            return self.data_dir / MULTI_TEMPLATE.format(lang=lang)
+        return self.wordlist_path(lang)
 
     @staticmethod
     def _freq_rows(path):
@@ -120,13 +143,24 @@ class WordEmbeddingIndexer:
         `source` (see the module docstring), skipping the first `offset`.
         `frequency` is a float or None (always None for a Scrabble-only
         word); `canonical` is a string (possibly empty, possibly
-        ";"-separated)."""
-        path = self.wordlist_path(lang)
+        ";"-separated). With `multi`, the multi-word wordlist's rows, each
+        with its freq-multi FREQUENCE (None when it has none)."""
+        path = self.source_path(lang)
         if not path.exists():
             raise FileNotFoundError(path)
         scrabble = self.scrabble_path(lang)
 
+        def multi_rows():
+            freq_path = self.data_dir / FREQ_MULTI_TEMPLATE.format(lang=lang)
+            freqs = ({row[0]: row[2] for row in self._freq_rows(freq_path)}
+                     if freq_path.exists() else {})
+            for word, accented, _f, canonical in self._scrabble_rows(path):
+                yield (word, accented, freqs.get(word), canonical)
+
         def rows():
+            if self.multi:
+                yield from multi_rows()
+                return
             if source in ("all", "freq"):
                 yield from self._freq_rows(path)
             if source in ("all", "scrabble") and scrabble.exists():
@@ -147,7 +181,7 @@ class WordEmbeddingIndexer:
     # -- indexing ------------------------------------------------
     def index_language(self, lang, limit=None, offset=0, recreate=False,
                        log_every=5000, source="all"):
-        path = self.wordlist_path(lang)
+        path = self.source_path(lang)
         if not path.exists():
             print(f"[{lang}] SKIP — {path.name} not found", flush=True)
             return 0
@@ -209,6 +243,9 @@ def main(argv=None):
                         help="embedding / upsert batch size (default 64)")
     parser.add_argument("--recreate", action="store_true",
                         help="delete a language's existing points before indexing")
+    parser.add_argument("--multi", action="store_true",
+                        help="fill the multi-word expressions' collection (words_multi) "
+                             "from wordlist_<lang>_multi.tsv instead")
     args = parser.parse_args(argv)
 
     langs = list(args.langs)
@@ -222,7 +259,7 @@ def main(argv=None):
         parser.error("give at least one LANG, or --all, or --init-only")
 
     try:
-        with WordEmbeddingIndexer(batch_size=args.batch) as indexer:
+        with WordEmbeddingIndexer(batch_size=args.batch, multi=args.multi) as indexer:
             if not indexer.store.ping():
                 print(f"Qdrant not reachable at {indexer.store.base_url} — "
                       "start it with ./run_qdrant.sh", file=sys.stderr)

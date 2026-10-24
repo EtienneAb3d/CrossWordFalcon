@@ -27,7 +27,7 @@ origin the browser ever talks to). Clue writing and every other natural-
 language feature (chat, definitions, paraphrases, theme expansion) go
 through a local or cloud LLM behind an OpenAI-compatible chat-completions
 endpoint (`backend/clues.py`/`backend/chatbot.py`); "Thématique"/
-"Synonymes" search goes through a local multilingual embedding server
+"Similaires" search goes through a local multilingual embedding server
 (`backend/embedder.py`) plus a Qdrant vector database (`backend/
 qdrant_store.py`), both optional.
 
@@ -124,8 +124,13 @@ Each of the six languages has its own dictionary, built independently by
    Scrabble-dictionary word it lacks (`--source all`, the default; `freq`
    or `scrabble` restrict the stream, `--offset` counts words of it) —
    into a local Qdrant vector collection (optional; only needed for the
-   "Thématique"/"Synonymes" features). Non-fatal if Qdrant/the embed
-   server isn't running.
+   "Thématique"/"Similaires" features and the theme glossary). With
+   `--multi` (English and French, the languages with a multi-word
+   wordlist; another one is skipped) it fills the "words_multi"
+   collection instead, with every expression of `data/wordlist_<lang>_
+   multi.tsv` and its `wordlist_<lang>_freq_multi.tsv` FREQUENCE when it
+   has one; `build_en.sh`/`build_fr.sh` run both in the same last step.
+   Non-fatal if Qdrant/the embed server isn't running.
 
 `data_builder/build_<lang>.sh` chains, for one language: corpus, freq
 wordlist,
@@ -541,7 +546,14 @@ json`. Holds all server-side state in plain module dicts/lists:
   paraphrase` (LLM paraphrases), `GET /api/correct` (LLM proofreading of
   one typed definition or title, Interactive mode's "Corriger"), `GET /api/similar_words` (LLM-expanded +
   Qdrant "Thématique"), `GET /api/synonyms` (plain Qdrant nearest-
-  neighbor, no LLM), `GET /api/theme/random` (a random dictionary word
+  neighbor, no LLM, the "Similaires" button) — both return `words`
+  (from the "words" collection) and `multi_words` (from the
+  "words_multi" one), one `{word, spellings, score}` per entry,
+  `spellings` every accented spelling of the point's `;`-separated
+  `accented` payload, main one first, capitals kept, else `[word]`
+  (`_compiled_similar_words`/`_spellings`, Java `Themes.
+  compiledSimilarWords`/`spellings`, `App.spellingsJson`), shown side by
+  side, `GET /api/theme/random` (a random dictionary word
   handed to the LLM as an inspiration seed, returning an invented theme
   phrase — used by `Automation/Populate.py`, not the web UI itself).
 - *Generation lifecycle*: `POST /api/generate` (202, starts a background
@@ -571,8 +583,12 @@ json`. Holds all server-side state in plain module dicts/lists:
 - *Chat*: `POST /api/chat` (streamed "David FALCON" reply), `POST
   /api/devchat` (streamed "DevBot" reply, see `chatbot.py`).
 - *Qdrant admin* (localhost-only, gated by `frontend/server.py`): `GET
-  /api/qdrant/admin`, `POST /api/qdrant/admin/recreate`, `POST /api/
-  qdrant/admin/delete-tenant`.
+  /api/qdrant/admin` (the "words" collection's state —
+  `_qdrant_collection_state`, Java `App.qdrantCollectionState` — with the
+  "words_multi" one's under `multi`), `POST /api/qdrant/admin/recreate`,
+  `POST /api/qdrant/admin/delete-tenant` (both on "words", on
+  "words_multi" with `?multi=true` — `_qdrant_admin_store`, Java
+  `App.qdrantAdminStore`; the proxy forwards the query string).
 - *Usage-score statistics* (localhost-only, gated by `frontend/server.py`):
   `GET /api/usage_stats` (`usage_scores.usage_score_counts`, Java
   `UsageScores.usageScoreCounts`: `{scores, levels, languages: [{language,
@@ -1469,15 +1485,15 @@ grid, and the zone softclean (which only runs before the zone moves on)
 never runs. On, on every palier and every attempt of it
 (`generate_grid`, `try_fill(incremental_fill=INCREMENTAL_FILL_ENABLED)` via `_pattern_attempt`/
 `_pattern_continue`; Java `Generator.Ctx.incrementalFill`), stages 1 and 2 first run
-inside an "attention zone" — a window of `INCREMENTAL_FILL_STEP` (16) rows
-by 16 columns, clipped by the grid, so smaller along its right and bottom
+inside an "attention zone" — a window of `INCREMENTAL_FILL_STEP` (21) rows
+by 21 columns, clipped by the grid, so smaller along its right and bottom
 edges (`_in_attention`, Java `inAttention`) — over the slots holding a
 still-free cell (no placed word nor locked letter) there
 (`Filler._attention_pool`). The `attention` value is `(top, left)`, the
 window's top row and left column, `(rows, 0)` being the whole grid (Java:
 one `long`, `packAttention`, 16 bits each; `None`/-1 = incremental fill
 off; `_attention_is_whole`, Java `attentionIsWhole`, true once the window
-starts below the grid, or for a grid of at most 16x16, whole from the
+starts below the grid, or for a grid of at most 21x21, whole from the
 start). Every root starts from the window at the top-left corner
 (`_initial_attention`). The fallback is optional, currently off
 (`ATTENTION_FALLBACK_ENABLED` = False; Java
@@ -1487,12 +1503,12 @@ every node falls back (`_fallback_attention`, Java `fallbackAttention`) on
 the first window, in scan order (left to right, then down), holding a free
 cell of a selectable slot, every window before it being filled; once both
 stages place nothing in the zone (or the zone has no such slot), the
-window moves on (`_next_attention`, Java `nextAttention`): 16 columns to
-the right, keeping its size, back to the left edge 16 rows down past the
+window moves on (`_next_attention`, Java `nextAttention`): 21 columns to
+the right, keeping its size, back to the left edge 21 rows down past the
 right edge (`_attention_shape`, Java `attentionShape`), the whole grid
-once the window holding the bottom-right corner is done (40x20: rows 0-15
-x cols 0-15, x cols 16-31, x cols 32-39, rows 16-19 x cols 0-15, x cols
-16-31, x cols 32-39, the whole grid) — free cells left in a window it
+once the window holding the bottom-right corner is done (50x30: rows 0-20
+x cols 0-20, x cols 21-41, x cols 42-49, rows 21-29 x cols 0-20, x cols
+21-41, x cols 42-49, the whole grid) — free cells left in a window it
 moved past are only taken up again once the zone is the whole grid — and
 the node goes back to stage 1 on the new pool, slots it already tried
 staying tried; on entry a zone with no such slot moves on at once
@@ -1938,7 +1954,15 @@ Qdrant search and the whole-theme filter holds fewer, the score threshold
 is lowered by `THEME_PRECISION_STEP` (0.03, `_lowered_theme_precision`,
 never below 0) and both are re-run on the same keywords; `LOG_THEME/`
 records the threshold finally used and, when it differs, the requested
-one (`# requested score threshold`).
+one (`# requested score threshold`). Every keyword search also reads the
+"words_multi" collection (`_theme_words_by_length` through
+`_multi_scored_points`, Java `Themes.themeWordsByLength`/
+`multiScoredPoints`: an expression's grid form, ARCENCIEL, under the same
+3-15 length bound, a grid form found in both collections keeping its best
+score), and `_whole_theme_proximity_scores` (Java `Themes.
+wholeThemeProximityScores`) takes the vector of a word missing from
+"words" from "words_multi"; a missing collection or tenant gives no
+expression, never an error.
 
 **"Mots Défi" in automatic generation**: `challenge_words` (`GenerateRequest.
 challenge_words` on the web UI's main generation form, alongside
@@ -2834,7 +2858,9 @@ whether it is an inflected form of its base form(s), plus up to
 `CLUE_GLOSSES_PER_LEMMA` definitions of up to `CLUE_GLOSS_LEMMAS` base
 forms (`gloss_lookup`) — then up to `CLUE_SYNONYM_COUNT` example synonyms
 from Qdrant with their definitions (`_qdrant_synonyms`, run in a worker
-thread before the prompt is built: one search per query — the answer's
+thread before the prompt is built: one search per query in the "words"
+collection and one in "words_multi" (none when it or the tenant is
+missing; an expression's vector read from "words_multi") — the answer's
 grid form, its inflected forms, its base forms — each candidate scored
 by its best search score, kept at `CLUE_SYNONYM_MIN_SCORE` (0.80) and
 above; the collection embeds only spellings, so a candidate must also
@@ -3157,7 +3183,11 @@ a CLI benchmark. Switching the embed model always requires a full Qdrant
 rebuild (`python -m data_builder.qdrant_populate --all --recreate`).
 
 `QdrantStore` (qdrant_store.py) is a plain-HTTP client (no SDK) around
-one Qdrant collection (`words`), multitenant by language. `upsert_words`
+one Qdrant collection (`words`, or any other given as `collection` —
+`multi_collection_name()`, `QDRANT_COLLECTION_MULTI`, default
+"words_multi", for the multi-word expressions, same shape, tenants and
+point ids; Java `QdrantStore(timeout, collection)`/`multiCollectionName`,
+`Themes.QDRANT_MULTI`), multitenant by language. `upsert_words`
 embeds each word as its own accented spelling + bare uppercase form +
 canonical form(s), space-joined (no dictionary text). `search`/`search_
 text` do a filtered nearest-neighbor lookup. `data_builder/qdrant_
@@ -3269,7 +3299,23 @@ one shared `httpx.AsyncClient(timeout=PROXY_TIMEOUT_S=30.0)`). Every new
 backend endpoint needs its own matching route here — there is no generic
 passthrough, an unmatched path falls through to the static-file mount
 and 405s. Runs with multiple uvicorn workers (safe: no cross-request
-state, unlike the backend).
+state, unlike the backend). Every relay that gets no answer goes through
+`_backend_failure`, which writes a WARNING line to its log
+(`logs/frontend.log`, timestamped by its own `logging.basicConfig`: the
+call, the timeout, the httpx error) and answers 504 `backend_timeout`
+when the back end did not answer within the route's timeout (a read,
+write or pool timeout: the back end may still finish the request with
+nobody listening), 502 `backend_unavailable` when it could not be reached
+(refused or timed-out connection, dropped connection); the chat relays
+send that code as their stream's `error`. The browser shows
+`errorBackendTimeout` for the former (`describeErrorCode`, and the
+Dictionnaire's "Similaires"/"Thématique", whose error carries the
+server's code — `fetchSimilarWordsResultNode`). `GET /api/similar_words`
+and `GET /api/synonyms` log their start, their end with duration and
+counts (keywords, words, expressions), or their failure with duration,
+and `_similar_words_impl` the LLM expansion's duration (Java `App`,
+`Themes.similarWordsImpl`), so a search outlasting the proxy's
+`SIMILAR_PROXY_TIMEOUT_S` (60 s) shows in both logs.
 
 ### `static/`
 
@@ -3443,11 +3489,24 @@ state, unlike the backend).
   under the `#library-archived-warning` banner and its "back to current
   grids" button; a grid displayed with `archived: true` shows the red
   `#grid-archived-warning` above its title, `displayFinalGrid`);
-  the dictionary panel (root-family search, each form's "usage : X/5"
+  the dictionary panel (a localhost-only bar-chart icon right of its
+  language selector, `#dictionary-stats-btn`, toggles `#dictionary-stats`:
+  the `#usage-stats` tables — `buildUsageStatsTables`, shared with
+  `renderUsageStats` — of `GET /api/usage_stats` restricted to the
+  selector's language, or both of a "<lang1>/<lang2>" pair, and to the
+  lengths where one of them has words, `usageStatsForLanguages`, fetched
+  once per opening and re-rendered by `renderDictionaryStats` whenever the
+  selection or the UI language changes; root-family search, each form's "usage : X/5"
   line under it when its usage score is known, then "Niveau : Facile,
   Moyen, Difficile" — `gridDifficulty` over the row's `levels`,
   `dictionaryLevelNone` when empty —, "Définir", "Thématique"/
-  "Synonymes", bilingual-aware); the chatbot UI (Markdown rendering,
+  "Similaires" (`#dictionary-synonyms-btn`, both shown as two columns,
+  single words then multi-word expressions, `buildSimilarColumnsNode`,
+  so four in a bilingual lookup; each entry is its `spellings` joined by
+  " / ", e.g. "abale / abalé (0.84)"), bilingual-aware); the Qdrant admin
+  panel (`renderQdrantAdmin`/`renderQdrantAdminCollection`: one section
+  per collection, "words" then "words_multi", each with its own
+  per-language "Vider" and "Recréer la collection" buttons); the chatbot UI (Markdown rendering,
   incremental streaming, live UI-context snapshot sent as grounding,
   open/collapsed state persisted in its own `cwf-chatbot-state` cookie —
   `max-age` recomputed on every toggle down to local midnight, so a
@@ -3624,10 +3683,11 @@ java -cp backend_java/dist/crosswordfalcon-backend.jar falcon.gen.Generator --wi
 pip install -r requirements-llama.txt
 ./run_llm.sh
 
-# Optional: local embedding server + Qdrant, for "Thématique"/"Synonymes"
+# Optional: local embedding server + Qdrant, for "Thématique"/"Similaires"
 ./run_embed.sh
 ./run_qdrant.sh
 python -m data_builder.qdrant_populate --all
+python -m data_builder.qdrant_populate fr en --multi   # the "words_multi" collection
 ```
 
 `backend/app.py` needs a reachable LLM at `LLM_BASE_URL` for clue/title/

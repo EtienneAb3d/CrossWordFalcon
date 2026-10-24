@@ -42,7 +42,7 @@ from .embedder import Embedder, EmbedderError
 from .example_sentences import find_examples_for_words
 from .gloss_lookup import find_glosses_for_canonicals
 from .inflection_lookup import describe_form
-from .qdrant_store import QdrantStore, QdrantStoreError
+from .qdrant_store import QdrantStore, QdrantStoreError, multi_collection_name
 
 logger = logging.getLogger("crosswordfalcon.chatbot")
 
@@ -497,8 +497,9 @@ def _corpus_sentences(word, language):
 
 def _qdrant_synonyms(word, language):
     """Example synonyms of `word`'s answer for the CLUE prompt, as
-    `(base form, definition)` pairs, from the Qdrant `words` collection.
-    One search per query — the answer's grid form, its inflected forms and
+    `(base form, definition)` pairs, from the Qdrant `words` collection and
+    the `words_multi` one (multi-word expressions; nothing from it when it
+    or the language's tenant is missing). One search per query, in each — the answer's grid form, its inflected forms and
     its possible base forms (`_word_forms`) — reading CLUE_SYNONYM_POOL
     nearest neighbours each; a neighbour's score is its best one over
     those searches, and must reach CLUE_SYNONYM_MIN_SCORE. The collection
@@ -531,10 +532,18 @@ def _qdrant_synonyms(word, language):
     try:
         if _synonym_clients is None:
             _synonym_clients = (QdrantStore(timeout=CLUE_SYNONYM_TIMEOUT),
-                                Embedder(timeout=CLUE_SYNONYM_TIMEOUT))
-        store, embedder = _synonym_clients
+                                Embedder(timeout=CLUE_SYNONYM_TIMEOUT),
+                                QdrantStore(collection=multi_collection_name(),
+                                            timeout=CLUE_SYNONYM_TIMEOUT))
+        store, embedder, multi_store = _synonym_clients
         for query in queries:
-            for hit in store.search(embedder.embed(query), lang=language, limit=CLUE_SYNONYM_POOL):
+            vector = embedder.embed(query)
+            hits = store.search(vector, lang=language, limit=CLUE_SYNONYM_POOL)
+            try:
+                hits = hits + multi_store.search(vector, lang=language, limit=CLUE_SYNONYM_POOL)
+            except QdrantStoreError:
+                pass
+            for hit in hits:
                 payload = hit.get("payload") or {}
                 w = payload.get("word")
                 score = hit.get("score", 0.0)
@@ -558,6 +567,13 @@ def _qdrant_synonyms(word, language):
                 candidates.append((w, base, gloss))
         meaning_vector = embedder.embed(meaning) if candidates else []
         vectors = store.retrieve_word_vectors(language, [w for w, _, _ in candidates])
+        missing = [w for w, _, _ in candidates if w not in vectors]
+        if missing:
+            # A multi-word expression's vector lives in the "words_multi" collection.
+            try:
+                vectors.update(multi_store.retrieve_word_vectors(language, missing))
+            except QdrantStoreError:
+                pass
     except (QdrantStoreError, EmbedderError) as e:
         logger.warning("chat: Qdrant synonyms unavailable for %r: %s", answer, e)
         return []

@@ -117,7 +117,7 @@ the grid for you.
 
 The machine needs three things: processor cores to build the grids, a
 graphics card if you want good-quality clues written locally, and disk
-space if you turn on theme search ("Theme"/"Synonyms" buttons).
+space if you turn on theme search ("Theme"/"Similar" buttons).
 
 | Setup | Processor | Memory | Disk | Graphics card | Good for |
 |---|---|---|---|---|---|
@@ -539,15 +539,18 @@ looking words up in the chosen language:
   once per language by the local language model
   (`data_builder/build_usage_scores.py fr` — a long run, about a day for
   French).
-- **"Synonymes" / "Synonyms"** lists every word close in *meaning* to
-  what you typed, most similar first, on one comma-separated line.
+- **"Similaires" / "Similar"** lists every word close in *meaning* to
+  what you typed, most similar first, in two columns: single words, and
+  multi-word expressions such as "arc-en-ciel" (English and French).
 - **"Thématique" / "Theme"** does the same, but first asks the language
   model to widen what you typed into a list of related keywords, so it
   brings back a broader, theme-like vocabulary (a few seconds slower).
   Both of these need two optional extra services running — a local
   embedding server (`./run_embed.sh`) and the Qdrant vector database
   (`./Install_qdrant.sh` once, then `./run_qdrant.sh`), with the word
-  index built by `python -m data_builder.qdrant_populate --all`. If any
+  index built by `python -m data_builder.qdrant_populate --all` (plus
+  `python -m data_builder.qdrant_populate fr en --multi` for the
+  multi-word expressions). If any
   of that isn't set up, the button just shows a short "unavailable"
   message and everything else keeps working.
 - **"Définir" / "Define"** asks the language model for up to 10

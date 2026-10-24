@@ -624,7 +624,8 @@ project's engineering language.
   - `backend/qdrant_store.py` (`QdrantStore`) is the client class — plain
     `httpx`, no `qdrant-client` SDK, no new `requirements.txt` package,
     same env-swap design as `backend/embedder.py`. Every request retries
-    a transient timeout/connection error up to `QDRANT_REQUEST_RETRIES`
+    a transient timeout/connection error (a connection the server dropped
+    without answering included — every request is idempotent) up to `QDRANT_REQUEST_RETRIES`
     (2) times with a short linear backoff before raising
     `QdrantStoreError` — a real 4xx/5xx response is never retried. The
     text actually embedded per word (`upsert_words`/`_compose_embed_
@@ -659,6 +660,26 @@ project's engineering language.
     `run_Populate.sh`), never blocking on it; deterministic point ids
     make it safe to interrupt and resume (`--offset`) or simply re-run in
     full.
+  - **A second collection, `words_multi`** (`QDRANT_COLLECTION_MULTI`,
+    `qdrant_store.multi_collection_name()`), holds the multi-word
+    expressions of `data/wordlist_<lang>_multi.tsv` (en/fr), same shape,
+    tenants and point ids as `words` — the user's request; it is filled by
+    `qdrant_populate <lang> --multi` (`build_en.sh`/`build_fr.sh`'s last
+    step, after `words`). Every similarity search reads both collections,
+    the user's rule: "Similaires" (the former "Synonymes" button) and
+    "Thématique" of the Dictionnaire panel, each shown as two columns
+    (single words, expressions — four when bilingual), the grid theme
+    glossary, and the chatbot's hint synonyms (`chatbot._qdrant_synonyms`).
+    The "Qdrant (admin)" panel shows and acts on both collections, one
+    section each (the user's rule). The user's rule: the Dictionnaire
+    shows every entry, word or expression, in its accented spelling(s),
+    capitals kept where the original has them — all spellings when there
+    are several ("abale / abalé"). Choices made with it, to revisit with
+    the user: the spellings are the point's ACCENTUE column (a freq
+    wordlist row has one), joined by " / "; a missing
+    `words_multi` collection or tenant means no expression, never an
+    error; in the theme glossary an expression enters under its grid form
+    with the same 3-15 length bound.
   - Config: `QDRANT_URL` (or `QDRANT_HOST` `127.0.0.1` + `QDRANT_PORT`
     `6333`; `QDRANT_GRPC_PORT` `6334`), `QDRANT_COLLECTION` (`words`),
     `QDRANT_DISTANCE` (`Cosine`), `QDRANT_VECTOR_SIZE` (unset → probe;
@@ -707,7 +728,7 @@ project's engineering language.
   build and "Proposer un titre", the ChatBot (`POST /api/chat`), and the
   Dictionary panel's "Définir" (unless `CLUE_LLM_BASE_URL` routes it
   elsewhere, see "LLM clue generation")/"Thématique" plus the Paraphraseur ("
-  Synonymes" makes no LLM call at all, pure Qdrant, so it's unaffected
+  Similaires" makes no LLM call at all, pure Qdrant, so it's unaffected
   either way). `_build_theme_glossary` (`backend/app.py`) takes a
   `clue_gen` parameter (defaulting to the primary `clue_generator`) so
   its two call sites can each pass the right instance.
@@ -779,6 +800,18 @@ project's engineering language.
   Populate until the user says clue grammatical agreement is good enough
   — the script exists so it can be managed cleanly, not so it can be run
   now.
+- **An error the user sees is always traced in a log** — the user's
+  rule: "il faut qu'on sache ce qui se passe dans les logs. Ce n'est pas
+  normal que l'utilisateur reçoive une erreur, et que rien n'est visible
+  dans les logs pour comprendre." Every proxy relay that gets no answer
+  goes through `frontend/server.py`'s `_backend_failure` (a WARNING in
+  `logs/frontend.log` naming the call and the error; 504
+  `backend_timeout` for a timeout, 502 `backend_unavailable` otherwise),
+  and a long back-end request logs its start and its end with its
+  duration (the Dictionnaire's similarity searches do). Any new proxy
+  route or long back-end operation must do the same. Choice made with
+  it, to revisit with the user: a connection timeout counts as
+  "unavailable", not as a timeout.
 - `frontend/server.py` proxies `/api/*` through one shared
   `httpx.AsyncClient(timeout=PROXY_TIMEOUT_S)` (30s, one value for every
   proxied route, not a per-endpoint split) and sets
@@ -1557,7 +1590,7 @@ the current defaults/behavior to know before touching this code.
   on, it applies on every palier (Java mirror in `Filler`): the user's
   rule — limit the slots a placement may choose to an "attention zone",
   fill until nothing more can be placed within it, then move it on; the
-  zone is a window of the start size, 16x16 (`INCREMENTAL_FILL_STEP`),
+  zone is a window of the start size, 21x21 (`INCREMENTAL_FILL_STEP`),
   clipped by the grid so smaller at its edges, that moves rather than
   grows — the user's rule: "au lieu d'élargir la zone d'attention,
   simplement la déplacer en conservant sa taille initiale (plus petite aux
@@ -1565,9 +1598,9 @@ the current defaults/behavior to know before touching this code.
   bas-droit est atteint, prendre toute la grille" (`Filler._in_attention`/
   `_attention_shape`/`_next_attention`, `_attention_pool`). Choices made
   with that rule, to revisit with the user: the window moves by its own
-  size (16 columns, then 16 rows down from the left edge), so windows never
+  size (21 columns, then 21 rows down from the left edge), so windows never
   overlap; free cells left in a window it moved past wait for the whole-grid
-  zone; for a grid of at most 16x16 the zone is whole from the start.
+  zone; for a grid of at most 21x21 the zone is whole from the start.
   The fallback is optional and currently off
   (`ATTENTION_FALLBACK_ENABLED` = False, the user's rule: "rendre le repli
   de la zone optionnel, désactivé pour le moment (la zone d'attention ne
@@ -1873,8 +1906,9 @@ the current defaults/behavior to know before touching this code.
   not clearly make sense out of a sentence giving it its meaning is rated
   0). Choice made with it, to revisit with the user: that judgment is a
   separate one-letter Y/N LLM call before the rating (embedded in the
-  rating prompt, the local 9B model ignored it); Qdrant does not hold
-  them.
+  rating prompt, the local 9B model ignored it). Qdrant holds them in
+  their own collection, `words_multi` (the user's request; see the Qdrant
+  entry).
 - **Multi-word expressions fill grids, with their word breaks** — the
   user's rules: the multi glossaries join grid filling (automatic and
   Interactive) with the usual usage-score + frequency selection (multi

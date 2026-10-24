@@ -4318,7 +4318,7 @@ MAX_SAME_WORD_PLACEMENTS = 1000
 # (`Filler._attention_after_unlock`). `generate_grid` passes it to every
 # attempt (`try_fill(incremental_fill=INCREMENTAL_FILL_ENABLED)`).
 INCREMENTAL_FILL_ENABLED = True
-INCREMENTAL_FILL_STEP = 16
+INCREMENTAL_FILL_STEP = 21
 # Attention-zone fallback, with incremental fill: optional, currently off
 # (the zone only moves forward along a descent). On, every node falls back on
 # entry on the first window holding a free cell (`Filler._fallback_attention`).

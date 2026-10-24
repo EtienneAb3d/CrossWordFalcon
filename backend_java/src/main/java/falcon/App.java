@@ -399,6 +399,24 @@ public final class App {
         }
     }
 
+    /** `words` of /api/similar_words and /api/synonyms: one {word, spellings, score} per word. */
+    static List<Object> similarWordsJson(Themes.Similar scored) {
+        return spellingsJson(scored.words());
+    }
+
+    /** `multi_words`: the same objects, one per "words_multi" expression. */
+    static List<Object> similarMultiJson(Themes.Similar scored) {
+        return spellingsJson(scored.expressions());
+    }
+
+    static List<Object> spellingsJson(List<Themes.ScoredSpellings> entries) {
+        List<Object> words = new ArrayList<>();
+        for (Themes.ScoredSpellings s : entries) {
+            words.add(Json.obj("word", s.word(), "spellings", new ArrayList<Object>(s.spellings()), "score", s.score()));
+        }
+        return words;
+    }
+
     static void requireLang(String lang) {
         if (!WORDLISTS.containsKey(lang)) throw http(400, "langue inconnue : " + Log.repr(lang));
     }
@@ -1811,8 +1829,19 @@ public final class App {
         return chosen;
     }
 
+    /** State of "words", with the same state of "words_multi" under `multi`. */
     static Map<String, Object> qdrantAdmin() {
-        QdrantStore store = Themes.QDRANT;
+        Map<String, Object> out = qdrantCollectionState(Themes.QDRANT);
+        out.put("multi", qdrantCollectionState(Themes.QDRANT_MULTI));
+        return out;
+    }
+
+    /** The collection an admin action targets: "words_multi" when `?multi=true`. */
+    static QdrantStore qdrantAdminStore(String multi) {
+        return List.of("true", "1", "yes", "on").contains(multi.toLowerCase(Locale.ROOT)) ? Themes.QDRANT_MULTI : Themes.QDRANT;
+    }
+
+    static Map<String, Object> qdrantCollectionState(QdrantStore store) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("base_url", store.baseUrl);
         out.put("collection", store.collection);
@@ -2130,19 +2159,25 @@ public final class App {
             String query = Py.strip(q);
             if (query.isEmpty()) throw http(400, "expression vide");
             double minScore = Math.max(0.0, Math.min(1.0, r.qDouble("min_score", Themes.THEME_MIN_SCORE)));
+            // Start, end and duration are logged: the proxy gives up after
+            // SIMILAR_PROXY_TIMEOUT_S and logs it on its side, so a search
+            // finishing later is told apart from one that failed.
+            long started = System.nanoTime();
+            Log.info("similar_words: %s (%s, min_score=%s) started", Log.repr(query), lang, minScore);
             Object[] res;
             try {
                 res = Themes.similarWordsImpl(INTERACTIVE_CLUE_GENERATOR, query, lang, minScore);
             } catch (RuntimeException e) {
                 if (!Themes.isStoreError(e)) throw e;
-                Log.warning("similar_words unavailable: %s", e.getMessage());
+                Log.warning("similar_words unavailable after %.1fs: %s", (System.nanoTime() - started) / 1e9, e.getMessage());
                 throw http(503, Json.obj("code", "similar_unavailable", "message", e.getMessage()));
             }
-            @SuppressWarnings("unchecked")
-            List<Themes.Scored> scored = (List<Themes.Scored>) res[1];
-            List<Object> words = new ArrayList<>();
-            for (Themes.Scored s : scored) words.add(Json.obj("word", s.word(), "score", s.score()));
-            return Json.obj("query", query, "lang", lang, "keywords", res[0], "words", words);
+            Themes.Similar scored = (Themes.Similar) res[1];
+            Log.info("similar_words: %s (%s) done in %.1fs: %d keywords, %d words, %d expressions", Log.repr(query), lang,
+                    (System.nanoTime() - started) / 1e9, ((List<?>) res[0]).size(), scored.words().size(),
+                    scored.expressions().size());
+            return Json.obj("query", query, "lang", lang, "keywords", res[0], "words", similarWordsJson(scored),
+                    "multi_words", similarMultiJson(scored));
         });
         w.get("/api/synonyms", r -> {
             String q = r.qRequired("q");
@@ -2151,22 +2186,26 @@ public final class App {
             String query = Py.strip(q);
             if (query.isEmpty()) throw http(400, "expression vide");
             double minScore = Math.max(0.0, Math.min(1.0, r.qDouble("min_score", Themes.THEME_MIN_SCORE)));
-            List<Themes.Scored> scored;
+            long started = System.nanoTime();
+            Log.info("synonyms: %s (%s, min_score=%s) started", Log.repr(query), lang, minScore);
+            Themes.Similar scored;
             try {
                 scored = Themes.compiledSimilarWords(List.of(query), lang, minScore);
             } catch (RuntimeException e) {
                 if (!Themes.isStoreError(e)) throw e;
-                Log.warning("synonyms unavailable: %s", e.getMessage());
+                Log.warning("synonyms unavailable after %.1fs: %s", (System.nanoTime() - started) / 1e9, e.getMessage());
                 throw http(503, Json.obj("code", "similar_unavailable", "message", e.getMessage()));
             }
-            List<Object> words = new ArrayList<>();
-            for (Themes.Scored s : scored) words.add(Json.obj("word", s.word(), "score", s.score()));
-            return Json.obj("query", query, "lang", lang, "words", words);
+            Log.info("synonyms: %s (%s) done in %.1fs: %d words, %d expressions", Log.repr(query), lang,
+                    (System.nanoTime() - started) / 1e9, scored.words().size(), scored.expressions().size());
+            return Json.obj("query", query, "lang", lang, "words", similarWordsJson(scored),
+                    "multi_words", similarMultiJson(scored));
         });
         w.get("/api/qdrant/admin", r -> qdrantAdmin());
         w.post("/api/qdrant/admin/recreate", r -> {
+            QdrantStore store = qdrantAdminStore(r.q("multi", "false"));
             try {
-                Map<String, Object> info = Themes.QDRANT.ensureCollection(null, true);
+                Map<String, Object> info = store.ensureCollection(null, true);
                 return Json.obj("ok", true, "points_count", info.getOrDefault("points_count", 0));
             } catch (RuntimeException e) {
                 if (!Themes.isStoreError(e)) throw e;
@@ -2177,9 +2216,10 @@ public final class App {
         w.post("/api/qdrant/admin/delete-tenant", r -> {
             String lang = new Body(r.json()).required("lang");
             requireLang(lang);
+            QdrantStore store = qdrantAdminStore(r.q("multi", "false"));
             try {
-                Themes.QDRANT.deleteLang(lang);
-                long remaining = Themes.QDRANT.count(lang);
+                store.deleteLang(lang);
+                long remaining = store.count(lang);
                 return Json.obj("ok", true, "lang", lang, "remaining", remaining);
             } catch (RuntimeException e) {
                 if (!Themes.isStoreError(e)) throw e;

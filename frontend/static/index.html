@@ -627,17 +627,29 @@
             <option value="it">Italiano</option>
           <option value="pt">Português</option>
           </select>
+          <!-- Usage-score statistics of the selected language(s) only (both
+               of a "<lang1>/<lang2>" pair): the #usage-stats-btn tables,
+               filtered, shown in #dictionary-stats. Localhost only, like
+               #usage-stats-btn (script.js, showUsageStatsOnLocalhost). -->
+          <button type="button" id="dictionary-stats-btn" class="tool-icon-btn toggle-btn"
+                  data-i18n-title="dictionaryStatsBtn" data-i18n-aria="dictionaryStatsBtn" hidden>
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false" fill="currentColor">
+              <rect x="3" y="12" width="4" height="9"/>
+              <rect x="10" y="4" width="4" height="17"/>
+              <rect x="17" y="8" width="4" height="13"/>
+            </svg>
+          </button>
           <input type="text" id="dictionary-input" autocomplete="off"
                  data-i18n-placeholder="dictionaryInputPlaceholder">
           <button type="submit" id="dictionary-search-btn"
                   data-i18n="dictionarySearchBtn">Chercher</button>
-          <!-- "Synonymes": direct Qdrant search on the typed word/
+          <!-- "Similaires": direct Qdrant search on the typed word/
                expression, with NO LLM call to expand the search
                (unlike "Thématique") — at the user's explicit request.
                Placed between "Chercher" and "Thématique", at the
                user's explicit request. -->
           <button type="button" id="dictionary-synonyms-btn"
-                  data-i18n="dictionarySynonymsBtn">Synonymes</button>
+                  data-i18n="dictionarySynonymsBtn">Similaires</button>
           <button type="button" id="dictionary-similar-btn"
                   data-i18n="dictionarySimilarBtn">Thématique</button>
           <!-- Asks the LLM for up to 10 independent definitions of the
@@ -750,6 +762,7 @@
         <button type="button" id="dictionary-close-btn" class="nav-btn"
                 data-i18n-aria="dictionaryCloseBtn">✕</button>
       </div>
+      <div id="dictionary-stats" hidden></div>
       <div id="dictionary-results"></div>
     </section>
 

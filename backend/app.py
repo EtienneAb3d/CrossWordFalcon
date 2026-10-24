@@ -47,7 +47,7 @@ from .clues import (
 )
 from .dictionary_lookup import search as dictionary_search_impl, grid_form as dictionary_grid_form
 from .embedder import Embedder, EmbedderError
-from .qdrant_store import QdrantStore, QdrantStoreError
+from .qdrant_store import QdrantStore, QdrantStoreError, multi_collection_name
 from .secret_store import is_valid_pseudo
 from .secret_store import verify_or_claim as verify_or_claim_pseudo_secret
 from .puz_export import PUZ_MEDIA_TYPE, render_puz
@@ -107,7 +107,7 @@ chatbot = ChatBot()
 # never _run_interactive_resume_job — see its own docstring for why a
 # themed grid's own resume path never recomputes one) and "Proposer un
 # titre" (interactive_title), the Dictionary panel's "Définir"/
-# "Thématique" (dictionary_define/_similar_words_impl — "Synonymes" is a
+# "Thématique" (dictionary_define/_similar_words_impl — "Similaires" is a
 # pure Qdrant lookup, no LLM call at all, see _synonyms_impl), the
 # Paraphraseur panel (paraphrase), and the ChatBot (chat).
 #
@@ -205,6 +205,12 @@ _SIMILAR_TIMEOUT_S = 10.0
 # own 300s default, which would let a stuck call hang the panel.
 _SIMILAR_DESCRIBE_TIMEOUT_S = 45.0
 _similar_qdrant = QdrantStore(timeout=_SIMILAR_TIMEOUT_S)
+# The multi-word expressions' collection ("words_multi", English and French
+# only), searched next to `_similar_qdrant` by every similarity search
+# (`_multi_scored_points`); a missing collection or tenant means no
+# expression, never an error.
+_similar_qdrant_multi = QdrantStore(collection=multi_collection_name(),
+                                    timeout=_SIMILAR_TIMEOUT_S)
 _similar_embedder = Embedder(timeout=_SIMILAR_TIMEOUT_S)
 
 # The scraper scripts live in the `scrapper/` package at the project root
@@ -2608,9 +2614,10 @@ async def random_theme(lang: str = "fr"):
     return {"language": lang, "hint_word": hint_word, "theme": theme}
 
 
-def _iter_scored_words(vec, lang: str, min_score: float = THEME_MIN_SCORE):
-    """Yield `(word, score)` from the `lang` tenant of the Qdrant "words"
-    collection, most-similar-first, stopping the moment a hit's score
+def _iter_scored_points(vec, lang: str, min_score: float = THEME_MIN_SCORE,
+                        store: Optional[QdrantStore] = None):
+    """Yield `(word, score, payload)` from the `lang` tenant of `store`'s
+    collection (the Qdrant "words" collection by default), most-similar-first, stopping the moment a hit's score
     drops below `min_score` (Qdrant hits are score-descending, so nothing
     later could ever qualify) or the tenant is exhausted. Pages
     THEME_LENGTH_SEARCH_PAGE points at a time via `QdrantStore.search`'s
@@ -2622,10 +2629,11 @@ def _iter_scored_words(vec, lang: str, min_score: float = THEME_MIN_SCORE):
     panel's "Thématique" button (`_similar_words_impl`, always the default
     THEME_MIN_SCORE) consume it, so they can never disagree on how the
     cutoff is applied."""
+    store = store or _similar_qdrant
     seen: set[str] = set()
     offset = 0
     while True:
-        hits = _similar_qdrant.search(
+        hits = store.search(
             vec, lang=lang, limit=THEME_LENGTH_SEARCH_PAGE, offset=offset,
         )
         if not hits:
@@ -2634,49 +2642,102 @@ def _iter_scored_words(vec, lang: str, min_score: float = THEME_MIN_SCORE):
             score = hit.get("score")
             if score is not None and score < min_score:
                 return
-            word = (hit.get("payload") or {}).get("word")
+            payload = hit.get("payload") or {}
+            word = payload.get("word")
             if word and word not in seen:
                 seen.add(word)
-                yield word, score
+                yield word, score, payload
         offset += len(hits)
         if len(hits) < THEME_LENGTH_SEARCH_PAGE:
             return  # tenant exhausted
 
 
+def _iter_scored_words(vec, lang: str, min_score: float = THEME_MIN_SCORE,
+                       store: Optional[QdrantStore] = None):
+    """`_iter_scored_points` without the payloads: `(word, score)`."""
+    for word, score, _payload in _iter_scored_points(vec, lang, min_score, store):
+        yield word, score
+
+
+def _multi_scored_points(vec, lang: str,
+                         min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float, dict]]:
+    """The "words_multi" hits of `vec` (`_iter_scored_points` on
+    `_similar_qdrant_multi`): the multi-word expressions whose similarity
+    reaches `min_score`. Empty when that collection or the language's
+    tenant is missing (only English and French have expressions) or does
+    not answer — the "words" search alone decides whether Qdrant is
+    available."""
+    try:
+        return list(_iter_scored_points(vec, lang, min_score, _similar_qdrant_multi))
+    except QdrantStoreError:
+        return []
+
+
+def _spellings(payload: dict, word: str) -> list[str]:
+    """Every accented spelling of a Qdrant point (its `;`-separated
+    `accented` field, the main one first, capitals kept), else its bare
+    `word`."""
+    parts = [a.strip() for a in (payload.get("accented") or "").split(";") if a.strip()]
+    return parts or [word]
+
+
 def _compiled_similar_words(keywords: list[str], lang: str,
-                            min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float]]:
+                            min_score: float = THEME_MIN_SCORE
+                            ) -> tuple[list[tuple[str, float, list[str]]],
+                                       list[tuple[str, float, list[str]]]]:
     """Like `_compiled_theme_words_by_length` but for the Dictionnaire
     panel: runs a Qdrant nearest-neighbor search for EVERY keyword in
-    `keywords` (embedding the bare keyword + `_iter_scored_words`) and
+    `keywords` (embedding the bare keyword + `_iter_scored_points`) and
     merges them — each word keeps its BEST score. Two differences from the
     "grid glossary" version: (1) no 3-15 length filter (a dictionary
     lookup shouldn't drop long words); (2) sorted by DESCENDING score (the
     panel's own "most similar first" order), not by length. A keyword
     whose Qdrant search fails is skipped; the error only propagates as
     long as no search has succeeded yet (Qdrant/embedder genuinely
-    unavailable -> 503)."""
-    merged: dict[str, float] = {}
+    unavailable -> 503).
+
+    Each keyword's embedding also searches the "words_multi" collection
+    (`_multi_scored_points`), merged the same way. Returns `(words,
+    expressions)`: `(word, score, spellings)` triples of the "words" and
+    "words_multi" collections, `spellings` being every accented spelling of
+    the point, capitals kept (`_spellings`: ["sur", "sûr"] for SUR,
+    ["arc-en-ciel"] for ARCENCIEL)."""
+    merged: dict[str, tuple[float, list[str]]] = {}
+    merged_multi: dict[str, tuple[float, list[str]]] = {}
+
+    def keep_best(into, word, score, payload):
+        best = into.get(word)
+        if best is None or (score is not None and (best[0] is None or score > best[0])):
+            into[word] = (score, _spellings(payload, word))
+
+    def ranked(entries):
+        return sorted(
+            ((word, score, spellings) for word, (score, spellings) in entries.items()),
+            key=lambda triple: -(triple[1] or 0.0),
+        )
+
     any_ok = False
     for kw in keywords:
         try:
             vec = _similar_embedder.embed(kw)
-            pairs = list(_iter_scored_words(vec, lang, min_score))
+            points = list(_iter_scored_points(vec, lang, min_score))
         except (QdrantStoreError, EmbedderError):
             if not any_ok:
                 raise
             continue
         any_ok = True
-        for word, score in pairs:
-            if word not in merged:
-                merged[word] = score
-            elif score is not None and (merged[word] is None or score > merged[word]):
-                merged[word] = score
-    return sorted(merged.items(), key=lambda pair: -(pair[1] or 0.0))
+        for word, score, payload in points:
+            keep_best(merged, word, score, payload)
+        for word, score, payload in _multi_scored_points(vec, lang, min_score):
+            keep_best(merged_multi, word, score, payload)
+    return ranked(merged), ranked(merged_multi)
 
 
 def _synonyms_impl(query: str, lang: str,
-                    min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float]]:
-    """"Synonymes" button of the Dictionnaire panel, at the user's
+                    min_score: float = THEME_MIN_SCORE
+                    ) -> tuple[list[tuple[str, float, list[str]]],
+                               list[tuple[str, float, list[str]]]]:
+    """"Similaires" button of the Dictionnaire panel, at the user's
     explicit request: "un bouton 'Synonymes' qui lance une recherche
     Qdrant avec le mot ou l'expression saisie (sans faire appel au LLM
     pour étendre la recherche, comme le fait Thématique)." Unlike
@@ -2689,13 +2750,16 @@ def _synonyms_impl(query: str, lang: str,
     thematic drift at all (a "cat" search stays a search for the word
     "cat" itself, never widened to its own lexical field). Same
     `min_score` threshold/same sort convention as `_similar_words_impl`,
-    so the panel can reuse the exact same rendering (`renderSimilarWords
-    Result`) with no distinction."""
+    so the panel can reuse the exact same rendering (`buildSimilarWords
+    ResultNode`) with no distinction. Returns `(words, expressions)`, see
+    `_compiled_similar_words`."""
     return _compiled_similar_words([query], lang, min_score)
 
 
 def _similar_words_impl(query: str, lang: str,
-                        min_score: float = THEME_MIN_SCORE) -> tuple[list[str], list[tuple[str, float]]]:
+                        min_score: float = THEME_MIN_SCORE
+                        ) -> tuple[list[str], list[tuple[str, float, list[str]]],
+                                   list[tuple[str, float, list[str]]]]:
     """Blocking. Applies the themed-grid-glossary principle to the
     Dictionary panel, at the user's explicit request ("appliquer le même
     principe que pour la génération du glossaire thématique : demander au
@@ -2720,12 +2784,15 @@ def _similar_words_impl(query: str, lang: str,
     most-similar-first; the score is shown to 2 decimals next to each word
     in the panel.
 
-    Returns `(keywords, scored_words)`: `keywords` is the LLM's own raw
-    expansion list, shown in the panel under "Champ lexical" ahead of the
-    Qdrant-compiled `scored_words`, shown under "Glossaire thématique" —
-    at the user's explicit request to surface both stages of the search
-    rather than only the final compiled list."""
+    Returns `(keywords, scored_words, scored_expressions)`: `keywords` is
+    the LLM's own raw expansion list, shown in the panel under "Champ
+    lexical" ahead of the Qdrant-compiled `scored_words` and
+    `scored_expressions` (the "words" and "words_multi" collections, see
+    `_compiled_similar_words`), shown side by side under "Glossaire
+    thématique" — at the user's explicit request to surface both stages of
+    the search rather than only the final compiled list."""
     desc = ""
+    llm_started = time.monotonic()
     try:
         desc = interactive_clue_generator.describe_theme(
             query, lang, timeout=_SIMILAR_DESCRIBE_TIMEOUT_S,
@@ -2745,9 +2812,10 @@ def _similar_words_impl(query: str, lang: str,
     if not keywords:
         keywords = [query]
     logger.info(
-        "similar_words: %r -> %d keywords (min_score=%s)", query, len(keywords), min_score,
+        "similar_words: %r -> %d keywords (min_score=%s, LLM expansion %.1fs)",
+        query, len(keywords), min_score, time.monotonic() - llm_started,
     )
-    return keywords, _compiled_similar_words(keywords, lang, min_score)
+    return (keywords, *_compiled_similar_words(keywords, lang, min_score))
 
 
 def _theme_words_by_length(query: str, lang: str,
@@ -2782,14 +2850,23 @@ def _theme_words_by_length(query: str, lang: str,
     `priority_words`) only ever treats this as an unordered preference
     set of *words*, so neither the score nor the length-sorted order is
     a ranking guarantee there — both exist purely for LOG_THEME/'s own
-    readability."""
+    readability.
+
+    The multi-word expressions of the "words_multi" collection
+    (`_multi_scored_points`, their bare grid form — ARCENCIEL — as `word`)
+    join the same list, under the same length bound; a grid form found in
+    both collections keeps its best score."""
     vec = _similar_embedder.embed(query)
-    words = [
-        (word, score)
-        for word, score in _iter_scored_words(vec, lang, min_score)
-        if THEME_LENGTH_MIN <= len(word) <= THEME_LENGTH_MAX
+    best: dict[str, float] = {}
+    hits = list(_iter_scored_words(vec, lang, min_score)) + [
+        (word, score) for word, score, _payload in _multi_scored_points(vec, lang, min_score)
     ]
-    return sorted(words, key=lambda pair: len(pair[0]))
+    for word, score in hits:
+        if not THEME_LENGTH_MIN <= len(word) <= THEME_LENGTH_MAX:
+            continue
+        if word not in best or (score is not None and (best[word] is None or score > best[word])):
+            best[word] = score
+    return sorted(best.items(), key=lambda pair: (len(pair[0]), -(pair[1] or 0.0)))
 
 
 def _split_keywords(text: str, lang: Optional[str] = None) -> list[str]:
@@ -2957,6 +3034,13 @@ def _whole_theme_proximity_scores(words: list[str], theme_text: str,
         return {}
     theme_vecs = [_similar_embedder.embed(tok) for tok in theme_words]
     word_vecs = _similar_qdrant.retrieve_word_vectors(lang, words)
+    missing = [w for w in words if w not in word_vecs]
+    if missing:
+        # A multi-word expression's vector lives in the "words_multi" collection.
+        try:
+            word_vecs.update(_similar_qdrant_multi.retrieve_word_vectors(lang, missing))
+        except QdrantStoreError:
+            pass
     return {
         word: max(
             sum(a * b for a, b in zip(vec, theme_vec))
@@ -2987,10 +3071,17 @@ async def similar_words(q: str, lang: str = "fr", min_score: float = THEME_MIN_S
     if not query:
         raise HTTPException(status_code=400, detail="expression vide")
     min_score = max(0.0, min(1.0, min_score))
+    # Start, end and duration are logged: the proxy gives up after
+    # SIMILAR_PROXY_TIMEOUT_S and logs it on its side, so a search finishing
+    # later is told apart from one that failed.
+    started = time.monotonic()
+    logger.info("similar_words: %r (%s, min_score=%s) started", query, lang, min_score)
     try:
-        keywords, scored = await asyncio.to_thread(_similar_words_impl, query, lang, min_score)
+        keywords, scored, scored_multi = await asyncio.to_thread(
+            _similar_words_impl, query, lang, min_score,
+        )
     except (QdrantStoreError, EmbedderError) as exc:
-        logger.warning("similar_words unavailable: %s", exc)
+        logger.warning("similar_words unavailable after %.1fs: %s", time.monotonic() - started, exc)
         raise HTTPException(
             status_code=503,
             detail={"code": "similar_unavailable", "message": str(exc)},
@@ -2999,14 +3090,24 @@ async def similar_words(q: str, lang: str = "fr", min_score: float = THEME_MIN_S
     # shown in parentheses next to each word in the Dictionnaire panel,
     # at the user's explicit request). `keywords`: the LLM's own raw
     # expansion list ("Champ lexical" in the panel), ahead of `words`
-    # ("Glossaire thématique" — the Qdrant-compiled list).
-    words = [{"word": w, "score": s} for w, s in scored]
-    return {"query": query, "lang": lang, "keywords": keywords, "words": words}
+    # ("Glossaire thématique" — the Qdrant-compiled list), one {word,
+    # spellings, score} object per word (`spellings` every accented
+    # spelling, main one first, what the panel shows). `multi_words`: the
+    # "words_multi" collection's expressions, same objects, shown in their
+    # own column next to `words`.
+    words = [{"word": w, "spellings": a, "score": s} for w, s, a in scored]
+    multi_words = [{"word": w, "spellings": a, "score": s} for w, s, a in scored_multi]
+    logger.info(
+        "similar_words: %r (%s) done in %.1fs: %d keywords, %d words, %d expressions",
+        query, lang, time.monotonic() - started, len(keywords), len(words), len(multi_words),
+    )
+    return {"query": query, "lang": lang, "keywords": keywords, "words": words,
+            "multi_words": multi_words}
 
 
 @app.get("/api/synonyms")
 async def synonyms(q: str, lang: str = "fr", min_score: float = THEME_MIN_SCORE):
-    """"Synonymes" button of the Dictionnaire panel: a direct Qdrant
+    """"Similaires" button of the Dictionnaire panel: a direct Qdrant
     search on `q` (a raw embedding, no LLM call), unlike the "Thématique"
     button (`/api/similar_words`) which first expands the search via
     `describe_theme` — see `_synonyms_impl`. Same request/response shape
@@ -3018,16 +3119,23 @@ async def synonyms(q: str, lang: str = "fr", min_score: float = THEME_MIN_SCORE)
     if not query:
         raise HTTPException(status_code=400, detail="expression vide")
     min_score = max(0.0, min(1.0, min_score))
+    started = time.monotonic()
+    logger.info("synonyms: %r (%s, min_score=%s) started", query, lang, min_score)
     try:
-        scored = await asyncio.to_thread(_synonyms_impl, query, lang, min_score)
+        scored, scored_multi = await asyncio.to_thread(_synonyms_impl, query, lang, min_score)
     except (QdrantStoreError, EmbedderError) as exc:
-        logger.warning("synonyms unavailable: %s", exc)
+        logger.warning("synonyms unavailable after %.1fs: %s", time.monotonic() - started, exc)
         raise HTTPException(
             status_code=503,
             detail={"code": "similar_unavailable", "message": str(exc)},
         )
-    words = [{"word": w, "score": s} for w, s in scored]
-    return {"query": query, "lang": lang, "words": words}
+    words = [{"word": w, "spellings": a, "score": s} for w, s, a in scored]
+    multi_words = [{"word": w, "spellings": a, "score": s} for w, s, a in scored_multi]
+    logger.info(
+        "synonyms: %r (%s) done in %.1fs: %d words, %d expressions",
+        query, lang, time.monotonic() - started, len(words), len(multi_words),
+    )
+    return {"query": query, "lang": lang, "words": words, "multi_words": multi_words}
 
 
 # ----------------------------------------------------------------------
@@ -3038,10 +3146,23 @@ async def synonyms(q: str, lang: str = "fr", min_score: float = THEME_MIN_SCORE)
 # check of its own — the gate is entirely at the proxy.
 # ----------------------------------------------------------------------
 def _qdrant_admin_impl() -> dict:
-    """Blocking: full read-only state of the Qdrant "words" collection —
+    """Blocking: full read-only state of the Qdrant "words" collection
+    (`_qdrant_collection_state`), with the same state of the "words_multi"
+    collection under `multi`."""
+    out = _qdrant_collection_state(_similar_qdrant)
+    out["multi"] = _qdrant_collection_state(_similar_qdrant_multi)
+    return out
+
+
+def _qdrant_admin_store(multi: bool) -> QdrantStore:
+    """The collection an admin action targets: "words_multi" when `multi`."""
+    return _similar_qdrant_multi if multi else _similar_qdrant
+
+
+def _qdrant_collection_state(store: QdrantStore) -> dict:
+    """Blocking: full read-only state of `store`'s collection —
     reachability, vector config, point/index counts, tenant index, and a
     per-language point count."""
-    store = _similar_qdrant
     out = {
         "base_url": store.base_url,
         "collection": store.collection,
@@ -3096,14 +3217,15 @@ class QdrantTenantRequest(BaseModel):
 
 
 @app.post("/api/qdrant/admin/recreate")
-async def qdrant_admin_recreate():
-    """Drops then recreates the "words" collection (+ re-indexes the
-    `lang` tenant). Fast, but destructive: empties every language.
-    Populating it again is then done via
-    `python -m data_builder.qdrant_populate --all`."""
+async def qdrant_admin_recreate(multi: bool = False):
+    """Drops then recreates the "words" collection — "words_multi" with
+    `?multi=true` — (+ re-indexes the `lang` tenant). Fast, but
+    destructive: empties every language. Populating it again is then done
+    via `python -m data_builder.qdrant_populate --all` (`fr en --multi`)."""
+    store = _qdrant_admin_store(multi)
     try:
         info = await asyncio.to_thread(
-            lambda: _similar_qdrant.ensure_collection(recreate=True)
+            lambda: store.ensure_collection(recreate=True)
         )
     except (QdrantStoreError, EmbedderError) as exc:
         logger.warning("qdrant_admin recreate failed: %s", exc)
@@ -3115,14 +3237,15 @@ async def qdrant_admin_recreate():
 
 
 @app.post("/api/qdrant/admin/delete-tenant")
-async def qdrant_admin_delete_tenant(req: QdrantTenantRequest):
+async def qdrant_admin_delete_tenant(req: QdrantTenantRequest, multi: bool = False):
     """Deletes every vector of one language (a tenant) from the "words"
-    collection. Fast."""
+    collection — "words_multi" with `?multi=true`. Fast."""
     if req.lang not in WORDLISTS:
         raise HTTPException(status_code=400, detail=f"langue inconnue : {req.lang!r}")
+    store = _qdrant_admin_store(multi)
     try:
-        await asyncio.to_thread(_similar_qdrant.delete_lang, req.lang)
-        remaining = await asyncio.to_thread(_similar_qdrant.count, req.lang)
+        await asyncio.to_thread(store.delete_lang, req.lang)
+        remaining = await asyncio.to_thread(store.count, req.lang)
     except (QdrantStoreError, EmbedderError) as exc:
         logger.warning("qdrant_admin delete-tenant failed: %s", exc)
         raise HTTPException(

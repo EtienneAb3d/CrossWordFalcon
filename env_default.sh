@@ -500,6 +500,7 @@ export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 # export QDRANT_PORT="6333"
 # export QDRANT_GRPC_PORT="6334"
 # export QDRANT_COLLECTION="words"
+# export QDRANT_COLLECTION_MULTI="words_multi"   # multi-word expressions (en/fr)
 # export QDRANT_DISTANCE="Cosine"
 # export QDRANT_VECTOR_SIZE="1024"          # bge-m3; unset -> probe the embed server
 # export QDRANT_ON_DISK="1"                 # vectors on disk instead of RAM — SSD storage only (slow on HDD)

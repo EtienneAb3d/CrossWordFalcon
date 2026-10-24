@@ -474,13 +474,17 @@ chaque mot, voir « Scores d'usage », est calculée juste avant) : les mots de
 `data/wordlist_<lang>_scrabble.tsv` qu'il ne contient pas
 (`python -m data_builder.qdrant_populate <lang> --recreate` — voir la
 classe `WordEmbeddingIndexer` ; `--source scrabble` n'envoie que ces
-derniers, sans réencoder le reste). `data_builder/build_all.sh` enchaîne
+derniers, sans réencoder le reste) et, en anglais et en français, la
+collection `words_multi` avec toutes les expressions de
+`data/wordlist_<lang>_multi.tsv` (`python -m data_builder.qdrant_populate
+<lang> --multi --recreate`, voir « Expressions dans Qdrant » plus bas).
+`data_builder/build_all.sh` enchaîne
 les six langues, chacune dans son journal `logs/build_<lang>.log`. Le
 pipeline n'a besoin que de la bibliothèque standard de Python, de
 `httpx`, de `curl`, de `xz` et des outils `hunspell` et `unmunch` en ligne
 de commande, qu'`Install.sh` installe. Cette sixième étape n'est pas
 essentielle au dictionnaire lui-même : elle ne sert qu'à la recherche de
-« mots similaires » de l'interface, exige que Qdrant (`./run_qdrant.sh`)
+« mots similaires » de l'interface et au glossaire thématique, exige que Qdrant (`./run_qdrant.sh`)
 et le serveur d'embeddings (`./run_embed.sh`) tournent, et se contente
 d'un avertissement si ce n'est pas le cas — les fichiers des étapes 1 à 5
 et le dictionnaire Scrabble restent le vrai produit du pipeline.
@@ -720,6 +724,28 @@ La recherche de définitions et d'analyses grammaticales de l'application
 derniers fichiers avec ceux des mots simples, une entrée d'un mot simple
 l'emportant sur une clé partagée. `build_usage_scores.py --source multi`
 note les expressions (voir « Scores d'usage »).
+
+### Expressions dans Qdrant
+
+Les expressions ont leur propre collection Qdrant, `words_multi` (nom
+réglable par `QDRANT_COLLECTION_MULTI`, `backend/qdrant_store.py`,
+`multi_collection_name`), de même forme que `words` : un locataire par
+langue, un point par MOT, le même identifiant déterministe, le même texte
+encodé (les graphies de la colonne ACCENTUE, le MOT et les lemmes,
+`_compose_embed_text`). `python -m data_builder.qdrant_populate <langue>
+--multi --recreate` (`data_builder/qdrant_populate.py`,
+`WordEmbeddingIndexer` avec `multi`) y envoie toutes les lignes de
+`data/wordlist_<langue>_multi.tsv`, chacune avec la FREQUENCE de
+`data/wordlist_<langue>_freq_multi.tsv` quand elle en a une ; une langue
+sans liste d'expressions est sautée. `build_en.sh`/`build_fr.sh` le lancent
+juste après l'alimentation de `words`, avec le même avertissement non
+bloquant. Toutes les recherches de similarité de l'application
+interrogent les deux collections : « Similaires » et « Thématique » du
+panneau Dictionnaire (une colonne chacune), le glossaire thématique
+des grilles (`backend/app.py`, `_multi_scored_points`) et les synonymes
+d'exemple des indices du ChatBot (`backend/chatbot.py`,
+`_qdrant_synonyms`) ; le panneau « Qdrant (admin) » montre et gère les
+deux collections.
 
 ## Scores d'usage
 

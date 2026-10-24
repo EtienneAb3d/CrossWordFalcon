@@ -4879,3 +4879,38 @@ end through the real running API (interactive start/step/save,
   generic 6rem) for those fields. **Visually confirmed** with
   Playwright/Chromium at 1400px: all eight fields 80px wide, "100" fits
   without scrolling, the option row still on one line.
+
+- **The Dictionnaire panel's statistics button reuses the main one's
+  look** (`#dictionary-stats-btn`, the user's request): the same blue
+  bar-chart `.tool-icon-btn`, right of `#dictionary-language`, plus
+  `.toggle-btn` so its `.active` state shows while `#dictionary-stats` is
+  open. The tables reuse the `.usage-stats-table` styles unchanged;
+  `#dictionary-stats` sits between the panel's header and its results,
+  scrolls horizontally like `#usage-stats-body` and is separated from the
+  results by a bottom `--border` rule. **Visually confirmed** with
+  Playwright/Chromium at 1500px (French alone, then Français/English).
+
+- **"Similaires" (the former "Synonymes" button) and "Thématique" show two
+  columns** (`.dictionary-similar-cols`, `script.js`'s
+  `buildSimilarColumnsNode`), at the user's explicit request: "Mots
+  simples" (the "words" Qdrant collection) then "Multi-mots" (the
+  "words_multi" one), every entry shown by its accented spelling(s),
+  capitals kept, all of them joined by " / " when there are several
+  ("sirène (0.85)", "abale / abalé (0.84)", "arc-en-ciel (0.86)"), each headed by a small bold grey
+  `.dictionary-similar-col-title` (0.8rem, `#777`, reusing the
+  `usageStatsColSingle`/`usageStatsColMulti` labels) over its usual
+  `.dictionary-similar-line`, or the `.dictionary-empty` "no results" line.
+  Same flex split and `--border` left divider as `.bilingual-col`, so a
+  bilingual lookup reads as four columns (two per language half). The
+  button's label is "Similaires" (en "Similar", de "Ähnliche", es
+  "Similares", it "Simili", pt "Semelhantes"), same id/i18n key
+  (`dictionarySynonymsBtn`). No new token.
+
+- **Qdrant admin panel: one section per collection**
+  (`renderQdrantAdminCollection`), "words" then "words_multi", each opened
+  by its monospace endpoint line and holding its own stats grid,
+  per-language table and "Recréer la collection" button; the second
+  section is set off by a `--border` rule above its endpoint line
+  (`.qdrant-admin-endpoint ~ .qdrant-admin-endpoint`). The dashboard link
+  and the two populate commands close the panel. No new token.
+  **Visually confirmed** with Playwright/Chromium at 1400×1000.

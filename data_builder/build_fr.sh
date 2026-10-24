@@ -55,12 +55,15 @@ $PY data_builder/build_usage_scores.py "$LANG_CODE" \
 $PY data_builder/build_usage_scores.py "$LANG_CODE" --source out \
     || echo "WARNING: build_usage_scores --source out skipped/failed — start the LLM (./run_llm.sh), then: $PY data_builder/build_usage_scores.py $LANG_CODE --source out"
 
-step "11/11  qdrant_populate $LANG_CODE  (best effort — needs ./run_qdrant.sh + ./run_embed.sh running)"
+step "11/11  qdrant_populate $LANG_CODE  (words + words_multi; best effort — needs ./run_qdrant.sh + ./run_embed.sh running)"
 # Non-fatal: the wordlist/gloss artefacts above are the real deliverables; feeding
-# the Qdrant "words" collection is a downstream nicety. --recreate wipes this
-# language's tenant first, since the wordlist it mirrors was just rebuilt.
+# the Qdrant "words" and "words_multi" collections is a downstream nicety.
+# --recreate wipes this language's tenant first, since the wordlist it mirrors
+# was just rebuilt.
 $PY -m data_builder.qdrant_populate "$LANG_CODE" --recreate \
     || echo "WARNING: qdrant_populate skipped/failed — start Qdrant (./run_qdrant.sh) and the embed server (./run_embed.sh), then: $PY -m data_builder.qdrant_populate $LANG_CODE --recreate"
+$PY -m data_builder.qdrant_populate "$LANG_CODE" --multi --recreate \
+    || echo "WARNING: qdrant_populate --multi skipped/failed — start Qdrant (./run_qdrant.sh) and the embed server (./run_embed.sh), then: $PY -m data_builder.qdrant_populate $LANG_CODE --multi --recreate"
 
 step "DONE — French data pipeline complete"
 ls -la data/wordlist_fr_freq.tsv data/wordlist_fr_scrabble.tsv data/wordlist_fr_hunspell.tsv data/wordlist_fr_multi.tsv data/wordlist_fr_freq_multi.tsv data/gloss_dictionary/fr_glosses_multi.jsonl data/inflection/fr_inflect_multi.jsonl data/gloss_dictionary/fr_glosses.jsonl \

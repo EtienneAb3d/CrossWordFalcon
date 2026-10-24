@@ -515,6 +515,16 @@ those was showing.
   grid is on screen it follows whichever word you hover or click in the
   grid (so on a bilingual grid it switches between the two languages as
   you move around).
+- Right of it, a bar-chart icon button (`#dictionary-stats-btn`, tooltip
+  "Statistiques des scores d'usage de cette langue" / "Usage-score
+  statistics of this language"), **only on localhost** like the main
+  statistics button, shows or hides, under the panel's header, the two
+  tables of "Usage-score statistics" (below) for the selected language
+  only — both languages for a combined "<language 1>/<language 2>"
+  option —, the per-length table keeping only the lengths where that
+  language has words. The tables follow the selector as it changes
+  (`#dictionary-stats`; `frontend/static/script.js`,
+  `renderDictionaryStats`, `usageStatsForLanguages`).
 - Type an expression in the field (`#dictionary-input`) and use one of four buttons:
   - **Chercher / Search** (`#dictionary-search-btn`) — lists every word
     sharing the same root as what you typed (accents and case ignored),
@@ -532,12 +542,19 @@ those was showing.
     A second grey line lists the levels whose grids can use the word
     ("Niveau : Facile, Moyen, Difficile", or "aucun"). (`frontend/static/script.js`, `renderDictionaryResult`; `GET
     /api/dictionary`).
-  - **Synonymes / Synonyms** (`#dictionary-synonyms-btn`,
+  - **Similaires / Similar** (`#dictionary-synonyms-btn`,
     `frontend/static/script.js`, `buildSimilarWordsResultNode`; `GET
     /api/synonyms`) — a direct vector search on exactly what you typed,
     with no help from the language model: every word close enough in
-    *meaning*, most similar first, on one comma-separated line with its
-    score in parentheses. Faster than **Thématique** and more literal. The
+    *meaning*, most similar first, each written in its usual spelling
+    (accents, and capitals where the word has them: "sirène", "Airaines";
+    every spelling when there are several: "abale / abalé") with its
+    score in parentheses, in two columns — **Mots simples** (single words) and **Multi-mots**
+    (multi-word expressions such as "arc-en-ciel", English and French
+    only; a language without expressions shows "no results" there)
+    (`buildSimilarColumnsNode`). With two languages selected, each
+    language's half has its own two columns, four in all. Faster than
+    **Thématique** and more literal. The
     **Précision thématique** field sets the cutoff here too. Needs the
     vector database and the embedding server (a short "unavailable"
     message otherwise).
@@ -547,10 +564,12 @@ those was showing.
     glossary: the language model first expands what you typed into a short
     keyword list (nouns, verbs, adjectives…), then a separate vector
     search is run for each keyword and the results are merged. You get
-    *every* word whose *meaning* is close enough to any of those keywords,
-    most similar first, on a single line separated by commas, each with
-    its similarity score in parentheses (e.g. `CHAT (0.89)`, two
-    decimals). "Close enough" is set by the **Précision thématique** field
+    *every* word and multi-word expression whose *meaning* is close enough
+    to any of those keywords, most similar first, each with its
+    similarity score in parentheses (e.g. `chat (0.89)`, two decimals), in
+    the same two columns and spellings as **Similaires** (single words,
+    then multi-word expressions, e.g. `arc-en-ciel (0.86)`).
+    "Close enough" is set by the **Précision thématique** field
     above — there is no limit on how many words come back, only that
     cutoff — so a broad expression can return many words and a very
     specific one only a handful. Because the model expands the term first,
@@ -558,7 +577,10 @@ those was showing.
     its own way (use **Chercher** for a literal same-root lookup). It uses
     a separate vector database (Qdrant), the embedding server and the LLM;
     if any isn't running, or the word index hasn't been built yet, it
-    shows a short "unavailable" message instead.
+    shows a short "unavailable" message instead. When the server takes
+    longer than a minute to answer (a broad term, a busy machine), both
+    this button and **Similaires** say instead that the server did not
+    answer in time (`errorBackendTimeout`).
   - **Définir / Define** (`#dictionary-define-btn`, `frontend/static/
     script.js`, `renderDefineResult`; `GET /api/dictionary/define`) —
     asks the same LLM that writes grid clues to write up to 10
@@ -703,24 +725,28 @@ requests by `frontend/server.py`, `_require_localhost`). **✕**
 A **"Qdrant (admin)"** button appears in the action row **only when the
 page is opened on the machine that runs the app itself** (localhost) —
 never from another computer on the network. It opens a small maintenance
-panel for the vector database behind the Dictionary's "Synonymes" and
+panel for the vector database behind the Dictionary's "Similaires" and
 "Thématique" buttons and the theme glossary
 (`frontend/static/script.js`, `renderQdrantAdmin`; `GET /api/qdrant/admin`,
 gated to loopback requests by `frontend/server.py`, `_require_localhost`):
 
-- The current state: whether Qdrant is reachable, the vector size /
-  distance / storage mode, its status, total and indexed point counts,
-  segment count, whether the per-language index is in place, and a count
-  of stored words per language.
+- One section per collection — **words** (single words), then
+  **words_multi** (multi-word expressions, English and French) —
+  (`renderQdrantAdminCollection`), each showing its current state: the
+  vector size / distance / storage mode, its status, total and indexed
+  point counts, segment count, whether the per-language index is in
+  place, and a count of stored entries per language. Whether Qdrant is
+  reachable at all is shown once, at the top.
 - **"Ouvrir le tableau de bord Qdrant" / "Open the Qdrant dashboard"** —
   a link to Qdrant's own built-in web console (in a new tab).
-- **"Recréer la collection" / "Recreate the collection"** — drops and
-  rebuilds the collection (asks for confirmation first; this deletes
-  every stored word of every language).
+- **"Recréer la collection" / "Recreate the collection"**, in each
+  section — drops and rebuilds that collection (asks for confirmation
+  first; this deletes every stored entry of every language in it).
 - **"Vider" / "Clear"** on each language row — deletes just that
-  language's stored words (with confirmation).
-- A reminder of the command that refills the database:
-  `python -m data_builder.qdrant_populate --all`.
+  language's entries from that collection (with confirmation).
+- A reminder of the commands that refill the database:
+  `python -m data_builder.qdrant_populate --all` (words) and
+  `python -m data_builder.qdrant_populate fr en --multi` (expressions).
 - **Rafraîchir / Refresh** (`#qdrant-admin-refresh-btn`) re-reads the
   state; **✕** (`#qdrant-admin-close-btn`) closes the panel.
 
@@ -888,12 +914,12 @@ word list is shown in bold dark-cyan letters; magenta and green win over
 dark cyan on a cell shared with a crossing theme or challenge word
 (`frontend/static/script.js`, `renderAttemptPreview`).
 A bold dashed frame marks the "attention
-zone", where the search may currently place its next word: a 16x16
+zone", where the search may currently place its next word: a 21x21
 window, smaller along the right and bottom edges of the grid. It starts
-at the top-left corner (a grid of at most 16x16 is therefore whole from
+at the top-left corner (a grid of at most 21x21 is therefore whole from
 the start, with no frame); each time nothing more fits inside, the window
-moves 16 columns to the right, keeping its size, and past the right edge
-it starts again at the left edge 16 rows down. Once the bottom-right
+moves 21 columns to the right, keeping its size, and past the right edge
+it starts again at the left edge 21 rows down. Once the bottom-right
 window is done, the zone becomes the whole grid. The zone only moves
 forward as the search goes deeper (an optional fallback onto the first
 window still holding an empty cell exists but is currently off). The frame
@@ -1830,7 +1856,7 @@ slot that needs a real dictionary word. On every cycle, the fill grows
 from the top-left corner of the grid ("incremental fill", an option that
 is currently on — off, the whole grid is open to every placement): only
 slots with a still-empty cell inside an "attention zone" may take the
-next word. That zone is a 16x16 window (smaller along the right and
+next word. That zone is a 21x21 window (smaller along the right and
 bottom edges), starting at the top-left corner (the whole grid when the
 grid is no larger); once nothing more can be placed
 there — after first clearing any impossible or set-aside slot that still
@@ -1838,8 +1864,8 @@ has an empty cell inside the zone, together with the words crossing it, to
 give the zone another chance (like every such clearing during the search,
 this wipes the undo history: the search restarts from the cleared grid as
 its new starting point, so its memory never piles up from one clearing to
-the next) — the window moves 16 columns to the right, keeping its size;
-past the right edge it starts again at the left edge 16 rows down; once the
+the next) — the window moves 21 columns to the right, keeping its size;
+past the right edge it starts again at the left edge 21 rows down; once the
 bottom-right window is done, the zone becomes the whole grid, which is
 when cells left empty in earlier windows are taken up again; the zone only
 moves forward as the search goes deeper — an optional fallback, currently

@@ -2195,6 +2195,17 @@ button:disabled {
   padding: 0.15rem 0.3rem;
 }
 
+/* Usage-score statistics of the Dictionnaire's selected language(s)
+   (#dictionary-stats-btn, script.js's renderDictionaryStats): the
+   #usage-stats tables, between the panel's header and its results. */
+#dictionary-stats {
+  overflow-x: auto;
+  font-size: 0.85rem;
+  margin: 0 0 0.75rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
 /* External AI buttons (index.html, #dictionary-ai-buttons and
    #paraphrase-ai-buttons, class .ai-buttons): the service's official logo
    on a small white tile (the logos keep their own brand colors, which a
@@ -2303,6 +2314,32 @@ button:disabled {
   margin: 0;
   font-size: 0.9rem;
   line-height: 1.5;
+}
+
+/* "Similaires"/"Thématique": two side-by-side columns, single words
+   ("words" collection) then multi-word expressions ("words_multi") — four
+   in a bilingual lookup, two per language half. Same divider as
+   .bilingual-col. */
+.dictionary-similar-cols {
+  display: flex;
+  gap: 1rem;
+}
+
+.dictionary-similar-col {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.dictionary-similar-col + .dictionary-similar-col {
+  border-left: 1px solid var(--border);
+  padding-left: 1rem;
+}
+
+.dictionary-similar-col-title {
+  margin: 0 0 0.3rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #777;
 }
 
 /* "Définir": up to 10 LLM-generated definitions, one per line (unlike
@@ -2520,6 +2557,14 @@ button:disabled {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.8rem;
   color: #777;
+}
+
+/* Each collection's section ("words", then "words_multi") starts with its
+   endpoint line; the second one is set off by a rule above it. */
+.qdrant-admin-endpoint ~ .qdrant-admin-endpoint {
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
 }
 
 .qdrant-admin-empty {

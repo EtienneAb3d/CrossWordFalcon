@@ -223,14 +223,14 @@ plusieurs signaux) :
 - **Zone d'attention** (*remplissage incrémental*, optionnel, activé ;
   désactivé, toute la grille est dans la zone d'attention) : à chaque
   palier, la partie de la grille où une pose est permise : une **fenêtre**
-  de 16 lignes × 16 colonnes (`INCREMENTAL_FILL_STEP`), rognée par la
+  de 21 lignes × 21 colonnes (`INCREMENTAL_FILL_STEP`), rognée par la
   grille, donc plus petite aux bords droit et bas (`Filler._in_attention`) ;
   seul un emplacement ayant une case encore libre dans cette fenêtre peut
   recevoir une pose. Elle part du coin haut gauche
-  (`Filler._initial_attention`) ; une grille d'au plus 16 × 16 est entière
+  (`Filler._initial_attention`) ; une grille d'au plus 21 × 21 est entière
   dès le départ. Chaque fois que plus rien ne peut être posé dans la
-  fenêtre, elle se **déplace** de 16 colonnes vers la droite en gardant sa
-  taille ; au-delà du bord droit, elle repart du bord gauche 16 lignes plus
+  fenêtre, elle se **déplace** de 21 colonnes vers la droite en gardant sa
+  taille ; au-delà du bord droit, elle repart du bord gauche 21 lignes plus
   bas (`Filler._attention_shape`, `Filler._next_attention`). Une fois la
   fenêtre du coin bas droit traitée, la zone est toute la grille. Le
   **repli** est optionnel et actuellement désactivé

@@ -76,6 +76,7 @@ public final class ChatBot {
     // SENTENCES section (see corpusSentences).
     static final int CLUE_SENTENCE_COUNT = 3;
     private static volatile QdrantStore synonymStore;
+    private static volatile QdrantStore synonymMultiStore;
     private static volatile Embedder synonymEmbedder;
     private static final java.util.regex.Pattern COMBINING_RE = java.util.regex.Pattern.compile("\\p{Mn}+");
     private static final java.util.regex.Pattern ROUTE_RE = java.util.regex.Pattern.compile(
@@ -376,8 +377,8 @@ public final class ChatBot {
      * Example synonyms of the answer for the CLUE prompt, as {base form,
      * definition}: neighbours over one search per grid form, inflected form
      * and base form, scored by their best search score and by their
-     * similarity to the base form's definitions (see chatbot.py
-     * _qdrant_synonyms). Empty when Qdrant or the embedding server is
+     * similarity to the base form's definitions, in the "words" and
+     * "words_multi" collections (see chatbot.py _qdrant_synonyms). Empty when Qdrant or the embedding server is
      * unavailable.
      */
     static List<String[]> qdrantSynonyms(Object word, String language) {
@@ -415,11 +416,19 @@ public final class ChatBot {
         Map<String, double[]> vectors;
         try {
             if (synonymStore == null) {
-                synonymStore = new QdrantStore(CLUE_SYNONYM_TIMEOUT);
+                synonymMultiStore = new QdrantStore(CLUE_SYNONYM_TIMEOUT, QdrantStore.multiCollectionName());
                 synonymEmbedder = new Embedder(null, null, null, CLUE_SYNONYM_TIMEOUT);
+                synonymStore = new QdrantStore(CLUE_SYNONYM_TIMEOUT);
             }
             for (String query : queries) {
-                for (Object hit : synonymStore.search(synonymEmbedder.embed(query), language, CLUE_SYNONYM_POOL, 0)) {
+                double[] vector = synonymEmbedder.embed(query);
+                List<Object> hits = new ArrayList<>(synonymStore.search(vector, language, CLUE_SYNONYM_POOL, 0));
+                try {
+                    hits.addAll(synonymMultiStore.search(vector, language, CLUE_SYNONYM_POOL, 0));
+                } catch (QdrantStore.QdrantStoreError e) {
+                    // no "words_multi" collection or tenant: no expression
+                }
+                for (Object hit : hits) {
                     Object payload = Json.get(hit, "payload");
                     Object wo = Json.get(payload, "word");
                     Object sc = Json.get(hit, "score");
@@ -472,6 +481,16 @@ public final class ChatBot {
             List<String> ws = new ArrayList<>();
             for (String[] c : candidates) ws.add(c[0]);
             vectors = synonymStore.retrieveWordVectors(language, ws, 2000);
+            List<String> missing = new ArrayList<>();
+            for (String w : ws) if (!vectors.containsKey(w)) missing.add(w);
+            if (!missing.isEmpty()) {
+                // A multi-word expression's vector lives in the "words_multi" collection.
+                try {
+                    vectors.putAll(synonymMultiStore.retrieveWordVectors(language, missing, 2000));
+                } catch (QdrantStore.QdrantStoreError e) {
+                    // no expression vector
+                }
+            }
         } catch (QdrantStore.QdrantStoreError | Embedder.EmbedderError e) {
             Log.warning("chat: Qdrant synonyms unavailable for %s: %s", Log.repr(answer), e.getMessage());
             return List.of();

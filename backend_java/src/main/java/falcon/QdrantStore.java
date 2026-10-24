@@ -20,6 +20,7 @@ public final class QdrantStore {
     public static final String DEFAULT_QDRANT_HOST = "127.0.0.1";
     public static final String DEFAULT_QDRANT_PORT = "6333";
     public static final String DEFAULT_COLLECTION = "words";
+    public static final String DEFAULT_MULTI_COLLECTION = "words_multi";
     public static final String DEFAULT_DISTANCE = "Cosine";
     public static final double DEFAULT_TIMEOUT = 30.0;
     public static final String TENANT_FIELD = "lang";
@@ -43,14 +44,24 @@ public final class QdrantStore {
     }
 
     public QdrantStore(double timeout) {
+        this(timeout, null);
+    }
+
+    /** `collection` null = QDRANT_COLLECTION ("words"). */
+    public QdrantStore(double timeout, String collection) {
         String url = Env.getNonEmpty("QDRANT_URL", null);
         if (url == null) {
             url = "http://" + Env.get("QDRANT_HOST", DEFAULT_QDRANT_HOST) + ":" + Env.get("QDRANT_PORT", DEFAULT_QDRANT_PORT);
         }
         this.baseUrl = url.replaceAll("/+$", "");
-        this.collection = Env.get("QDRANT_COLLECTION", DEFAULT_COLLECTION);
+        this.collection = collection != null ? collection : Env.get("QDRANT_COLLECTION", DEFAULT_COLLECTION);
         this.apiKey = Env.get("QDRANT_API_KEY", "");
         this.timeout = timeout;
+    }
+
+    /** Name of the multi-word expressions' collection (QDRANT_COLLECTION_MULTI). */
+    public static String multiCollectionName() {
+        return Env.get("QDRANT_COLLECTION_MULTI", DEFAULT_MULTI_COLLECTION);
     }
 
     /** uuid5(namespace, "lang:word") — identical ids to the Python side. */
