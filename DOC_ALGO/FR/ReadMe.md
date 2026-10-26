@@ -540,8 +540,8 @@ le style **Groupé/aligné** (`grouped`) dont il fixe les trois phases
     1. jusqu'à la part « Aéré » (`DEFAULT_PATTERN_MIX` : **30 %**), les règles **Aéré** —
        les cases les plus éloignées d'abord, jamais deux cases noires côte
        à côte, les bords comptant comme des cases noires — en interdisant
-       en plus toute case qui laisserait un emplacement de 2 lettres
-       (`forbid_short_runs`) ;
+       en plus toute case qui laisserait un emplacement de 2 lettres ou
+       une case n'appartenant qu'à un seul mot (`forbid_short_runs`) ;
     2. jusqu'aux parts « Aéré » + « Groupé » cumulées (**70 %** par défaut), les règles
        Groupé/aligné ci-dessous, mais deux cases noires côte à côte
        restent interdites et l'on garde de préférence les cases ayant une
@@ -558,14 +558,16 @@ le style **Groupé/aligné** (`grouped`) dont il fixe les trois phases
     mélange 99/1/0 relance avec les règles Aéré (`make_pattern`,
     `_draw_to_target`) ;
   - une case n'est valide que si elle ne laisse, à côté d'elle (avec ses
-    images), **aucun emplacement de 2 lettres** : chaque suite de cases
-    non noires qui la touche, horizontale ou verticale, fait 1 case ou au
-    moins `GROUPED_MIN_SLOT_LENGTH` (**3**) cases (`_leaves_short_run`) ;
-    le pré-remplissage applique la même règle, et accepte en dernier
-    recours une case collée à une case noire — c'est ce qui lui permet de
-    couper un emplacement de 2 lettres hérité du nettoyage précédent
-    (aucun mot de 2 lettres, donc aucun candidat), dont chaque case touche
-    presque toujours la case noire qui le borne ;
+    images), **aucun emplacement de 2 lettres ni aucune case
+    n'appartenant qu'à un seul mot** : chaque suite de cases non noires
+    qui la touche, horizontale ou verticale, fait au moins
+    `GROUPED_MIN_SLOT_LENGTH` (**3**) cases — une suite d'une seule case
+    est refusée comme une suite de 2, sa case n'étant croisée que par un
+    mot (`_leaves_short_run`) ; le pré-remplissage applique la même règle,
+    et accepte en dernier recours une case collée à une case noire ; il ne
+    peut donc pas couper un emplacement de 2 lettres hérité du nettoyage
+    précédent (noircir l'une de ses cases laisserait l'autre seule), qui
+    reste un emplacement bloqué pour le nettoyage suivant ;
   - une case n'est valide que si elle (ou l'une de ses images) ne forme
     **aucune ligne de plus de `GROUPED_MAX_BLACK_LINE` (4) cases noires**
     côte à côte, horizontale ou verticale (`backend/crossword_gen.py`,
@@ -607,7 +609,7 @@ fois, une case noire de ce tirage qui touche à la fois cette zone (la plus
 petite d'abord) et une autre zone blanche. Le retrait est annulé quand
 aucune case ne permet d'ouvrir la zone, quand la grille n'est plus
 structurellement valide (exigence de 1 case) ou quand il crée un
-emplacement de 2 lettres. Le tirage est ensuite relancé jusqu'à
+emplacement de 2 lettres ou une case n'appartenant qu'à un seul mot. Le tirage est ensuite relancé jusqu'à
 l'objectif, les cases retirées n'étant plus candidates ; au plus
 `GROUPED_DECLUMP_MAX_ROUNDS` (**10**) tours (`make_pattern`,
 `_declump_black_cells`).
@@ -616,10 +618,11 @@ En style « Groupé/aligné », le dictionnaire de la grille ne contient
 **aucun mot de moins de `GROUPED_MIN_SLOT_LENGTH` (3) lettres**
 (`style_index`, appliqué par `generate_grid` et au lexique d'une session
 Interactive ; un « Mot Défi » de 2 lettres est ignoré). Un emplacement de
-2 lettres ne peut pas non plus naître d'un nettoyage de fin de palier :
-toute modification de case noire faite par le nettoyage (case ajoutée ou
-rouverte, « reprise telle quelle » comme nettoyage complet) qui touche un
-emplacement de 2 lettres est annulée avec ses images de symétrie, puis,
+2 lettres, ni une case n'appartenant qu'à un seul mot, ne peut pas non
+plus naître d'un nettoyage de fin de palier : toute modification de case
+noire faite par le nettoyage (case ajoutée ou rouverte, « reprise telle
+quelle » comme nettoyage complet) qui touche une suite de moins de 3
+cases (1 case comprise) est annulée avec ses images de symétrie, puis,
 si cela ne suffit pas, avec tout le bloc de cases voisines modifiées, et
 en dernier recours toutes les modifications du nettoyage le sont ; une
 annulation n'est gardée que si elle diminue le nombre de ces emplacements
@@ -628,11 +631,15 @@ n'est jamais renoircie (`_undo_short_run_changes`, `_short_runs`).
 Un emplacement de 2 lettres, quelle que soit l'étape qui le crée
 (optimisations, réaménagements, édition à la main), n'a de toute façon
 aucun candidat : c'est un emplacement bloqué, que le pré-remplissage
-coupe, que le nettoyage répare comme tout autre, et qu'aucune grille
+coupe quand c'est possible, que le nettoyage répare comme tout autre, et qu'aucune grille
 réussie ne peut contenir — `minimize_black_squares` refuse lui aussi
 tout retrait qui en ferait apparaître un, chaque mot devant exister dans
 le dictionnaire. En mode Interactif, « Suivant » n'y pose jamais de mot
-et un mot de 2 lettres tapé à la main est signalé invalide.
+et un mot de 2 lettres tapé à la main est signalé invalide. Une case
+n'appartenant qu'à un seul mot n'est en revanche interdite qu'aux
+mécanismes de cases noires du motif et du nettoyage ci-dessus : les
+optimisations, les réaménagements en cours de recherche et l'édition à
+la main peuvent encore en créer.
 
 Dans l'interface, choisir le français comme langue règle le mélange sur
 100/0/0, toute autre langue sur 30/40/30 ; l'anglais sélectionne en plus
@@ -664,8 +671,9 @@ touchent un bord (leur longueur n'est pas contrainte). S'il y en a plus de
 `SHORT_SLOT_MAX_COUNT` (**10**), les cases noires posées par ce tirage qui
 les délimitent (la case juste avant ou juste après l'emplacement) sont
 retirées (avec leurs images par symétrie, dans un ordre aléatoire ; en
-style « grouped », un retrait qui laisserait un emplacement de 2 lettres
-passant par une case libérée est annulé, `_reopen_bounding_blacks`), puis
+style « grouped », un retrait qui laisserait, passant par une case
+libérée, un emplacement de 2 lettres ou une suite d'une seule case est
+annulé, `_reopen_bounding_blacks`), puis
 le tirage est relancé jusqu'à retrouver l'objectif ; le
 compte est refait après chaque relance, au plus
 `SHORT_SLOT_REDRAW_MAX_ROUNDS` (**10**) fois, après quoi la grille est

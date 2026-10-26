@@ -1145,11 +1145,21 @@ the current defaults/behavior to know before touching this code.
   the user's rule, American style only; choice made with it, to revisit
   with the user: "less than 3 letters" means rows/columns 0-2 from each
   border, and like the 4-cell line rule it binds the ratio draw and
-  pre-fill, not the later repairs and reshapes). Choices made with
-  these rules, to revisit with the user: the neighbourhood preference is
+  pre-fill, not the later repairs and reshapes); no black cell leaving a
+  single-cell white run, i.e. a cell belonging to one word only (the
+  user's rule: forbid black cells creating 1-cell slots, on top of the
+  2-letter ones; `_leaves_short_run`, `_short_runs`, `_run_through` checks
+  all reject runs of 1 or 2 cells). Choices made with these rules, to
+  revisit with the user: the neighbourhood preference is
   applied before the crossing-length window (applied after it, it almost never
-  mattered: that window leaves 1-2 cells per draw); a 1-cell white zone is
-  still allowed. The 2-letter rule applies to every situation of the
+  mattered: that window leaves 1-2 cells per draw); the single-cell rule
+  binds the black-cell mechanisms the 2-letter rule binds (ratio draw,
+  pre-fill, de-clumping, short-slot reopening, end-of-palier cleanup
+  guard), not the minimization, in-search reshapes or hand editing, and
+  pre-fill can therefore no longer cut a 2-letter slot (blackening one of
+  its cells leaves the other alone). Measured on 20 patterns 30/40/30 at
+  18 %: single-cell runs drop from 7.8 to 0 per 15x15 and 12.6 to 0 per
+  21x21, the black rate unchanged. The 2-letter rule applies to every situation of the
   grouped style (the user's rule: "appliquer l'interdiction de mots de 2
   lettres à toutes les situations (uniquement en mode Américain)"): the
   grid's lexicon drops every word shorter than 3 letters (`style_index`),

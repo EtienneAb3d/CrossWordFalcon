@@ -183,9 +183,9 @@ full again whenever a new generation or an Interactive session starts.
   other as possible and never side by side. Any other mix gives an
   American pattern: the Sparse share of the black rate is placed
   the Sparse way (far apart, never side by side, but never leaving a
-  2-letter word), the Grouped share preferably diagonal to a black cell
+  2-letter word nor a letter belonging to a single word), the Grouped share preferably diagonal to a black cell
   (still never side by side), then the Aligned share as close as possible to
-  the black cells already there, preferably side by side with one, never placing two black cells side by side parallel to a
+  the black cells already there, preferably side by side with one, never leaving a letter that belongs to a single word, never placing two black cells side by side parallel to a
   border within its first 3 rows or columns, as in an American crossword — once the black rate is reached, a black cell
   touching black cells or the grid border on three sides or more is taken off (opening any
   area this closes) and the draw tops the rate back up; a grid in this style never holds a 2-letter word
@@ -1372,8 +1372,13 @@ real letter. Both update after every edit.
   empties the display area below the buttons (status message, "Vérifier"
   report, candidate lists) and removes the matching red/orange
   highlighting from the grid, without changing any letter.
-- In every one of these four lists ("Mots", "Croisés", "Début", "Fin"),
-  a letter shown underlined in red within a candidate word means placing
+- Every one of these four lists ("Mots", "Croisés", "Début", "Fin")
+  writes each word in its original spelling — accents, capitals, and the
+  spaces, hyphens and apostrophes of a multi-word expression ("arc-en-ciel",
+  "quart de finale") — so inflected forms and word breaks are visible at
+  a glance; clicking it still places its bare letters in the grid
+  (`frontend/static/script.js`, `appendWordLetters`).
+- In every one of these four lists, a letter shown underlined in red within a candidate word means placing
   that word would leave the crossing emplacement through that letter with
   no real dictionary word left to complete it (unless a still-available
   "Mots Défi (personnalisation)" word could still fill it, which is never

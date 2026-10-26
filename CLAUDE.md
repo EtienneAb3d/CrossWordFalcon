@@ -772,7 +772,7 @@ own rng drawn from the parent's in candidate order:
    `Generator.Params.patternMix`, `DEFAULT_PATTERN_MIX` (30, 40, 30) when
    `None`; `pattern_style_of_mix`: 100/0/0 is "airy", any other mix
    "grouped", Java `Grids.patternStyleOfMix`): up to the airy share
-   (40) % with these airy rules plus the grouped style's no-2-letter-slot
+   (40) % with these airy rules plus the grouped style's no-short-run
    check (`_place_black_cells(forbid_short_runs=True)`); up to the airy
    plus grouped shares (80) % with the grouped rules below but
    side-by-side black cells refused at every level and the cells with
@@ -789,11 +789,12 @@ own rng drawn from the parent's in candidate order:
    `_worker_pattern_style`, `GenerateRequest.pattern_style`,
    `PATTERN_STYLES` airy/grouped; Java `Grids.PATTERN_STYLES`,
    `Generator.Params.patternStyle`) a cell (with its images) is valid
-   only if no white run touching it is 2 cells long
+   only if no white run touching it is 1 or 2 cells long — no 2-letter
+   slot, and no cell belonging to a single word
    (`_leaves_short_run`, `GROUPED_MIN_SLOT_LENGTH` 3, pre-fill too — which, under this style,
    accepts an adjacent cell as a last resort (`forbid_adjacency=not
-   grouped`), so it can cut a 2-letter slot a cleanup left (each of its
-   cells touches its bounding black cell); Java
+   grouped`) but so cannot cut a 2-letter slot a cleanup left, either cell
+   blackened leaving the other alone; Java
    `Grids.leavesShortRun`) and if it builds no straight line of more than
    `GROUPED_MAX_BLACK_LINE` (4) adjacent black cells, across or down
    (`_makes_long_black_line`, pre-fill too; Java `Grids.makesLongBlackLine`),
@@ -835,7 +836,7 @@ own rng drawn from the parent's in candidate order:
    `Generator.cleanCandidate`) pass their output pattern through
    `_undo_short_run_changes` (Java `Grids.undoShortRunChanges`), which
    undoes the cleanup's black/white changes lying in or bounding a run of
-   `_short_runs` — the cell with its changed images, else its whole block
+   `_short_runs` (every white run of 1 or 2 cells) — the cell with its changed images, else its whole block
    of side-adjacent changed cells, else every change — keeping an undo only
    if it lowers the number of such runs without turning the grid invalid,
    never re-blackening a cell holding a confirmed letter. Once the grouped draw reaches
@@ -845,7 +846,7 @@ own rng drawn from the parent's in candidate order:
    `GROUPED_MAX_BLACK_NEIGHBORS` (2) sides (3 or 4) on a black cell or the grid border (`_black_neighbor_count`), opens any white
    zone this closes by whitening a drawn black cell touching it and another
    zone (smallest zone first), undoes a removal it cannot open or that
-   leaves the grid invalid or a 2-letter slot, and the draw runs again to
+   leaves the grid invalid or a white run of 1 or 2 cells, and the draw runs again to
    the target without the cells taken off, at most
    `GROUPED_DECLUMP_MAX_ROUNDS` (10) rounds; when the selected runs hold
    no valid cell, the percentage grows by 5 (more runs, same order, every
@@ -865,7 +866,7 @@ own rng drawn from the parent's in candidate order:
    the seed's and pre-fill's never), each with its images, in shuffled
    order (`_reopen_bounding_blacks`, Java `Grids.reopenBoundingBlacks`;
    under "grouped", a reopening after which a run through one of its
-   cells is 2 cells long is undone), which become candidates again, and
+   cells is 1 or 2 cells long is undone), which become candidates again, and
    the draw resumes to the target — at most `SHORT_SLOT_REDRAW_MAX_ROUNDS`
    (10) rounds, the grid then kept as it is. This ratio-based draw never
    considers a cell of the four corner 2x2 squares (`_in_corner_square`/
@@ -2594,8 +2595,10 @@ carrying a letter, and structurally valid at `min_interior_free=1`;
 `INTERACTIVE_SLOT_CANDIDATES_LIMIT` applies per length rather than once
 over the combined pool, so short lengths never crowd out longer ones).
 All three of these candidate-listing functions return every word wrapped
-as `{"word", "unsafe"}` (`_words_with_unsafe_positions`) instead of a bare
-string — `unsafe` is the sorted list of 0-indexed positions within that
+as `{"word", "accented", "unsafe"}` (`_words_with_unsafe_positions`,
+Java `Interactive.wordsWithUnsafe`) instead of a bare string — `accented`
+is the word's main spelling read from its wordlist row (`word_forms`,
+the word itself when it has none), `unsafe` the sorted list of 0-indexed positions within that
 word where placing it would NEWLY make a crossing slot impossible to fill
 (`_unsafe_letter_positions`: per position, compares that crossing slot's
 own real-dictionary domain, minus words already used elsewhere, before vs.
@@ -2608,8 +2611,13 @@ own `InteractiveCandidatesRequest`/`InteractiveCrossingRequest`/
 `InteractiveBoundaryRequest.challenge_words`, converted via `challenge_
 word_grid_form` exactly like `/step`/`/impossible`) purely for this
 exemption. `frontend/static/script.js`'s `appendWordLetters()` (shared by
-the "Mots"/"Croisés"/"Début"/"Fin" panels) renders each candidate one
-`<span>` per letter, adding `.interactive-word-unsafe-letter` (red
+the "Mots"/"Croisés"/"Début"/"Fin" panels) writes each candidate in its
+`accented` spelling (accents, capitals, an expression's spaces — written
+non-breaking —, hyphens and apostrophes) whenever it folds back to the
+word letter by letter (`spellingCharGridLetters`: accents stripped,
+uppercase, "ß" -> "SS", separators standing for no letter), else in the
+grid form, each character marked by the grid positions it stands for,
+adding `.interactive-word-unsafe-letter` (red
 underline, `--error`) to a flagged position — composing with the existing
 `.interactive-word-highlight-letter` (blue, the selected-cell letter) when
 both land on the same letter. Each of these four buttons' own results

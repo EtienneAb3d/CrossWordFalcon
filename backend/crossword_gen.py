@@ -1017,16 +1017,17 @@ def _near_border_parallel_pair(grid, rows, cols, cells):
     return False
 
 
-# Shortest slot the "grouped" pattern style lets a black cell it places
-# leave next to it (`_leaves_short_run`): no 2-letter slot.
+# Shortest white run the "grouped" pattern style lets a black cell it
+# places leave next to it (`_leaves_short_run`): no 2-letter slot, and no
+# single cell belonging to one word only.
 GROUPED_MIN_SLOT_LENGTH = 3
 
 
 def _leaves_short_run(grid, rows, cols, cells):
     """True when a white run (maximal run of non-black cells, across or
-    down) touching one of `cells` — black in `grid` — is a slot shorter
-    than `GROUPED_MIN_SLOT_LENGTH` (at least 2 cells long; a single cell is
-    no slot)."""
+    down) touching one of `cells` — black in `grid` — is shorter than
+    `GROUPED_MIN_SLOT_LENGTH`: a 2-letter slot, or a single cell, which
+    then belongs to one word only."""
     for r, c in cells:
         for dr, dc in ((0, 1), (0, -1), (1, 0), (-1, 0)):
             length = 0
@@ -1034,7 +1035,7 @@ def _leaves_short_run(grid, rows, cols, cells):
             while 0 <= rr < rows and 0 <= cc < cols and grid[rr][cc] != BLACK:
                 length += 1
                 rr, cc = rr + dr, cc + dc
-            if 2 <= length < GROUPED_MIN_SLOT_LENGTH:
+            if 1 <= length < GROUPED_MIN_SLOT_LENGTH:
                 return True
     return False
 
@@ -1115,8 +1116,8 @@ def _declump_black_cells(grid, rows, cols, row_black, col_black, drawn, symmetry
     `drawn` touching both that zone (the smallest closed one first) and
     another white zone. A removal is undone when no such cell exists, when
     the grid is no longer structurally valid (`min_interior_free=1`) or when
-    a run through a whitened cell is a slot shorter than
-    `GROUPED_MIN_SLOT_LENGTH`. Updates `grid`, the counts and `drawn` in
+    a run through a whitened cell is shorter than
+    `GROUPED_MIN_SLOT_LENGTH` (a single cell included). Updates `grid`, the counts and `drawn` in
     place; returns the cells turned white."""
     whitened = set()
 
@@ -1165,7 +1166,7 @@ def _declump_black_cells(grid, rows, cols, row_black, col_black, drawn, symmetry
                 grid[gr][gc] = WHITE
             step.extend(opener)
         if kept and (not is_structurally_valid(grid, rows, cols, min_interior_free=1) or any(
-                2 <= _run_through(grid, rows, cols, gr, gc, dr, dc) < GROUPED_MIN_SLOT_LENGTH
+                _run_through(grid, rows, cols, gr, gc, dr, dc) < GROUPED_MIN_SLOT_LENGTH
                 for gr, gc in step for dr, dc in ((0, 1), (1, 0)))):
             kept = False
         if not kept:
@@ -1182,7 +1183,7 @@ def _declump_black_cells(grid, rows, cols, row_black, col_black, drawn, symmetry
 
 def _short_runs(grid, rows, cols):
     """Every white run (maximal run of non-black cells) shorter than
-    `GROUPED_MIN_SLOT_LENGTH` but at least 2 cells long, across (row by
+    `GROUPED_MIN_SLOT_LENGTH`, a single cell included, across (row by
     row) then down (column by column), as `(cells, bounds)`: its cells and
     the cells right before and after it inside the grid."""
     out = []
@@ -1195,7 +1196,7 @@ def _short_runs(grid, rows, cols):
             start = c
             while c < cols and grid[r][c] != BLACK:
                 c += 1
-            if 2 <= c - start < GROUPED_MIN_SLOT_LENGTH:
+            if c - start < GROUPED_MIN_SLOT_LENGTH:
                 bounds = [(r, b) for b in (start - 1, c) if 0 <= b < cols]
                 out.append(([(r, k) for k in range(start, c)], bounds))
     for c in range(cols):
@@ -1207,7 +1208,7 @@ def _short_runs(grid, rows, cols):
             start = r
             while r < rows and grid[r][c] != BLACK:
                 r += 1
-            if 2 <= r - start < GROUPED_MIN_SLOT_LENGTH:
+            if r - start < GROUPED_MIN_SLOT_LENGTH:
                 bounds = [(b, c) for b in (start - 1, r) if 0 <= b < rows]
                 out.append(([(k, c) for k in range(start, r)], bounds))
     return out
@@ -1216,7 +1217,8 @@ def _short_runs(grid, rows, cols):
 def _undo_short_run_changes(before, after, rows, cols, confirmed, symmetry=None):
     """The "grouped" pattern style's guard on an end-of-palier cleanup
     (`_clean_continue_candidate`, `_clean_retry_candidate_task`): the
-    cleanup may not leave a slot shorter than `GROUPED_MIN_SLOT_LENGTH`.
+    cleanup may not leave a white run shorter than `GROUPED_MIN_SLOT_LENGTH`
+    (a 2-letter slot, or a single cell belonging to one word only).
     For each such run (`_short_runs` order), each black/white change from
     `before` to `after` lying in it or bounding it (row-major order) is
     undone with its symmetry images the cleanup changed too
@@ -1534,8 +1536,8 @@ def _reopen_bounding_blacks(grid, rows, cols, row_black, col_black, bounding, rn
     """The short-slot limit's reopening (`make_pattern`): turns the black
     cells of `bounding` white, in shuffled order, each with its images of
     `bounding` (`_black_group`). Under the "grouped" pattern style, a
-    reopening after which a run through one of its cells is a slot shorter
-    than `GROUPED_MIN_SLOT_LENGTH` is undone. Updates `grid` and the counts
+    reopening after which a run through one of its cells is shorter than
+    `GROUPED_MIN_SLOT_LENGTH` (a single cell included) is undone. Updates `grid` and the counts
     in place; returns the cells turned white, in that order."""
     order = sorted(bounding)
     rng.shuffle(order)
@@ -1547,7 +1549,7 @@ def _reopen_bounding_blacks(grid, rows, cols, row_black, col_black, bounding, rn
                  if g in bounding and grid[g[0]][g[1]] == BLACK]
         for r, c in group:
             grid[r][c] = WHITE
-        if grouped and any(2 <= _run_through(grid, rows, cols, r, c, dr, dc) < GROUPED_MIN_SLOT_LENGTH
+        if grouped and any(_run_through(grid, rows, cols, r, c, dr, dc) < GROUPED_MIN_SLOT_LENGTH
                            for r, c in group for dr, dc in ((0, 1), (1, 0))):
             for r, c in group:
                 grid[r][c] = BLACK
@@ -11423,14 +11425,19 @@ def _words_with_unsafe_positions(words, cells, crossing_map, index, known, used_
                                   challenge_words):
     """Wraps a sorted word list (as returned so far by `interactive_slot_
     candidates`/`interactive_crossing_words`/`interactive_boundary_
-    candidates`) into `{"word", "unsafe"}` dicts, `unsafe` being the
-    sorted list of `_unsafe_letter_positions` for that candidate — the
-    shape the "Mots"/"Croisés"/"Début"/"Fin" panels use to underline, in
-    red, whichever of a candidate's own letters would create a new
-    impossible crossing slot if placed."""
+    candidates`) into `{"word", "accented", "unsafe"}` dicts, `accented`
+    being the word's main spelling read from its wordlist row (`word_
+    forms`: accents, capitals, a multi-word expression's separators — the
+    word itself when it has no row), `unsafe` the sorted list of
+    `_unsafe_letter_positions` for that candidate — the shape the
+    "Mots"/"Croisés"/"Début"/"Fin" panels use to show each candidate in
+    its own spelling and underline, in red, whichever of its letters would
+    create a new impossible crossing slot if placed."""
+    length_index = index.for_cells(cells) if len(cells) >= 2 else {}
     return [
         {
             "word": w,
+            "accented": word_forms(length_index.get(len(w)), w)[0],
             "unsafe": sorted(
                 _unsafe_letter_positions(cells, w, crossing_map, index, known, used_words,
                                           challenge_words)

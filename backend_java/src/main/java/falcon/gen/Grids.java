@@ -463,7 +463,7 @@ public final class Grids {
      * under the limit. A white zone this closes off is opened by whitening, one group at a time, a black cell of
      * {@code drawn} touching both that zone (the smallest closed one first) and another white zone. A removal is
      * undone when no such cell exists, when the grid is no longer structurally valid (minInteriorFree 1) or when a run
-     * through a whitened cell is a slot shorter than {@link #GROUPED_MIN_SLOT_LENGTH}. Returns the cells turned white.
+     * through a whitened cell is shorter than {@link #GROUPED_MIN_SLOT_LENGTH} (a single cell included). Returns the cells turned white.
      */
     static Set<Integer> declumpBlackCells(char[][] grid, int rows, int cols, int[] rowBlack, int[] colBlack,
                                           Set<Integer> drawn, String symmetry) {
@@ -523,7 +523,7 @@ public final class Grids {
                 for (int g : step) {
                     for (int[] d : new int[][]{{0, 1}, {1, 0}}) {
                         int length = runThrough(grid, rows, cols, Cells.r(g), Cells.c(g), d[0], d[1]);
-                        if (length >= 2 && length < GROUPED_MIN_SLOT_LENGTH) {
+                        if (length < GROUPED_MIN_SLOT_LENGTH) {
                             kept = false;
                             break outer;
                         }
@@ -591,7 +591,7 @@ public final class Grids {
     }
 
     /**
-     * Every white run shorter than {@link #GROUPED_MIN_SLOT_LENGTH} but at least 2 cells long, across (row by row) then
+     * Every white run shorter than {@link #GROUPED_MIN_SLOT_LENGTH}, a single cell included, across (row by row) then
      * down (column by column), as {cells, bounds}: its cells and the cells right before and after it inside the grid
      * (mirrors _short_runs).
      */
@@ -606,7 +606,7 @@ public final class Grids {
                 }
                 int start = c;
                 while (c < cols && grid[r][c] != BLACK) c++;
-                if (c - start >= 2 && c - start < GROUPED_MIN_SLOT_LENGTH) {
+                if (c - start < GROUPED_MIN_SLOT_LENGTH) {
                     int[] cells = new int[c - start];
                     for (int k = start; k < c; k++) cells[k - start] = Cells.of(r, k);
                     List<Integer> bounds = new ArrayList<>();
@@ -625,7 +625,7 @@ public final class Grids {
                 }
                 int start = r;
                 while (r < rows && grid[r][c] != BLACK) r++;
-                if (r - start >= 2 && r - start < GROUPED_MIN_SLOT_LENGTH) {
+                if (r - start < GROUPED_MIN_SLOT_LENGTH) {
                     int[] cells = new int[r - start];
                     for (int k = start; k < r; k++) cells[k - start] = Cells.of(k, c);
                     List<Integer> bounds = new ArrayList<>();
@@ -726,13 +726,16 @@ public final class Grids {
         return after;
     }
 
-    /** Shortest slot the "grouped" pattern style lets a black cell it places leave next to it: no 2-letter slot. */
+    /**
+     * Shortest white run the "grouped" pattern style lets a black cell it places leave next to it: no 2-letter slot,
+     * and no single cell belonging to one word only.
+     */
     static final int GROUPED_MIN_SLOT_LENGTH = 3;
 
     /**
      * True when a white run (maximal run of non-black cells, across or down) touching one of {@code cells} — black in
-     * {@code grid} — is a slot shorter than {@link #GROUPED_MIN_SLOT_LENGTH} (at least 2 cells; a single cell is no
-     * slot).
+     * {@code grid} — is shorter than {@link #GROUPED_MIN_SLOT_LENGTH}: a 2-letter slot, or a single cell, which then
+     * belongs to one word only.
      */
     static boolean leavesShortRun(char[][] grid, int rows, int cols, List<Integer> cells) {
         int[][] directions = {{0, 1}, {0, -1}, {1, 0}, {-1, 0}};
@@ -745,7 +748,7 @@ public final class Grids {
                     rr += d[0];
                     cc += d[1];
                 }
-                if (length >= 2 && length < GROUPED_MIN_SLOT_LENGTH) return true;
+                if (length >= 1 && length < GROUPED_MIN_SLOT_LENGTH) return true;
             }
         }
         return false;
@@ -957,8 +960,8 @@ public final class Grids {
     /**
      * The short-slot limit's reopening ({@link #makePattern}): turns the black cells of {@code bounding} white, in
      * shuffled order, each with its images of {@code bounding} ({@link #blackGroup}). Under the "grouped" pattern
-     * style, a reopening after which a run through one of its cells is a slot shorter than
-     * {@link #GROUPED_MIN_SLOT_LENGTH} is undone. Updates {@code grid} and the counts in place; returns the cells
+     * style, a reopening after which a run through one of its cells is shorter than
+     * {@link #GROUPED_MIN_SLOT_LENGTH} (a single cell included) is undone. Updates {@code grid} and the counts in place; returns the cells
      * turned white, in that order.
      */
     static List<Integer> reopenBoundingBlacks(char[][] grid, int rows, int cols, int[] rowBlack, int[] colBlack,
@@ -978,7 +981,7 @@ public final class Grids {
                 for (int g : group) {
                     for (int[] d : new int[][] {{0, 1}, {1, 0}}) {
                         int length = runThrough(grid, rows, cols, Cells.r(g), Cells.c(g), d[0], d[1]);
-                        if (length >= 2 && length < GROUPED_MIN_SLOT_LENGTH) shortRun = true;
+                        if (length < GROUPED_MIN_SLOT_LENGTH) shortRun = true;
                     }
                 }
             }

@@ -8688,26 +8688,52 @@ function challengeWordsForBoundary(cells, side) {
   });
 }
 
-// Builds one candidate word's letters inside `item`, one <span> per
-// letter — shared by the "Mots"/"Croisés"/"Début"/"Fin" panels so both
-// the selected-cell highlight (blue, `highlightPos`, -1 for none) and the
-// "would create an impossible crossing slot" warning (red underline,
-// `unsafeSet`, 0-indexed positions from the backend's own `unsafe` field)
-// can be marked independently — and together, when they land on the same
-// letter. A letter needing neither stays a plain text node, like before
-// this warning existed.
-function appendWordLetters(item, word, highlightPos, unsafeSet) {
-  for (let pos = 0; pos < word.length; pos++) {
+// Grid letters (A-Z, possibly none or several) one character of a word's
+// original spelling stands for — the wordlist's MOT convention: accents
+// stripped, uppercase, "ß" -> "SS", a ligature as its two letters, a
+// separator (space, hyphen, apostrophe) standing for none.
+function spellingCharGridLetters(ch) {
+  return ch.normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/ß/g, "ss").replace(/[œŒ]/g, "oe").replace(/[æÆ]/g, "ae")
+    .toUpperCase().replace(/[^A-Z]/g, "");
+}
+
+// Builds one candidate word inside `item`, written in its original
+// spelling (`accented`: accents, capitals, a multi-word expression's
+// separators) whenever that spelling folds back to `word` letter by
+// letter, else in `word` itself — shared by the "Mots"/"Croisés"/"Début"/
+// "Fin" panels. Each character is marked by the grid positions it stands
+// for, so both the selected-cell highlight (blue, `highlightPos`, -1 for
+// none) and the "would create an impossible crossing slot" warning (red
+// underline, `unsafeSet`, 0-indexed grid positions from the backend's own
+// `unsafe` field) land on the right character, independently or together.
+// A character needing neither stays a plain text node; a space is written
+// as a non-breaking one, so an expression never wraps inside the list.
+function appendWordLetters(item, word, highlightPos, unsafeSet, accented) {
+  let chars = Array.from(word).map((ch, pos) => ({ ch, positions: [pos] }));
+  if (accented && accented !== word) {
+    let pos = 0;
+    const mapped = Array.from(accented.replace(/ /g, "\u00a0")).map((ch) => {
+      const n = spellingCharGridLetters(ch).length;
+      const positions = [];
+      for (let k = 0; k < n; k++) positions.push(pos++);
+      return { ch, positions };
+    });
+    if (Array.from(accented).map(spellingCharGridLetters).join("") === word) chars = mapped;
+  }
+  for (const { ch, positions } of chars) {
     const classes = [];
-    if (pos === highlightPos) classes.push("interactive-word-highlight-letter");
-    if (unsafeSet && unsafeSet.has(pos)) classes.push("interactive-word-unsafe-letter");
+    if (positions.includes(highlightPos)) classes.push("interactive-word-highlight-letter");
+    if (unsafeSet && positions.some((p) => unsafeSet.has(p))) {
+      classes.push("interactive-word-unsafe-letter");
+    }
     if (classes.length) {
       const mark = document.createElement("span");
       mark.className = classes.join(" ");
-      mark.textContent = word[pos];
+      mark.textContent = ch;
       item.appendChild(mark);
     } else {
-      item.appendChild(document.createTextNode(word[pos]));
+      item.appendChild(document.createTextNode(ch));
     }
   }
 }
@@ -8798,9 +8824,9 @@ function renderInteractiveWords(themeWords, otherWords, slot, atCell) {
   const all = [
     ...challengeWords.map((word) => ({ word, cls: "interactive-word-challenge", unsafe: [] })),
     ...(themeWords || []).filter((entry) => !challengeSet.has(entry.word))
-      .map((entry) => ({ word: entry.word, cls: "interactive-word-theme", unsafe: entry.unsafe })),
+      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "interactive-word-theme", unsafe: entry.unsafe })),
     ...(otherWords || []).filter((entry) => !challengeSet.has(entry.word))
-      .map((entry) => ({ word: entry.word, cls: "", unsafe: entry.unsafe })),
+      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "", unsafe: entry.unsafe })),
   ];
   if (!all.length) return false;
   // Which position in `slot.cells` is the cell that was selected (shown
@@ -8834,13 +8860,13 @@ function renderInteractiveWords(themeWords, otherWords, slot, atCell) {
   header.appendChild(label);
   header.appendChild(createInteractiveWordsEyeToggle(block));
   block.appendChild(header);
-  all.forEach(({ word, cls, unsafe }) => {
+  all.forEach(({ word, accented, cls, unsafe }) => {
     const item = document.createElement("span");
     item.className = cls ? `interactive-word-item ${cls}` : "interactive-word-item";
     item.tabIndex = 0;
     const unsafeSet = new Set(unsafe);
     if (unsafeSet.size) item.classList.add("interactive-word-item-unsafe");
-    appendWordLetters(item, word, highlightIndex, unsafeSet);
+    appendWordLetters(item, word, highlightIndex, unsafeSet, accented);
     const pick = () => placeWord(word);
     item.addEventListener("click", pick);
     item.addEventListener("keydown", (e) => {
@@ -8961,7 +8987,7 @@ function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
       ...challengeWords.map((word) => ({ word, unsafe: [], challenge: true })),
       ...words.filter((entry) => !challengeSet.has(entry.word)),
     ];
-    ordered.forEach(({ word, unsafe, challenge }) => {
+    ordered.forEach(({ word, accented, unsafe, challenge }) => {
       const item = document.createElement("span");
       item.className = challenge
         ? "interactive-word-item interactive-word-challenge"
@@ -8969,7 +8995,7 @@ function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
       item.tabIndex = 0;
       const unsafeSet = new Set(unsafe);
       if (unsafeSet.size) item.classList.add("interactive-word-item-unsafe");
-      appendWordLetters(item, word, highlightPos, unsafeSet);
+      appendWordLetters(item, word, highlightPos, unsafeSet, accented);
       const pick = () => placeWord(cells, word);
       item.addEventListener("click", pick);
       item.addEventListener("keydown", (e) => {
@@ -9097,9 +9123,9 @@ function renderInteractiveBoundary(themeWords, otherWords, slot, side, label) {
   const all = [
     ...challengeWords.map((word) => ({ word, cls: "interactive-word-challenge", unsafe: [] })),
     ...(themeWords || []).filter((entry) => !challengeSet.has(entry.word))
-      .map((entry) => ({ word: entry.word, cls: "interactive-word-theme", unsafe: entry.unsafe })),
+      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "interactive-word-theme", unsafe: entry.unsafe })),
     ...(otherWords || []).filter((entry) => !challengeSet.has(entry.word))
-      .map((entry) => ({ word: entry.word, cls: "", unsafe: entry.unsafe })),
+      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "", unsafe: entry.unsafe })),
   ];
   if (!all.length) return false;
   const placeWord = (word) => {
@@ -9131,13 +9157,13 @@ function renderInteractiveBoundary(themeWords, otherWords, slot, side, label) {
   header.appendChild(labelEl);
   header.appendChild(createInteractiveWordsEyeToggle(block));
   block.appendChild(header);
-  all.forEach(({ word, cls, unsafe }) => {
+  all.forEach(({ word, accented, cls, unsafe }) => {
     const item = document.createElement("span");
     item.className = cls ? `interactive-word-item ${cls}` : "interactive-word-item";
     item.tabIndex = 0;
     const unsafeSet = new Set(unsafe);
     if (unsafeSet.size) item.classList.add("interactive-word-item-unsafe");
-    appendWordLetters(item, word, -1, unsafeSet);
+    appendWordLetters(item, word, -1, unsafeSet, accented);
     const pick = () => placeWord(word);
     item.addEventListener("click", pick);
     item.addEventListener("keydown", (e) => {

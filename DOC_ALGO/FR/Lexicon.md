@@ -257,11 +257,11 @@ plusieurs signaux) :
   sont posées le plus loin possible les unes des autres, jamais côte à
   côte. Tout autre mélange, style **Groupé/aligné** (30/40/30 par
   défaut) : la part « Aéré » du taux est posée selon les règles Aéré
-  (sans laisser de mot de 2 lettres), la part « Groupé » de préférence en
+  (sans laisser de mot de 2 lettres ni de case n'appartenant qu'à un seul mot), la part « Groupé » de préférence en
   diagonale d'une case noire (jamais côte à côte), la part « Aligné » au plus
   près des cases noires déjà posées, de préférence collés à une autre case
   noire par un côté,
-  sans dépasser 4 cases noires alignées, sans aucun mot de 2 lettres (absents de son dictionnaire), et le long d'un bord
+  sans dépasser 4 cases noires alignées, sans aucun mot de 2 lettres (absents de son dictionnaire) ni case noire laissant une case qui n'appartient qu'à un seul mot, et le long d'un bord
   seulement en dernier recours ; une fois le taux atteint, une case noire
   touchant par au moins 3 de ses côtés une case noire ou le bord de la grille est retirée et le tirage
   relancé (dégroupage). Le français règle le mélange sur 100/0/0, les

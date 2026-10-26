@@ -659,9 +659,13 @@ public final class Interactive {
     static List<Object> wordsWithUnsafe(List<String> words, int[] cells, Map<Integer, int[]> crossingMap, DualIndex index,
                                         Map<Integer, Character> known, Set<String> used, Set<String> challenge) {
         List<Object> out = new ArrayList<>();
+        Map<Integer, LenIndex> lengthIndex = cells.length >= 2 ? index.forCells(cells) : Map.of();
         for (String w : words) {
-            out.add(new LinkedHashMap<>(Map.of("word", w, "unsafe",
-                    new ArrayList<>(unsafeLetterPositions(cells, w, crossingMap, index, known, used, challenge)))));
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("word", w);
+            entry.put("accented", Words.wordForms(lengthIndex.get(w.length()), w)[0]);
+            entry.put("unsafe", new ArrayList<>(unsafeLetterPositions(cells, w, crossingMap, index, known, used, challenge)));
+            out.add(entry);
         }
         return out;
     }
