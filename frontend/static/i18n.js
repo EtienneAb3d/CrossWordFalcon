@@ -14,7 +14,7 @@
 // blocks here in the same change — see the project-best-practices SKILL.
 const I18N = {
   fr: {
-    pageTitle: "CrossWordFalcon — générateur de mots croisés",
+    pageTitle: "CrossWordFalcon — créateur/générateur de mots croisés",
     languageLabel: "Langue",
     bilingualLanguageLabel: "Bilingue",
     widthLabel: "Largeur",
@@ -479,7 +479,7 @@ const I18N = {
     stats: (words, black, ratio) => `${words} mots placés — ${black} cases noires (${ratio}%)`,
   },
   en: {
-    pageTitle: "CrossWordFalcon — crossword generator",
+    pageTitle: "CrossWordFalcon — crossword creator/generator",
     languageLabel: "Language",
     bilingualLanguageLabel: "Bilingual",
     widthLabel: "Width",
@@ -933,7 +933,7 @@ const I18N = {
     stats: (words, black, ratio) => `${words} words placed — ${black} black squares (${ratio}%)`,
   },
   de: {
-    pageTitle: "CrossWordFalcon — Kreuzworträtsel-Generator",
+    pageTitle: "CrossWordFalcon — Kreuzworträtsel-Ersteller/-Generator",
     languageLabel: "Sprache",
     bilingualLanguageLabel: "Zweisprachig",
     widthLabel: "Breite",
@@ -1389,7 +1389,7 @@ const I18N = {
     stats: (words, black, ratio) => `${words} Wörter platziert — ${black} schwarze Felder (${ratio}%)`,
   },
   es: {
-    pageTitle: "CrossWordFalcon — generador de crucigramas",
+    pageTitle: "CrossWordFalcon — creador/generador de crucigramas",
     languageLabel: "Idioma",
     bilingualLanguageLabel: "Bilingüe",
     widthLabel: "Ancho",
@@ -1845,7 +1845,7 @@ const I18N = {
     stats: (words, black, ratio) => `${words} palabras colocadas — ${black} casillas negras (${ratio}%)`,
   },
   it: {
-    pageTitle: "CrossWordFalcon — generatore di cruciverba",
+    pageTitle: "CrossWordFalcon — creatore/generatore di cruciverba",
     languageLabel: "Lingua",
     bilingualLanguageLabel: "Bilingue",
     widthLabel: "Larghezza",
@@ -2302,7 +2302,7 @@ const I18N = {
   },
 
   pt: {
-    pageTitle: "CrossWordFalcon — gerador de palavras cruzadas",
+    pageTitle: "CrossWordFalcon — criador/gerador de palavras cruzadas",
     languageLabel: "Idioma",
     bilingualLanguageLabel: "Bilíngue",
     widthLabel: "Largura",

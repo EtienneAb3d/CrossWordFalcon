@@ -51,7 +51,7 @@ does not reappear).
 
 ## Header
 
-- The logo and page title sit at the top left (`#logo`, `h1`). The same logo is the browser tab's icon and the home-screen icon when the page is bookmarked on a phone (`frontend/static/index.html`, `favicon.ico`/`apple-touch-icon.png`).
+- The logo and page title sit at the top left (`#logo`, `h1`); the title, "crossword creator/generator", names the two ways of making a grid: by hand ("Interactif", the creator) or automatically ("Automatique", the generator). The same logo is the browser tab's icon and the home-screen icon when the page is bookmarked on a phone (`frontend/static/index.html`, `favicon.ico`/`apple-touch-icon.png`).
 - The **pseudo** chosen in the welcome panel is shown centered between
   the title and the right-hand badges (`#user-pseudo`). While no pseudo
   is set it shows a "set a nickname" label instead. Clicking it reopens
