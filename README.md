@@ -546,7 +546,9 @@ looking words up in the chosen language:
   model to widen what you typed into a list of related keywords, so it
   brings back a broader, theme-like vocabulary (a few seconds slower).
   Both of these need two optional extra services running — a local
-  embedding server (`./run_embed.sh`) and the Qdrant vector database
+  embedding server (`./run_embed.sh`, on the processor by default, or on
+  an NVIDIA graphics card through vLLM — much faster, see the commented
+  "vLLM" embedding block of `env_default.sh`) and the Qdrant vector database
   (`./Install_qdrant.sh` once, then `./run_qdrant.sh`), with the word
   index built by `python -m data_builder.qdrant_populate --all` (plus
   `python -m data_builder.qdrant_populate fr en --multi` for the

@@ -20,6 +20,18 @@
 # Which GGUF to serve is entirely env.sh's (or env_default.sh's) call —
 # EMBED_GGUF_REPO / EMBED_GGUF_FILE / EMBED_MODEL — no hardcoded default
 # lives here (same no-duplication rule as run_llm.sh).
+#
+# EMBED_ENGINE=vllm serves the model with vLLM on one NVIDIA card instead
+# (`vllm serve --runner pooling`, CUDA only), from the .venv-vllm venv
+# run_vllm.sh already uses (see its header to install it).
+# EMBED_VLLM_MODEL is the model's regular (safetensors) Hugging Face repo,
+# e.g. Qwen/Qwen3-Embedding-0.6B — the same model as the GGUF, so the
+# vectors already stored in Qdrant stay valid; it is served under the
+# EMBED_MODEL name, so backend/embedder.py needs no change. The card is
+# EMBED_GPU_INDEX, and EMBED_VLLM_GPU_MEMORY_UTILIZATION its share of the
+# card's memory: vLLM refuses to start unless that much is free, so the
+# LLM's own VLLM_GPU_MEMORY_UTILIZATION/SGLANG_MEM_FRACTION_STATIC must
+# leave it room.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -32,38 +44,87 @@ fi
 
 EMBED_HOST="${EMBED_HOST:-127.0.0.1}"
 EMBED_PORT="${EMBED_PORT:-3003}"
+EMBED_ENGINE="${EMBED_ENGINE:-llamacpp}"
 MODELS_DIR="models"
 LOG_DIR="logs"
 EMBED_LOG="$LOG_DIR/embed.log"
 
-GGUF_REPO="${EMBED_GGUF_REPO:?EMBED_GGUF_REPO not set — check env.sh (or env_default.sh)}"
-GGUF_FILE="${EMBED_GGUF_FILE:?EMBED_GGUF_FILE not set — check env.sh (or env_default.sh)}"
 MODEL_ALIAS="${EMBED_MODEL:?EMBED_MODEL not set — check env.sh (or env_default.sh)}"
-MODEL_PATH="$MODELS_DIR/$GGUF_FILE"
 
 # Context length — bge-m3 supports up to 8192, but embedding short strings
 # (crossword words, clues, short sentences) never needs that; 2048 keeps
 # the per-request compute buffer small. Raise EMBED_N_CTX in env.sh if you
 # embed long documents.
 EMBED_N_CTX="${EMBED_N_CTX:-2048}"
+
+mkdir -p "$MODELS_DIR" "$LOG_DIR"
+
+# Stops whatever listens on the embed port, with its whole process tree
+# (vLLM runs its engine in a child process). LISTEN socket only, never a
+# mere client connection — same rule as run_Falcon.sh's stop_port.
+kill_tree() {
+    local pid="$1" child
+    for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+        kill_tree "$child"
+    done
+    kill "$pid" 2>/dev/null || true
+}
+pids=$(lsof -ti tcp:"$EMBED_PORT" -sTCP:LISTEN 2>/dev/null || true)
+if [ -n "$pids" ]; then
+    echo "Stopping embed server already running on port $EMBED_PORT (pid: $pids)"
+    for pid in $pids; do kill_tree "$pid"; done
+    for _ in $(seq 1 30); do
+        pids=$(lsof -ti tcp:"$EMBED_PORT" -sTCP:LISTEN 2>/dev/null || true)
+        [ -z "$pids" ] && break
+        sleep 1
+    done
+    [ -n "$pids" ] && kill -9 $pids 2>/dev/null || true
+fi
+
+if [ "$EMBED_ENGINE" = "vllm" ]; then
+    VLLM_MODEL_ID="${EMBED_VLLM_MODEL:?EMBED_VLLM_MODEL not set — check env.sh (or env_default.sh)}"
+    EMBED_GPU_INDEX="${EMBED_GPU_INDEX:-0}"
+    EMBED_VLLM_GPU_MEMORY_UTILIZATION="${EMBED_VLLM_GPU_MEMORY_UTILIZATION:-0.15}"
+    EMBED_VLLM_MAX_MODEL_LEN="${EMBED_VLLM_MAX_MODEL_LEN:-$EMBED_N_CTX}"
+    # Any further `vllm serve` flags, space-separated.
+    EMBED_VLLM_EXTRA_ARGS="${EMBED_VLLM_EXTRA_ARGS:-}"
+    if [ ! -x .venv-vllm/bin/vllm ]; then
+        echo "Error: .venv-vllm not found — vLLM isn't installed. See run_vllm.sh's header."
+        exit 1
+    fi
+    # The venv's own bin/ first, so tools vLLM spawns by bare name are found.
+    export PATH="$PWD/.venv-vllm/bin:$PATH"
+    if [ -z "${CUDA_HOME:-}" ] && [ -d /usr/local/cuda ]; then
+        export CUDA_HOME=/usr/local/cuda
+    fi
+    echo "Starting embed server on $EMBED_HOST:$EMBED_PORT (model: $MODEL_ALIAS = $VLLM_MODEL_ID, vLLM, GPU index $EMBED_GPU_INDEX)..."
+    # shellcheck disable=SC2086
+    CUDA_VISIBLE_DEVICES="$EMBED_GPU_INDEX" nohup .venv-vllm/bin/vllm serve "$VLLM_MODEL_ID" \
+        --runner pooling \
+        --served-model-name "$MODEL_ALIAS" \
+        --host "$EMBED_HOST" \
+        --port "$EMBED_PORT" \
+        --gpu-memory-utilization "$EMBED_VLLM_GPU_MEMORY_UTILIZATION" \
+        --max-model-len "$EMBED_VLLM_MAX_MODEL_LEN" \
+        $EMBED_VLLM_EXTRA_ARGS \
+        > "$EMBED_LOG" 2>&1 < /dev/null &
+    pid=$!
+    disown "$pid"
+    echo "Embed server started (pid $pid, log: $EMBED_LOG) — vLLM needs a minute or two before it answers"
+    echo "Endpoint: http://$EMBED_HOST:$EMBED_PORT/v1/embeddings"
+    echo "Quick check:  .venv/bin/python -m backend.embedder --text \"bonjour le monde\""
+    echo "Benchmark:     .venv/bin/python -m backend.embedder --benchmark 1000"
+    exit 0
+fi
+
+GGUF_REPO="${EMBED_GGUF_REPO:?EMBED_GGUF_REPO not set — check env.sh (or env_default.sh)}"
+GGUF_FILE="${EMBED_GGUF_FILE:?EMBED_GGUF_FILE not set — check env.sh (or env_default.sh)}"
+MODEL_PATH="$MODELS_DIR/$GGUF_FILE"
 # CPU threads. Empty -> llama.cpp's own default (physical core count).
 EMBED_N_THREADS="${EMBED_N_THREADS:-}"
 # 0 (default) -> CPU-only, GPU hidden. A positive value offloads that many
 # layers to the GPU (99 = all). Only use it when the LLM server is stopped.
 EMBED_N_GPU_LAYERS="${EMBED_N_GPU_LAYERS:-0}"
-
-mkdir -p "$MODELS_DIR" "$LOG_DIR"
-
-# Stop any server already listening on the embed port (LISTEN socket only,
-# never a mere client connection — same rule as run_Falcon.sh's stop_port).
-pids=$(lsof -ti tcp:"$EMBED_PORT" -sTCP:LISTEN 2>/dev/null || true)
-if [ -n "$pids" ]; then
-    echo "Stopping embed server already running on port $EMBED_PORT (pid: $pids)"
-    kill $pids 2>/dev/null || true
-    sleep 1
-    pids=$(lsof -ti tcp:"$EMBED_PORT" -sTCP:LISTEN 2>/dev/null || true)
-    [ -n "$pids" ] && kill -9 $pids 2>/dev/null || true
-fi
 
 source .venv/bin/activate
 

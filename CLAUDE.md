@@ -3178,9 +3178,12 @@ Best-effort hardware/model reporting for the info badge: GPU enumeration
 `Embedder` (embedder.py) is a thin `httpx` client to an OpenAI-compatible
 `/v1/embeddings` endpoint (default: a local llama.cpp server serving
 BAAI/bge-m3, CPU by default — Qwen/Qwen3-Embedding-0.6B is a supported,
-GPU-friendly alternative, see `env_default.sh`), with batch embedding and
-a CLI benchmark. Switching the embed model always requires a full Qdrant
-rebuild (`python -m data_builder.qdrant_populate --all --recreate`).
+GPU-friendly alternative, see `env_default.sh`; `run_embed.sh` can also
+serve it with vLLM on a GPU), with batch embedding and a CLI benchmark.
+Switching the embed model always requires a full Qdrant rebuild (`python
+-m data_builder.qdrant_populate --all --recreate`); switching the engine
+serving the same model does not (vLLM's Qwen3-Embedding-0.6B and the
+Q8_0 GGUF agree at cosine >= 0.998).
 
 `QdrantStore` (qdrant_store.py) is a plain-HTTP client (no SDK) around
 one Qdrant collection (`words`, or any other given as `collection` —
@@ -3646,8 +3649,15 @@ section for the full variable list and the dual-GPU LLM routing scheme.
   `VLLM_GGUF_FILE`), served on `LLM_PORT` as ONE tensor-parallel instance
   when `VLLM_TP_SIZE` > 1 (cards `VLLM_TP_GPU_INDICES`), else one instance
   per card like `run_llm.sh`'s dual-GPU routing; log `logs/vllm.log`.
-- **`run_embed.sh`** — launches the local embedding server (CPU by
-  default).
+- **`run_embed.sh`** — launches the local embedding server on
+  `EMBED_PORT`: llama.cpp's `llama_cpp.server --embedding` on a GGUF
+  (CPU by default, `EMBED_N_GPU_LAYERS` to offload), or, with
+  `EMBED_ENGINE=vllm`, `vllm serve --runner pooling` on one NVIDIA card
+  from `.venv-vllm` (`EMBED_VLLM_MODEL`, the model's Hugging Face repo,
+  served under `EMBED_MODEL`; `EMBED_GPU_INDEX`, `EMBED_VLLM_GPU_MEMORY_
+  UTILIZATION`, `EMBED_VLLM_MAX_MODEL_LEN`, `EMBED_VLLM_EXTRA_ARGS`); it
+  stops the previous server's whole process tree first; log
+  `logs/embed.log`.
 - **`run_qdrant.sh`** — starts/stops/reports the local Qdrant Docker
   container, bind-mounted to `data/qdrant/`.
 - **`Install_qdrant.sh`** — one-time Docker/Qdrant-image setup.

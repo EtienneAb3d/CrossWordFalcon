@@ -3054,12 +3054,31 @@ the current defaults/behavior to know before touching this code.
   batching. Either supported model needs well under 1 GB VRAM, so it
   **can cohabit with the LLM on one 12 GB card**, but SGLang grabs the
   whole card at its default `SGLANG_MEM_FRACTION_STATIC=0.78` — this
-  project's dev-box `env.sh` overrides it to `0.60` (outside the
-  Install.sh SGLANG AUTOCONFIG block) alongside `EMBED_N_GPU_LAYERS=99`,
-  currently serving Qwen3-Embedding-0.6B in that slot. The llama.cpp LLM
+  project's `env.sh` overrides it to `0.60` (outside the Install.sh
+  SGLANG AUTOCONFIG block) for that case. The llama.cpp LLM
   engine (`run_llm.sh`) shares VRAM gracefully and needs no such tuning.
   It is *not* browser-facing — no `frontend/server.py` proxy route
   (permanent rule 15 only applies to endpoints the web UI calls).
+- **On this machine both checkouts use a GPU embedder served by vLLM**
+  (`EMBED_ENGINE=vllm` in DEV's and PROD's `env.sh`; the server itself is
+  launched from DEV, like every model server) — the user's request, CPU
+  embedding being too slow for themed generation. `run_embed.sh` then runs
+  `vllm serve --runner pooling` from `.venv-vllm` on card
+  `EMBED_GPU_INDEX` (1), serving `Qwen/Qwen3-Embedding-0.6B` (the HF repo
+  of the GGUF used before: same vectors, cosine >= 0.998, so Qdrant kept
+  its collections) under the `EMBED_MODEL` name, with
+  `EMBED_VLLM_GPU_MEMORY_UTILIZATION` 0.15 and `--enforce-eager`. vLLM
+  refuses to start unless its share is free, so the LLM's
+  `VLLM_GPU_MEMORY_UTILIZATION` is 0.76, leaving each 12 GB card more
+  than the ~1.8 GB the embedder needs, with `--max-num-seqs 128` in
+  `VLLM_EXTRA_ARGS` (Qwen3.5 is hybrid and vLLM needs one Mamba cache
+  block per sequence: at 0.76 a card holds ~235, below the default 256),
+  and `run_llm.sh` starts before `run_embed.sh`. vLLM rejects an unknown
+  model name, so a client must request `EMBED_MODEL` (source `env.sh`
+  before running `python -m backend.embedder` by hand). Measured: ~3.4
+  ms/embedding single, ~1.8 ms batched, vs ~40 ms on CPU. `.venv`'s llama-cpp-python stays a CPU-only
+  build (CUDA 13.0's nvcc rejects glibc 2.43's headers), which is why the
+  GPU path goes through vLLM rather than `EMBED_N_GPU_LAYERS`.
 
 ### Documentation
 

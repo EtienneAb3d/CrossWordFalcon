@@ -85,6 +85,26 @@ export EMBED_N_GPU_LAYERS="${EMBED_N_GPU_LAYERS:-0}"
 # export EMBED_GGUF_REPO="Qwen/Qwen3-Embedding-0.6B-GGUF"
 # export EMBED_GGUF_FILE="Qwen3-Embedding-0.6B-Q8_0.gguf"
 
+# --- Alternative embed engine: vLLM on one NVIDIA card ---------------------
+# run_embed.sh serves the model with vLLM (`vllm serve --runner pooling`,
+# CUDA only) instead of llama.cpp, from the .venv-vllm venv run_vllm.sh
+# uses (see its header to install it). EMBED_VLLM_MODEL is the model's
+# regular Hugging Face repo — Qwen/Qwen3-Embedding-0.6B for the Qwen GGUF
+# above: same model, same vectors (cosine >= 0.998 against the Q8_0 GGUF),
+# so Qdrant needs no rebuild — served under EMBED_MODEL's name.
+# EMBED_GPU_INDEX is the card, EMBED_VLLM_GPU_MEMORY_UTILIZATION its share
+# of that card (~1.8 GB needed for the 0.6B model in bf16). vLLM refuses
+# to start unless that much is free, so lower the LLM's own share
+# (VLLM_GPU_MEMORY_UTILIZATION, e.g. 0.76 on two 12 GB cards, or
+# SGLANG_MEM_FRACTION_STATIC) and start run_llm.sh before run_embed.sh.
+# --enforce-eager skips CUDA graphs, saving their memory.
+# export EMBED_ENGINE="vllm"
+# export EMBED_VLLM_MODEL="Qwen/Qwen3-Embedding-0.6B"
+# export EMBED_GPU_INDEX="1"
+# export EMBED_VLLM_GPU_MEMORY_UTILIZATION="0.15"
+# export EMBED_VLLM_MAX_MODEL_LEN="2048"
+# export EMBED_VLLM_EXTRA_ARGS="--enforce-eager"
+
 # Number of uvicorn worker processes for the MIDDLEWARE (front) server,
 # read by run_Falcon.sh. Only the front end takes this — it's a stateless
 # proxy + static-file server, so independent workers just add capacity.
@@ -426,6 +446,12 @@ export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 # export VLLM_CHAT_TEMPLATE_KWARGS='{"enable_thinking":false}'
 # export VLLM_REASONING_PARSER="qwen3"
 # export VLLM_EXTRA_ARGS="--language-model-only"
+# To leave room for a vLLM embed server on these cards (see the vLLM embed
+# block above), lower the share to 0.76. Qwen3.5 is hybrid: vLLM reserves
+# one Mamba cache block per sequence, and at 0.76 a card holds ~235, fewer
+# than the default max_num_seqs (256), so cap it too:
+# export VLLM_GPU_MEMORY_UTILIZATION="0.76"
+# export VLLM_EXTRA_ARGS="--language-model-only --max-num-seqs 128"
 # export LLM_BASE_URL_INTERACTIVE="$LLM_BASE_URL"
 
 # Alternative engine: SGLang instead of llama.cpp (run_llm.sh's own
