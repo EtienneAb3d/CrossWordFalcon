@@ -26,37 +26,37 @@
 
 ![Solution](20261006-045520-486606_la_ou_les_vents_soufflent_3578_SOLUTION.png)
 
-# Cappuccino (15x15 grid, 25% black, grouped/aligned-American/NYT pattern style)
+# Cappuccino (15x15 grid, 16% black, grouped/aligned-American/NYT pattern style)
 
-[Download PDF](20261015-054619-296132_the_silent_tether_0642.pdf)
+[Download PDF](20261026-110116-425616_flying_solo_in_the_rain_1782.pdf)
 
-[Play online](https://falcon.cubaix.com/?grid=20261015-054619-296132_the_silent_tether_0642)
+[Play online](https://falcon.cubaix.com/?grid=20261026-110116-425616_flying_solo_in_the_rain_1782)
 
 ## Grid and clues
 
-![Grid and clues](20261015-054619-296132_the_silent_tether_0642_GRID.png)
+![Grid and clues](20261026-110116-425616_flying_solo_in_the_rain_1782_GRID.png)
 
 ## Solution
 
-![Solution](20261015-054619-296132_the_silent_tether_0642_SOLUTION.png)
+![Solution](20261026-110116-425616_flying_solo_in_the_rain_1782_SOLUTION.png)
 
-# Latte (21x21 grid, 23% black, grouped/aligned-American/NYT pattern style)
+# Latte (21x21 grid, 18% black, grouped-American/NYT pattern style)
 
-[Download PDF](20261015-061909-893546_code_of_silence_7664.pdf)
+[Download PDF](20261027-033145-365541_the_calypso_s_hidden_meal_4655.pdf)
 
-[Play online](https://falcon.cubaix.com/?grid=20261015-061909-893546_code_of_silence_7664)
+[Play online](https://falcon.cubaix.com/?grid=20261027-033145-365541_the_calypso_s_hidden_meal_4655)
 
 ## Grid
 
-![Grid](20261015-061909-893546_code_of_silence_7664_GRID.png)
+![Grid](20261027-033145-365541_the_calypso_s_hidden_meal_4655_GRID.png)
 
 ## Clues
 
-![Clues](20261015-061909-893546_code_of_silence_7664_CLUES.png)
+![Clues](20261027-033145-365541_the_calypso_s_hidden_meal_4655_CLUES.png)
 
 ## Solution
 
-![Solution](20261015-061909-893546_code_of_silence_7664_SOLUTION.png)
+![Solution](20261027-033145-365541_the_calypso_s_hidden_meal_4655_SOLUTION.png)
 
 # Frappucino (30x30 grid, 15% black, sparse-French pattern style)
 
