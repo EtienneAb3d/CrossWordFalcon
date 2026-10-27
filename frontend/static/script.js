@@ -3519,6 +3519,7 @@ async function pingPresence() {
       body: JSON.stringify({
         session_id: presenceSessionId,
         pseudo: userPseudo || "",
+        referrer: document.referrer || "",
       }),
     }, PRESENCE_TIMEOUT_MS);
     if (!response.ok) return;

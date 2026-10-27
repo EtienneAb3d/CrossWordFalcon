@@ -466,27 +466,59 @@ public final class App {
 
     // ================================================================== presence
 
-    static Object[] presenceSnapshot(String sid, String pseudo) {
+    /** Referrers logged next to a visitor's name in LOG_USERS/ (backend/app.py's MAX_REFERRER_LENGTH and its patterns). */
+    static final int MAX_REFERRER_LENGTH = 300;
+    static final Pattern REFERRER_HOST_RE = Pattern.compile("^[A-Za-z][A-Za-z0-9+.-]*://(?:[^@/?#]*@)?([^:/?#]*)");
+    static final Pattern OWN_SITE_HOST_RE = Pattern.compile("(?:^|\\.)cubaix\\.[A-Za-z]+$");
+    static final Pattern REFERRER_STRIP_RE = Pattern.compile("[\\x00-\\x20\\x7f]");
+
+    /** backend/app.py's _clean_referrer: "" when absent or on this site's own domain, else the value without
+     *  control characters and spaces, cut to MAX_REFERRER_LENGTH. */
+    static String cleanReferrer(String raw) {
+        String value = REFERRER_STRIP_RE.matcher(raw == null ? "" : raw).replaceAll("");
+        if (value.isEmpty()) return "";
+        Matcher m = REFERRER_HOST_RE.matcher(value);
+        if (m.find() && OWN_SITE_HOST_RE.matcher(m.group(1)).find()) return "";
+        return value.length() <= MAX_REFERRER_LENGTH ? value : value.substring(0, MAX_REFERRER_LENGTH);
+    }
+
+    /** backend/app.py's _presence_label: the name, followed by its referrers in brackets when it has any. */
+    static String presenceLabel(String name, Collection<String> referrers) {
+        if (referrers.isEmpty()) return name;
+        List<String> sorted = new ArrayList<>(referrers);
+        Collections.sort(sorted);
+        return name + " [" + String.join(" ", sorted) + "]";
+    }
+
+    static Object[] presenceSnapshot(String sid, String pseudo, String referrer) {
         synchronized (PRESENCE_LOCK) {
             long now = System.nanoTime();
-            if (sid != null) PRESENCE.put(sid, new Object[]{now, pseudo});
+            if (sid != null) PRESENCE.put(sid, new Object[]{now, pseudo, referrer});
             PRESENCE.entrySet().removeIf(e -> (now - (long) e.getValue()[0]) / 1e9 > PRESENCE_TTL_S);
             if (PRESENCE.size() > MAX_PRESENCE_ENTRIES) {
                 List<Map.Entry<String, Object[]>> entries = new ArrayList<>(PRESENCE.entrySet());
                 entries.sort((a, b) -> Long.compare((long) a.getValue()[0], (long) b.getValue()[0]));
                 for (int k = 0; k < entries.size() - MAX_PRESENCE_ENTRIES; k++) PRESENCE.remove(entries.get(k).getKey());
             }
-            Set<String> named = new HashSet<>();
-            int anonymous = 0;
+            Map<String, Set<String>> named = new HashMap<>();
+            List<String> anonymous = new ArrayList<>();
             for (Object[] e : PRESENCE.values()) {
                 String p = (String) e[1];
-                if (p != null && !p.isEmpty()) named.add(p);
-                else anonymous++;
+                String ref = (String) e[2];
+                if (p != null && !p.isEmpty()) {
+                    Set<String> refs = named.computeIfAbsent(p, k -> new HashSet<>());
+                    if (!ref.isEmpty()) refs.add(ref);
+                } else {
+                    anonymous.add(presenceLabel("(anonyme)", ref.isEmpty() ? List.of() : List.of(ref)));
+                }
             }
-            int count = named.size() + anonymous;
-            List<String> pseudos = new ArrayList<>(named);
-            pseudos.sort((a, b) -> a.toLowerCase(Locale.ROOT).compareTo(b.toLowerCase(Locale.ROOT)));
-            for (int k = 0; k < anonymous; k++) pseudos.add("(anonyme)");
+            int count = named.size() + anonymous.size();
+            List<String> names = new ArrayList<>(named.keySet());
+            names.sort((a, b) -> a.toLowerCase(Locale.ROOT).compareTo(b.toLowerCase(Locale.ROOT)));
+            List<String> pseudos = new ArrayList<>();
+            for (String p : names) pseudos.add(presenceLabel(p, named.get(p)));
+            Collections.sort(anonymous);
+            pseudos.addAll(anonymous);
             boolean changed = !pseudos.equals(lastLoggedPseudos);
             if (changed) lastLoggedPseudos = pseudos;
             return new Object[]{count, pseudos, changed};
@@ -573,7 +605,7 @@ public final class App {
             while (true) {
                 sleepS(PRESENCE_SWEEP_INTERVAL_S);
                 try {
-                    Object[] snap = presenceSnapshot(null, null);
+                    Object[] snap = presenceSnapshot(null, null, null);
                     @SuppressWarnings("unchecked")
                     List<String> pseudos = (List<String>) snap[1];
                     if ((boolean) snap[2]) writeUsersLog((int) snap[0], pseudos);
@@ -1893,7 +1925,7 @@ public final class App {
             String p = b.str("pseudo", null);
             String pseudo = p == null ? "" : Py.strip(p);
             if (pseudo.length() > MAX_PSEUDO_LENGTH) pseudo = pseudo.substring(0, MAX_PSEUDO_LENGTH);
-            Object[] snap = presenceSnapshot(sid, pseudo);
+            Object[] snap = presenceSnapshot(sid, pseudo, cleanReferrer(b.str("referrer", null)));
             @SuppressWarnings("unchecked")
             List<String> pseudos = (List<String>) snap[1];
             if ((boolean) snap[2]) writeUsersLog((int) snap[0], pseudos);

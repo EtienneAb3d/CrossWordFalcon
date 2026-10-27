@@ -708,7 +708,17 @@ MAX_SECRET_LENGTH = 60
 # exactly 60s dropped it at every sweep just before its next heartbeat.
 PRESENCE_TTL_S = 150
 MAX_PRESENCE_ENTRIES = 5000
-_PRESENCE = {}  # session_id -> {"last_seen": monotonic float, "pseudo": str}
+_PRESENCE = {}  # session_id -> {"last_seen": monotonic float, "pseudo": str, "referrer": str}
+
+# Each heartbeat also carries the page's `document.referrer`, logged next to
+# the visitor's name in LOG_USERS/ — except a referrer on this site's own
+# domain (any `*.cubaix.<tld>` host), which says nothing about where the
+# visitor came from. Control characters and spaces are dropped so a
+# client-supplied value cannot break the one-line log format.
+MAX_REFERRER_LENGTH = 300
+_REFERRER_HOST_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://(?:[^@/?#]*@)?([^:/?#]*)")
+_OWN_SITE_HOST_RE = re.compile(r"(?:^|\.)cubaix\.[A-Za-z]+$")
+_REFERRER_STRIP_RE = re.compile(r"[\x00-\x20\x7f]")
 
 # Log of the number of online visitors, at the user's explicit
 # request: "the backend must generate one file per day in the
@@ -1583,6 +1593,27 @@ class PresenceRequest(BaseModel):
     used only as in-memory keys, never written to disk."""
     session_id: str = Field(..., min_length=1, max_length=200)
     pseudo: Optional[str] = None
+    referrer: Optional[str] = None
+
+
+def _clean_referrer(raw):
+    """The referrer to log for a heartbeat's `referrer`: "" when absent or
+    on this site's own domain (`_OWN_SITE_HOST_RE`), else the value with
+    its control characters and spaces removed, cut to
+    MAX_REFERRER_LENGTH."""
+    value = _REFERRER_STRIP_RE.sub("", raw or "")
+    if not value:
+        return ""
+    match = _REFERRER_HOST_RE.match(value)
+    if match and _OWN_SITE_HOST_RE.search(match.group(1)):
+        return ""
+    return value[:MAX_REFERRER_LENGTH]
+
+
+def _presence_label(name, referrers):
+    """One LOG_USERS entry: the name, followed by its referrers in
+    brackets when it has any."""
+    return f"{name} [{' '.join(sorted(referrers))}]" if referrers else name
 
 
 def _presence_snapshot(record=None):
@@ -1595,7 +1626,9 @@ def _presence_snapshot(record=None):
       without a pseudo counting on its own;
     - `pseudos`: the list to log — the distinct pseudos, sorted
       case-insensitively, followed by one `(anonyme)` per session still
-      without a pseudo, so `len(pseudos) == count`;
+      without a pseudo, so `len(pseudos) == count`; each entry carries
+      its referrer(s) in brackets (`_presence_label`; a pseudo open in
+      several tabs lists every distinct one);
     - `changed`: `True` if and only if `pseudos` (the WHOLE list, not
       just its length) differs from the last list logged to LOG_USERS —
       and, in that case, updates that marker right here (under the lock),
@@ -1625,15 +1658,21 @@ def _presence_snapshot(record=None):
                 : len(_PRESENCE) - MAX_PRESENCE_ENTRIES
             ]:
                 del _PRESENCE[sid]
-        named = set()
-        anonymous = 0
+        named = {}
+        anonymous = []
         for entry in _PRESENCE.values():
+            referrer = entry.get("referrer", "")
             if entry["pseudo"]:
-                named.add(entry["pseudo"])
+                referrers = named.setdefault(entry["pseudo"], set())
+                if referrer:
+                    referrers.add(referrer)
             else:
-                anonymous += 1
-        count = len(named) + anonymous
-        pseudos = sorted(named, key=str.lower) + ["(anonyme)"] * anonymous
+                anonymous.append(_presence_label(
+                    "(anonyme)", [referrer] if referrer else []))
+        count = len(named) + len(anonymous)
+        pseudos = ([_presence_label(p, named[p])
+                    for p in sorted(named, key=str.lower)]
+                   + sorted(anonymous))
         changed = pseudos != _last_logged_pseudos
         if changed:
             _last_logged_pseudos = pseudos
@@ -1806,6 +1845,7 @@ def presence(req: PresenceRequest):
     record = (req.session_id, {
         "last_seen": time.monotonic(),
         "pseudo": (req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH],
+        "referrer": _clean_referrer(req.referrer),
     })
     count, pseudos, changed = _presence_snapshot(record)
     if changed:

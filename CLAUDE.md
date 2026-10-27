@@ -508,7 +508,12 @@ json`. Holds all server-side state in plain module dicts/lists:
   RSS/SCRAPP refresh (`_rss_daily_scheduler`, `RSS_FETCH_HOUR=8` local
   time) plus a startup catch-up if today's refresh is missing; a presence
   sweep every `PRESENCE_SWEEP_INTERVAL_S` (10s) pruning stale heartbeats
-  and logging headcount changes to `LOG_USERS/`; a resource-usage sampler
+  and logging every change of the visitor list to `LOG_USERS/` (one line:
+  time, count, the pseudos then one `(anonyme)` per unnamed session, each
+  followed by its page referrer in brackets — `document.referrer`, sent
+  as `referrer` by every `POST /api/presence` heartbeat, dropped when its
+  host is `*.cubaix.<tld>`, `_clean_referrer`/`_presence_label`, Java
+  `App.cleanReferrer`/`presenceLabel`); a resource-usage sampler
   every `RESOURCE_USAGE_SAMPLE_INTERVAL_S` (2s), run on its own dedicated
   thread so it's never starved by a generation job's blocking work.
 

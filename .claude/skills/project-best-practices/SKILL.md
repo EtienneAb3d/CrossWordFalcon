@@ -850,8 +850,10 @@ project's engineering language.
   (raw Wiktionary/Kaikki dumps), `GRID_SVG/`, `GRID_PNG/`, `LOG_LLM/`,
   `LOG_CHAT/`, `LOG_USERS/` (one daily `LOG_USERS/<YYYY-MM-DD>.log` per
   day: one line — `date time | count | active pseudo list` — appended by
-  `backend/app.py` each time the distinct online-visitor count changes,
-  created lazily on first write), `LOG_THEME/` (one
+  `backend/app.py` each time the online-visitor list changes, created
+  lazily on first write; each name, `(anonyme)` included, is followed by
+  its page referrer in brackets when the browser gives one, except a
+  referrer on this site's own `*.cubaix.<tld>` domain — the user's rule), `LOG_THEME/` (one
   `LOG_THEME/<timestamp>_<short_id>.log` per themed generation, timestamp
   precision matching `LOG_LLM/`: first line is the LLM's ~15-word
   comma-separated keyword list, then the typed theme, every keyword list
