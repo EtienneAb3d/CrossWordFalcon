@@ -1097,7 +1097,9 @@ Once generation completes, the search-progress panel disappears and
   word through that cell.
 - **Time counter and saved progress** (`#grid-timer`, `frontend/static/
   script.js`, `startGridTimer`/`ensureGridTimerRunning`) — a clock next
-  to the title, started by the first letter typed. Every letter typed or
+  to the title, started by the first letter typed; it does not count the
+  time the tab is hidden (another tab, minimized window, screen off) and
+  carries on once the tab is visible again. Every letter typed or
   erased saves the letters and the clock on the server under the
   player's pseudo (`scheduleGridGameSave`, `POST /api/game/save`, only
   when a pseudo is set). Reopening the grid in play mode later — from the

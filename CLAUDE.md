@@ -3054,7 +3054,9 @@ Four independent filesystem stores, one JSON file shape shared with the
   10 best as `{rank, pseudo, correct_percent, elapsed_seconds, is_me}`,
   and `pseudo`'s own entry only when ranked below them). The play view
   shows it as `#leaderboard`, and stops the timer for good once the grid
-  is 100 % correct (`updateGridTimerAfterLetter`). A record also carries
+  is 100 % correct (`updateGridTimerAfterLetter`); the timer
+  (`ensureGridTimerRunning`) skips every second spent with the tab hidden
+  (`document.hidden`). A record also carries
   `solution_seen`: set by the first save sent with it (the play view's
   "Solution" button, after its `#solution-confirm-overlay` confirmation),
   it then stays true and freezes `correct_percent`/`elapsed_seconds` at

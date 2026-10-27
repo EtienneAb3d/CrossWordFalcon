@@ -4221,10 +4221,13 @@ function startGridTimer(initialSeconds) {
 
 // Actually starts the countdown, only one `setInterval` at a time —
 // called on every letter typed by the player (see handleKeydown/
-// typeVirtualLetter); a no-op once it's already running.
+// typeVirtualLetter); a no-op once it's already running. A second spent
+// with the tab hidden (another tab, minimized window, screen off) is not
+// counted: the count resumes as soon as the tab is visible again.
 function ensureGridTimerRunning() {
   if (gridTimerIntervalId !== null) return;
   gridTimerIntervalId = setInterval(() => {
+    if (document.hidden) return;
     gridTimerSeconds += 1;
     renderGridTimer();
   }, 1000);
