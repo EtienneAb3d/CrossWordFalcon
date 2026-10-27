@@ -103,7 +103,9 @@ full again whenever a new generation or an Interactive session starts.
   (6x6, 0 %), Expresso latte (10x10, 10 %), Macchiato (15x10, 12 %),
   Cappuccino (15x15, 15 %), Mocha (21x21, 15 %), Tazza grande (30x20, 15 %),
   Frappuccino (30x30, 15 %), Caffeteria (50x50, 15 %) — every one at
-  18 % while the pattern style is American (Sparse below 100 %) in French. Picking one fills Largeur, Hauteur and Taux
+  18 % while the pattern style is American (Sparse below 100 %) in French,
+  and every one with a side above 15 at 18 % under that style in any
+  language. Picking one fills Largeur, Hauteur and Taux
   noir at once; the three fields stay editable. The button shows the
   preset matching the current values, or "Personnalisée / Custom" when
   none does. Presets wider or taller than 20 cells are greyed out when the
@@ -195,7 +197,12 @@ full again whenever a new generation or an Interactive session starts.
   previews and in the PDF/SVG/PNG pages — instead of the usual centered
   half-size square. In French, leaving 100/0/0 raises Taux noir to 18 %
   if it was lower (it can then be lowered again by hand); the other
-  languages keep the Taux noir set. Choosing French
+  languages keep the Taux noir set. In every language, as soon as the
+  form describes an American-style grid with a side above 15 (typing a
+  larger Largeur/Hauteur, picking such a preset, or leaving 100/0/0 on
+  such a size), Taux noir is set to 18 % and Grouped is raised to 70 %,
+  the difference taken from Aligned then Sparse — both can then be changed
+  again by hand (`applyLargeAmericanDefaults`). Choosing French
   as the language sets 100/0/0, any other language 30/40/30, English also
   selecting the Diagonal symmetry (`frontend/static/script.js`,
   `setUiLanguage`, `setPatternMix`; `backend/crossword_gen.py`, `pattern_mix`, `PATTERN_STYLES`,

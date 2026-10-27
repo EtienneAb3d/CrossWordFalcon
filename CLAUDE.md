@@ -821,7 +821,14 @@ own rng drawn from the parent's in candidate order:
    language, plus the diagonal symmetry for English, and, in French only
    (`groupedBlackMinimumApplies`), leaving 100/0/0 (`setPatternMix`) raises
    "Taux noir" to at least `GROUPED_MIN_BLACK_PERCENT` (18,
-   `applyGroupedBlackMinimum`; the player may lower it again). Under "grouped" the grid's lexicon has no word
+   `applyGroupedBlackMinimum`; the player may lower it again); in every
+   language, the form entering a grid whose larger side exceeds
+   `LARGE_AMERICAN_MIN_SIDE` (15) under "grouped" — a size change, a
+   preset, or a mix leaving 100/0/0 — sets "Taux noir" to
+   `GROUPED_MIN_BLACK_PERCENT` and raises the "Groupé" share to at least
+   `LARGE_AMERICAN_GROUPED_PERCENT` (70), taken from "Aligné" then "Aéré"
+   (`applyLargeAmericanDefaults`, once per entry, never when a record's
+   settings are restored; the player may change both again). Under "grouped" the grid's lexicon has no word
    shorter than `GROUPED_MIN_SLOT_LENGTH` (`style_index`, Java
    `Words.styleIndex`: a shallow copy of the cached index without those
    lengths, applied by `generate_grid`, which also ignores such a "Mots
@@ -3340,7 +3347,8 @@ and `_similar_words_impl` the LLM expansion's duration (Java `App`,
   `applyGridPreset`) filling `#width`/`#height`/`#black-enrichment` from
   eight named formats (6x6 0 % to 50x50 15 %; every one at
   `GROUPED_MIN_BLACK_PERCENT`, 18 %, under the "grouped" pattern style in
-  French, `presetBlack`), frontend-only; the
+  French, and every one with a side above 15 under it in any language,
+  `presetBlack`), frontend-only; the
   button shows the preset matching the three fields (`syncGridPresetSelection`),
   presets above `REMOTE_MAX_DIMENSION` are disabled off localhost.
   The form ends with the "Générer les mots croisés :" row (`#generate-row`):

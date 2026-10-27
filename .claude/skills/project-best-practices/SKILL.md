@@ -2650,6 +2650,17 @@ the current defaults/behavior to know before touching this code.
   other languages no longer force it — the rate and the presets' own
   rates stay. Choice made with it, to revisit with the user: "the
   language" is the interface/grid language selector (`uiLanguage`).
+- **A large American grid starts at 18 % black and 70 % "Groupé"** —
+  the user's rule: when the creation form is set to a grid with a side
+  above 15 in the American style, "Taux noir" becomes 18 % and the
+  "Groupé" share is raised to 70 %, both changeable afterwards
+  (`script.js`'s `applyLargeAmericanDefaults`). Choices made with it, to
+  revisit with the user: every language; applied once each time the form
+  enters that state (size field change, preset, or style leaving 100/0/0),
+  never when a record's settings are restored; "Taux noir" is set to 18 %
+  even when it was higher; the 70 % is taken from "Aligné" then "Aéré"
+  (30/40/30 -> 30/70/0), a "Groupé" share already above 70 % is kept;
+  presets with a side above 15 show 18 % under that style.
 - **Both cross-palier resume paths start the next palier the same way**,
   differing only in their cleanup — the user's rule: "La différence est au
   niveau du nettoyage, pas au niveau du démarrage du cycle suivant. Ça

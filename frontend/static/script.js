@@ -341,6 +341,42 @@ function setPatternMix(mix, restoring = false) {
   patternMixInputs.forEach((input, i) => { input.value = String(patternMix[i]); });
   if (!restoring && !wasGrouped && patternStyle() === "grouped") applyGroupedBlackMinimum();
   else if (gridPresetsReady) renderGridPresets();
+  applyLargeAmericanDefaults(restoring);
+}
+
+// A grid whose larger side exceeds LARGE_AMERICAN_MIN_SIDE under the
+// "grouped" (American) style gets "Taux noir" GROUPED_MIN_BLACK_PERCENT and
+// a "Groupé" share of at least LARGE_AMERICAN_GROUPED_PERCENT, taken from
+// "Aligné" then "Aéré" — once, when the form enters that state (size, preset
+// or style change), so the player may change both afterwards.
+const LARGE_AMERICAN_MIN_SIDE = 15;
+const LARGE_AMERICAN_GROUPED_PERCENT = 70;
+let largeAmericanGrid = false;
+
+function isLargeSide(width, height) {
+  return Math.max(Number(width) || 0, Number(height) || 0) > LARGE_AMERICAN_MIN_SIDE;
+}
+
+// `restoring`: a record's own settings are being put back, so the state is
+// only recorded, never applied.
+function applyLargeAmericanDefaults(restoring = false) {
+  const active = patternStyle() === "grouped" && isLargeSide(widthInput.value, heightInput.value);
+  const entering = active && !largeAmericanGrid;
+  largeAmericanGrid = active;
+  if (!entering || restoring) return;
+  if (patternMix[1] < LARGE_AMERICAN_GROUPED_PERCENT) {
+    const mix = patternMix.slice();
+    let missing = LARGE_AMERICAN_GROUPED_PERCENT - mix[1];
+    mix[1] = LARGE_AMERICAN_GROUPED_PERCENT;
+    for (const j of [2, 0]) {
+      const taken = Math.min(mix[j], missing);
+      mix[j] -= taken;
+      missing -= taken;
+    }
+    setPatternMix(mix);
+  }
+  blackEnrichmentInput.value = String(GROUPED_MIN_BLACK_PERCENT);
+  if (gridPresetsReady) syncGridPresetSelection();
 }
 
 // A field changed: its new value (clamped to 0-100) is kept and the
@@ -3921,9 +3957,12 @@ function gridPresetAllowed(preset) {
 }
 
 // A preset's black rate: GROUPED_MIN_BLACK_PERCENT for every preset under
-// the "grouped" (American) pattern style in French, its own otherwise.
+// the "grouped" (American) pattern style in French, and for a preset with a
+// side above LARGE_AMERICAN_MIN_SIDE under that style in every language;
+// its own otherwise.
 function presetBlack(preset) {
-  return groupedBlackMinimumApplies() ? GROUPED_MIN_BLACK_PERCENT : preset.black;
+  const large = patternStyle() === "grouped" && isLargeSide(preset.width, preset.height);
+  return groupedBlackMinimumApplies() || large ? GROUPED_MIN_BLACK_PERCENT : preset.black;
 }
 
 function matchingGridPreset() {
@@ -3983,6 +4022,7 @@ function applyGridPreset(preset) {
   blackEnrichmentInput.value = String(presetBlack(preset));
   syncGridPresetSelection();
   applySizeEffort();
+  applyLargeAmericanDefaults();
   closeGridPresetList();
   presetSelectBtn.focus();
 }
@@ -4036,6 +4076,7 @@ function applySizeEffort() {
 for (const input of [widthInput, heightInput]) {
   input.addEventListener("input", applySizeEffort);
   input.addEventListener("change", applySizeEffort);
+  input.addEventListener("change", () => applyLargeAmericanDefaults());
 }
 // The initial Effort follows the initial size too (15x15 -> "medium").
 applySizeEffort();
