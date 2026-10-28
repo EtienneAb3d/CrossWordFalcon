@@ -48,7 +48,7 @@ Engineering language is English (code, comments, this file, the SKILLs,
 | Path | Contents |
 |---|---|
 | `backend/` | All Python business logic: the API server, the generation engine, LLM/chat/embedding clients, persistence, export. No subpackages — every `.py` file sits directly under `backend/`. |
-| `backend_java/` | The Java back end (Java 21, Maven, `pom.xml`): `src/main/java/falcon/` mirrors `backend/` (see "Java back end"), `build.sh` builds `dist/crosswordfalcon-backend.jar` (replaced atomically, so a running JVM keeps its own copy), committed with `dist/sources.sha256` (the fingerprint of the sources it was built from) so a checkout runs it without rebuilding; `target/` (Maven's own output) is gitignored. |
+| `backend_java/` | The Java back end (Java 21, Maven, `pom.xml`): `src/main/java/falcon/` mirrors `backend/` (see "Java back end"), `build.sh` builds `dist/crosswordfalcon-backend.jar` (replaced atomically, so a running JVM keeps its own copy), committed with `dist/sources.sha256` (the fingerprint of the sources it was built from) so a checkout runs it without rebuilding; `target/` (Maven's own output) is gitignored; the optional GraalVM native-image experiment (`build_native.sh`, `native/`, `build_<config>/`, see "Java back end") is gitignored, kept locally only. |
 | `frontend/` | `server.py` (proxy + static host) and `static/` (the whole single-page app: `index.html`, `script.js`, `style.css`, `i18n.js`, logo assets). |
 | `data_builder/` | One-off/periodic scripts that build each language's dictionary artifacts (corpus → wordlist → gloss dictionary → inflection table → Qdrant embeddings), plus one orchestration shell script per language. |
 | `scrapper/` | Daily-refreshed content scrapers feeding the web UI's "Actu Croisée" panel (RSS feeds, aggregated crossword-publisher links). |
@@ -3314,6 +3314,26 @@ the exact binary value; Unicode-aware regexes), which keeps every
 deterministic output — endpoint JSON, SVG/PDF sheets, LLM prompts, response
 filters — byte-identical to the Python back end.
 
+**Native (AOT) builds, optional, local only** — every file below is
+gitignored (kept on the development machine for a later re-evaluation,
+absent from a clone) (`backend_java/build_native.sh <config>
+[server|generator|all]`): GraalVM `native-image` (Oracle GraalVM, found in
+`$GRAALVM_HOME` or `~/.local/graalvm-jdk-*`, installed by hand, not by
+`Install.sh`) compiles the committed jar into `backend_java/build_<config>/
+falcon-backend` (`falcon.App`, same arguments as the jar, e.g. `--port`) and
+`falcon-generator` (`falcon.gen.Generator`, same CLI), both run from the
+repository root. Configs: `serial` (Serial GC), `g1` (G1 GC), `g1-pgo` (G1 +
+profile-guided optimisation, profile from an instrumented generator running
+3 paliers of a 15x15 grid, kept as `build_g1-pgo/default.iprof`); every
+config is `-O3 -march=native`, so a binary is tied to this machine's CPU.
+Reflection metadata (Jackson, JDK resources), gathered with the
+native-image tracing agent, lives in `backend_java/native/config/`.
+No launcher uses the native builds.
+`backend_java/native/bench.sh [paliers] [seeds...]` compares the jar with
+every `build_*/falcon-generator` on a 15x15 grid at the "medium" effort
+(500000 checks per attempt) over a fixed number of paliers: wall time,
+time before the first palier, mean palier duration, CPU time, peak RSS.
+
 ## Frontend (`frontend/`)
 
 ### `server.py`
@@ -3383,6 +3403,11 @@ and `_similar_words_impl` the LLM expansion's duration (Java `App`,
   (first item of `#generate-row`) that unfolds it; the tool buttons stay
   visible. `runGeneration`/
   `runInteractive`/`enterInteractiveMode` unfold it.
+  Below the form, `#run-actions` (centered, collapsed while empty) holds
+  "Voir les mots (spoiler)" (`#attempt-preview-reveal-btn`, hidden until
+  `runGeneration` starts an automatic generation, hidden again by
+  `displayFinalGrid`/Interactive mode) and "Stop" (`#stop-btn`, while a
+  job runs).
 - **`script.js`** — all client logic in one file. Major areas: grid
   rendering/keyboard input/solution-checking; the grid zoom, play and
   Interactive modes (`#grid` sits in `#grid-viewport`, sized by
@@ -3711,6 +3736,10 @@ python3 backend/crossword_gen.py --wordlist data/wordlist_en_freq.tsv
 # Java back end: build (only when the sources changed) / check / CLI generator
 backend_java/build.sh [--force|--check]
 java -cp backend_java/dist/crosswordfalcon-backend.jar falcon.gen.Generator --width 15 --height 10 --deadline-checks 1000 --seed 2
+
+# Optional GraalVM native images of the Java back end, and the JVM-vs-native benchmark
+backend_java/build_native.sh g1-pgo        # or serial / g1; [server|generator|all]
+backend_java/native/bench.sh 4 1 2 3       # paliers, then seeds
 
 # Local LLM for clue generation (needed for the web UI, not the bare CLI)
 pip install -r requirements-llama.txt

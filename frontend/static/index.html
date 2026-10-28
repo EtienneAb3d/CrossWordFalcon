@@ -274,10 +274,9 @@
                  min="0" max="100" step="1" value="15"
                  data-i18n-title="multiWordPercentTitle">
         </label>
-        <button type="button" id="stop-btn" data-i18n="stopBtn" hidden>Stop</button>
         <button type="button" id="continue-btn" data-i18n="continueBtn" hidden>Continuer</button>
       </div>
-      <!-- "Niveau", "Mots par pose", "Mode" and "Voir les mots (spoiler)" on a line of their own, right above
+      <!-- "Niveau", "Mots par pose" and "Mode" on a line of their own, right above
            the "Générer les mots croisés :" row. -->
       <div id="generate-options-row">
         <label for="difficulty">
@@ -312,8 +311,6 @@
             <option value="gridzilla" data-budget="100000000" data-i18n="modeGridzilla">GridZilla</option>
           </select>
         </label>
-        <button type="button" id="attempt-preview-reveal-btn" class="toggle-btn"
-                data-i18n="attemptPreviewRevealBtn">Voir les mots (spoiler)</button>
       </div>
       <!-- "Générer les mots croisés :" row, the form's last line: one button
            per way of building the grid, then the tool buttons.
@@ -375,6 +372,17 @@
         </div>
       </div>
     </form>
+
+    <!-- Running-generation buttons, on their own centered row below the
+         main form: "Voir les mots (spoiler)" (shown only once an automatic
+         generation is launched) and "Stop" (while a job runs). The row
+         collapses entirely while both are hidden (see #run-actions in
+         style.css). -->
+    <div id="run-actions">
+      <button type="button" id="attempt-preview-reveal-btn" class="toggle-btn"
+              data-i18n="attemptPreviewRevealBtn" hidden>Voir les mots (spoiler)</button>
+      <button type="button" id="stop-btn" data-i18n="stopBtn" hidden>Stop</button>
+    </div>
 
     <!-- Play-mode buttons, on their own row below the main form (above
          the grid). The row collapses entirely while all four are hidden

@@ -140,8 +140,8 @@ full again whenever a new generation or an Interactive session starts.
   network; same out-of-range snap-back on blur as **Largeur / Width**
   above (`frontend/static/script.js`, `clampDimensionInputs`).
 - **Niveau / Level** (`#difficulty`, first field of the line
-  above "Générer les mots croisés", followed by Mots par pose, Mode and
-  "Voir les mots (spoiler)") — Easy, Medium, or Hard.
+  above "Générer les mots croisés", followed by Mots par pose and Mode)
+  — Easy, Medium, or Hard.
   Easy and Medium use a smaller, more common vocabulary; Easy never places
   a word that looks like it could be a proper noun (a person's or place's
   name: capitalized, or defined only as a proper name), Medium at most two;
@@ -347,11 +347,15 @@ full again whenever a new generation or an Interactive session starts.
 
 ## Action buttons
 
-These sit above the "Générer les mots croisés :" row (`#generate-form`) and only appear
-when relevant.
+"Voir les mots (spoiler)" and "Stop" sit on their own row, centered, right below the
+main form (`#run-actions`); "Continuer" sits above the "Générer les mots croisés :" row
+(`#generate-form`). All only appear when relevant.
 
 - **Voir les mots (spoiler) / Show the words (spoiler)** (`#attempt-preview-reveal-btn`, `frontend/static/
-  script.js`, `togglePreviewLetters`) — while a grid is generating, shows
+  script.js`, `togglePreviewLetters`) — shown only once an automatic
+  generation is launched ("Automatique", "Finir la grille"/"Finir la
+  zone", "Continuer"), hidden again when the finished grid is displayed
+  or Interactive mode opens. While a grid is generating, shows
   the actual letters inside the search-progress preview grids (see "While
   a grid is generating" below) — off, each placed letter is drawn as "✴",
   its cell keeping every colour code, so progress stays visible — and the

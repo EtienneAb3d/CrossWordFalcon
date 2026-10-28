@@ -133,6 +133,13 @@ English (see `project-best-practices`).
   `hidden` attribute toggled by `script.js`, and the row itself collapses
   (`#play-actions:not(:has(> button:not([hidden]))) { display: none }`)
   while none is shown, so no empty gap remains outside play mode.
+- "Voir les mots (spoiler)" (`#attempt-preview-reveal-btn`, `.toggle-btn`)
+  and "Stop" (`#stop-btn`, red) live on their own row, `#run-actions`, a
+  sibling placed right after `#generate-form` and before `#play-actions`:
+  same flex row as `#play-actions` (`gap: 0.5rem`, `margin-bottom: 1rem`,
+  `justify-content: center`), collapsing while both are hidden. The
+  spoiler toggle ships `hidden` and is shown only by an automatic
+  generation (`runGeneration`).
   Keeping them apart from the generation/panel buttons separates "act on
   the grid being played" from "generate / open a panel".
 
@@ -4746,8 +4753,7 @@ end through the real running API (interactive start/step/save,
   flex-start` and the label gets `line-height: 2.25rem` to sit centered on
   the first button line. This supersedes the earlier `#library-btn {
   margin-left: auto }` placement in `#form-actions` (rule removed).
-  `#form-actions` keeps Thématique, Mots Défi, "Voir les mots (spoiler)",
-  Stop and Continuer. In `.play-collapsed`, `#form-actions` and the label +
+  `#form-actions` keeps Thématique, Mots Défi and Continuer. In `.play-collapsed`, `#form-actions` and the label +
   two generate buttons are hidden, and `#create-grid-btn` (now the first
   item of `#generate-row`) stands at the left of the same line as the tool
   buttons. **Visually confirmed** with Playwright/Chromium: at 1400px all

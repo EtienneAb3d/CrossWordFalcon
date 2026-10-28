@@ -360,8 +360,7 @@ form {
   margin-bottom: 1rem;
 }
 
-/* "Thématique", "Mots Défi" and the generation action buttons (Voir les
-   mots, Stop, Continuer) on their own row, below the option combos:
+/* "Thématique", "Mots Défi" and the "Continuer" button on their own row, below the option combos:
    `flex-basis: 100%` forces this container onto its own next line of
    #generate-form's flex-wrap. The tool buttons sit on #generate-row. */
 #form-actions {
@@ -417,7 +416,7 @@ form {
   display: none;
 }
 
-/* "Difficulté", "Mots par pose", "Mode" and "Voir les mots (spoiler)" on their own line of the form's flex-wrap,
+/* "Difficulté", "Mots par pose" and "Mode" on their own line of the form's flex-wrap,
    right above #generate-row; same field spacing as the option combos. */
 #generate-options-row {
   flex-basis: 100%;
@@ -563,6 +562,20 @@ form {
 }
 
 #play-actions:not(:has(> button:not([hidden]))) {
+  display: none;
+}
+
+/* "Voir les mots (spoiler)" and "Stop", centered on their own row below
+   the main form; collapses while both are hidden, like #play-actions. */
+#run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+  margin-bottom: 1rem;
+}
+
+#run-actions:not(:has(> button:not([hidden]))) {
   display: none;
 }
 

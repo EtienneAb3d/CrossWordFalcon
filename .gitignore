@@ -3,6 +3,10 @@
 env.sh*
 *__pycache__*
 /backend_java/target/
+# GraalVM native-image experiment (build script, benchmark, metadata, builds), kept locally for a later re-evaluation
+/backend_java/build_*/
+/backend_java/build_native.sh
+/backend_java/native/
 /models/
 /data/hunspell_cache/
 /data/reference_corpus/

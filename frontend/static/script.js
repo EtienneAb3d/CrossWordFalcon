@@ -1563,11 +1563,8 @@ function setStatus(message, isError) {
 // removing any doubt about draw order affecting whether it's visible.
 //
 // Letters themselves are shown as "✴" unless `showPreviewLetters` is on (see
-// #attempt-preview-reveal-btn, now shown from page load right next to
-// the generation buttons rather than only appearing once a preview exists — at the
-// user's own explicit follow-up request, so the choice can be made
-// *before* generating, not only reacted to once letters are already on
-// screen). Once the "reprise telle-quelle" mechanism can carry forward a
+// #attempt-preview-reveal-btn, centered below the main form next to
+// "Stop", shown only once an automatic generation is launched). Once the "reprise telle-quelle" mechanism can carry forward a
 // large, mostly-real fraction of the final grid across several paliers,
 // these preview grids stopped being purely diagnostic and started risking
 // spoiling the actual solution before the player ever gets to play it.

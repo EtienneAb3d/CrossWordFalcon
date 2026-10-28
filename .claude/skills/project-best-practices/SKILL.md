@@ -333,6 +333,21 @@ project's engineering language.
   "attempt done" signal and the per-attempt budget counters are atomics,
   and the search threads get the same lowered priority as the Python
   worker processes (`renice` per thread, Linux).
+- **The Java back end can be compiled ahead of time with GraalVM
+  `native-image`, as an optional, unused-by-default build**
+  (`backend_java/build_native.sh`, outputs in `backend_java/build_<config>/`,
+  metadata in `backend_java/native/config/`, benchmark
+  `backend_java/native/bench.sh`). All of these are gitignored: the
+  experiment was inconclusive and is kept on the development machine only,
+  for a later re-evaluation. GCJ, the historical GCC Java
+  compiler, cannot build it (removed from GCC 7, Java 1.5 at most).
+  Measured on this 16-core machine (15x15, medium effort, 4 paliers, 3
+  seeds): JVM (HotSpot 21) 25.6 s per palier, native G1+PGO 25.0 s, native
+  G1 31.1 s, native Serial 34.4 s; start-up + lexicon loading 3.9 s JVM vs
+  3.2 s native; peak RSS ~7 GB for the JVM and G1 builds, ~0.8 GB Serial.
+  Native brings no meaningful generation speed-up, so the launchers keep
+  the jar; Oracle GraalVM (G1 and PGO are not in the Community edition) is
+  installed by hand, not by `Install.sh`.
 - All grid-generation business logic lives only in `backend/crossword_gen.py`
   (never at the project root, never in `frontend/`) — and its Java mirror,
   the `backend_java/.../falcon/gen/` package. The Python module is both the
