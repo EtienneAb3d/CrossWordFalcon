@@ -53,7 +53,18 @@ public final class Generator {
     public static final int DEFAULT_HEIGHT = 15;
     public static final int PARALLEL_ATTEMPTS = resolveParallel();
     public static final double PALIER_ATTEMPT_INTERRUPT_FRACTION = 1.0;
+    /** Only distinct solutions count (successKey): a success ending on a grid already found is neither counted —
+     * here nor by the live "success_count" — nor kept (mirrors MIN_SUCCESSFUL_ATTEMPTS). */
     public static final int MIN_SUCCESSFUL_ATTEMPTS = 2;
+
+    /** A successful attempt's solution: its pattern and its words (mirrors _success_key). */
+    static String successKey(char[][] grid, Fill.Result result) {
+        StringBuilder sb = new StringBuilder();
+        for (char[] row : grid) sb.append(row).append('/');
+        sb.append('|');
+        for (String w : result.assignment()) sb.append(w == null ? "" : w).append(',');
+        return sb.toString();
+    }
     public static final double BEST_STATE_QUEUE_DRAIN_GRACE_S = 0.02;
     public static final double BUDGET_PROGRESS_REPORT_INTERVAL_S = 2.0;
     public static final int MAX_CONSECUTIVE_CONTINUE_PALIERS = 4;
@@ -419,6 +430,8 @@ public final class Generator {
         int wordsPerNode = Filler.WORDS_PER_NODE;
         /** Multi-word expression cap (Params.multiWordPercent, mirrors _worker_multi_word_percent). */
         int multiWordPercent = Filler.MULTI_WORD_PERCENT;
+        /** Fill method of the attempts' search (Params.fillMethod, mirrors _worker_fill_method). */
+        String fillMethod = IngridSolver.FILL_METHOD_DEFAULT;
         /** Black-cell symmetry of the ratio draw (Params.blackSymmetry, mirrors _worker_black_symmetry). */
         String blackSymmetry = null;
         /** Black-cell pattern style of the ratio draw (Params.patternStyle, mirrors _worker_pattern_style). */
@@ -456,6 +469,7 @@ public final class Generator {
         a.incrementalFill = ctx.incrementalFill;
         a.wordsPerNode = ctx.wordsPerNode;
         a.multiWordPercent = ctx.multiWordPercent;
+        a.fillMethod = ctx.fillMethod;
         return a;
     }
 
@@ -862,6 +876,9 @@ public final class Generator {
         public int wordsPerNode = Filler.WORDS_PER_NODE;
         /** The "Multi-mots" field: cap on multi-word expressions (mirrors generate_grid's multi_word_percent). */
         public int multiWordPercent = Filler.MULTI_WORD_PERCENT;
+        /** The "Méthode" selector: the search every attempt fills its grid with (IngridSolver.FILL_METHODS, mirrors
+         * generate_grid's fill_method). */
+        public String fillMethod = IngridSolver.FILL_METHOD_DEFAULT;
         /** The "Symétrie" selector (Grids.BLACK_SYMMETRIES, null = none), applied by every attempt's ratio draw. */
         public String blackSymmetry = null;
         /** The "Style de motif" selector (Grids.PATTERN_STYLES, null = airy), applied by every attempt's ratio draw. */
@@ -977,9 +994,11 @@ public final class Generator {
         // player, see the end of this method).
         List<Object[]> minimizedSuccesses = new ArrayList<>();
         List<Outcome> accumulatedSuccesses = new ArrayList<>();
-        // Genuine successes counted the moment each attempt finishes,
+        // Their solutions (successKey): a success ending on one of them is not kept again.
+        Set<String> accumulatedKeys = new HashSet<>();
+        // Distinct solutions found so far (successKey), counted the moment each attempt finishes, their number
         // published live as the "success_count" progress event.
-        int[] liveSuccessCount = {0};
+        Set<String> liveSuccessKeys = java.util.Collections.synchronizedSet(new HashSet<>());
         // See BLACK_OVERFLOW_FACTOR: the most black cells a grid may hold at the end of a palier, null when off.
         long blackObjective = (long) Math.max(Math.rint(rows * cols * p.blackRatio),
                 Math.rint(p.blackEnrichmentFraction * rows * cols));
@@ -1064,6 +1083,7 @@ public final class Generator {
         ctx.challengeWords = challenge;
         ctx.wordsPerNode = p.wordsPerNode;
         ctx.multiWordPercent = p.multiWordPercent;
+        ctx.fillMethod = p.fillMethod;
         ctx.blackSymmetry = p.blackSymmetry;
         ctx.patternStyle = p.patternStyle;
         ctx.patternMix = p.patternMix;
@@ -1389,9 +1409,8 @@ public final class Generator {
                             Thread.currentThread().interrupt();
                             throw new GenerationCancelled();
                         }
-                        if (res.result() != null) {
-                            liveSuccessCount[0]++;
-                            progress.on("success_count", data("count", liveSuccessCount[0]));
+                        if (res.result() != null && liveSuccessKeys.add(successKey(res.grid(), res.result()))) {
+                            progress.on("success_count", data("count", liveSuccessKeys.size()));
                         }
                         if (origFutures.contains(f)) {
                             origDone++;
@@ -1498,9 +1517,11 @@ public final class Generator {
                     if (plugged == null) continue;
                     @SuppressWarnings("unchecked")
                     List<int[]> ps = (List<int[]>) plugged[1];
-                    outcomes.set(k, new Outcome((char[][]) plugged[0], new Fill.Result(ps, (String[]) plugged[2]), o.diag()));
-                    liveSuccessCount[0]++;
-                    progress.on("success_count", data("count", liveSuccessCount[0]));
+                    Outcome po = new Outcome((char[][]) plugged[0], new Fill.Result(ps, (String[]) plugged[2]), o.diag());
+                    outcomes.set(k, po);
+                    if (liveSuccessKeys.add(successKey(po.grid(), po.result()))) {
+                        progress.on("success_count", data("count", liveSuccessKeys.size()));
+                    }
                 }
                 // A success holding too many black cells (BLACK_OVERFLOW_FACTOR) is a failed grid: not counted,
                 // and dropped like a discarded one (its diagnostics carry no partial state to clean).
@@ -1510,17 +1531,18 @@ public final class Generator {
                     if (o.result() != null && blackOverflow.test(o.grid())) {
                         it.remove();
                         overflowSuccesses++;
+                        liveSuccessKeys.remove(successKey(o.grid(), o.result()));
                         supersededChecks += o.diag().checks == null ? 0 : o.diag().checks;
                     }
                 }
-                if (overflowSuccesses > 0) {
-                    liveSuccessCount[0] -= overflowSuccesses;
-                    progress.on("success_count", data("count", liveSuccessCount[0]));
-                }
+                if (overflowSuccesses > 0) progress.on("success_count", data("count", liveSuccessKeys.size()));
                 List<Outcome> successes = new ArrayList<>();
                 List<Outcome> failedAll = new ArrayList<>();
                 for (Outcome o : outcomes) (o.result() != null ? successes : failedAll).add(o);
-                accumulatedSuccesses.addAll(successes);
+                // Cumulative across the whole search, one per distinct solution (MIN_SUCCESSFUL_ATTEMPTS).
+                for (Outcome o : successes) {
+                    if (accumulatedKeys.add(successKey(o.grid(), o.result()))) accumulatedSuccesses.add(o);
+                }
                 Set<String> seenKeys = new HashSet<>();
                 List<Outcome> failedUnique = new ArrayList<>();
                 for (Outcome o : failedAll) {
@@ -2087,6 +2109,13 @@ public final class Generator {
                 case "--deadline-checks" -> p.deadlineChecks = Long.parseLong(args[++i]);
                 case "--symmetry" -> p.blackSymmetry = args[++i];
                 case "--pattern-style" -> p.patternStyle = args[++i];
+                case "--fill-method" -> {
+                    p.fillMethod = args[++i];
+                    if (!IngridSolver.FILL_METHODS.contains(p.fillMethod)) {
+                        System.err.println("--fill-method: falcon or ingrid");
+                        System.exit(2);
+                    }
+                }
                 case "--pattern-mix" -> {
                     p.patternMix = java.util.List.of(Integer.parseInt(args[++i]), Integer.parseInt(args[++i]),
                             Integer.parseInt(args[++i]));

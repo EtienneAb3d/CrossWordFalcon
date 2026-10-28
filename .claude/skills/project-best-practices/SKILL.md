@@ -1045,6 +1045,89 @@ Full mechanism-level detail and iteration history live in `CLAUDE.md`
 (current state) and this project's own file history — the facts below are
 the current defaults/behavior to know before touching this code.
 
+- **Two fill methods: "Ingrid-like" (default) and "Falcon
+  (expérimental)"** — the user's rules: a "Méthode" selector right of
+  "Effort", visible on localhost only for now; "Ingrid-like" is the
+  default everywhere (form, requests off localhost, API, Populate,
+  "Suivant"), "Falcon" is labelled "Falcon (expérimental)"; "Ingrid-like" a fill similar to
+  the Ingrid crossword filler (github.com/rf-/ingrid_core) using the
+  current method's glossaries and their priorities, the level selection
+  by usage score and FREQ included (`FILL_METHODS`, `IngridSolver`,
+  `try_fill(fill_method=)`; Java `IngridSolver`). Choices made with it, to
+  revisit with the user: only the generation attempts' own search changes
+  — pattern, cleanups between paliers, pre-cleanup optimization fills,
+  minimization and grid choice stay Falcon's, and the palier machinery
+  consumes the Ingrid record like a Falcon one; the
+  word order is static per slot (Ingrid's), by family ("Mots Défi", theme,
+  Scrabble, rest) then 900 x Ingrid's fill score + 60 x usage score + 20 x
+  log10(1 + frequency) instead of Ingrid's letter score and word score;
+  the 60 % usage filter is not applied (the usage score is in the order
+  instead); the user's rule: the word pick draws among the first 6 words
+  left (Ingrid: 3) — choice made with it, to revisit with the user: each
+  half as likely as the previous one (32/16/8/4/2/1); the weighted word pick never passes a family for a later
+  one; slots still holding a "Mots Défi" word are chosen first (Falcon's
+  level 2); no reshape, attention zone, words per node or internal
+  hardclean; the multi-word cap applies to explicit choices only (a slot
+  arc consistency reduces to an expression is not refused); slots dry
+  before the search stay out of the CSP; a check is one decision or
+  refutation plus one per 10 words propagation removed (measured ~50 µs
+  per check vs ~90 µs for Falcon, French 15x15); on failure, the record's
+  open slot with the largest learnt crossing weight is reported
+  impossible so the cleanup has something to remove. Measured (French,
+  easy, 15x15, try_fill on the same patterns, 100 000 checks): Ingrid-like
+  4/4 filled in ~2 s each, Falcon 2/4 (21x21, 500 000 checks: 3/3 in 4-9 s
+  vs 0/2); end to end in Flash, 3-4 paliers vs 7-10. The user's rule:
+  Interactive "Suivant" uses the selected method, the useful data kept in
+  the session, hand changes to letters and to the grid's structure
+  requiring states to be recomputed (`interactive_place_word_ingrid`, Java
+  `Interactive.placeWordIngrid`). Choices made with it, to revisit with the
+  user: every click recomputes everything from the posted grid, the
+  session keeping only the crossing weights (by pair of crossing slots, a
+  changed crossing forgotten) and the last slot filled (by cells); a slot
+  the initial arc consistency would wipe out is dropped from the CSP and
+  treated as blocked, no word being written on its empty cells (even one
+  that would unblock it); a word is accepted when arc consistency still
+  holds after it, a slot whose refutation fails is set aside (yellow); a
+  20 000-check budget per click, then a last resort placing the first
+  word of the best-priority slot whatever it leaves; the blue window is
+  the first cell of each of the 3 best slots; "Candidats", "Croisés",
+  "Stats", "Nettoyer"… stay Falcon's.
+  The user's rule: for diversity, the very first word of an empty grid
+  (automatic or Interactive) is placed the Falcon way
+  (`IngridSolver._falcon_pick`). Choices made with it, to revisit with the
+  user: "empty" means no locked letter and no word already placed when the
+  search (or the click) starts, so every run from such a root — restarts
+  included — draws its first word that way, until one is accepted; the
+  word is the first of Falcon's window draw with the families ahead, then
+  checked by arc consistency like any Ingrid word (refuted and redrawn the
+  Falcon way if it fails); Falcon's slot cascade picks the slot; the blue
+  window of such a click is Falcon's level-6 window. Measured (French
+  Ristretto, 4 seeds): 16-22 distinct grids offered instead of 28-39.
+- **Interactive "Suivant" fills the selected emplacement first** — the
+  user's rule: when an incomplete emplacement is selected in the grid,
+  "Suivant" tries to fill it if a possibility exists, otherwise the usual
+  rules choose and fill an emplacement (`_selected_slot_index`, both fill
+  methods, Java `Interactive.selectedSlotIndex`). Choices made with it, to
+  revisit with the user: the selected emplacement is the word through the
+  selected cell in the typing direction; "a possibility exists" means a
+  word accepted at any of the Falcon acceptance levels (so even one that
+  newly blocks a crossing emplacement, never one crossing an already
+  blocked one), tried before any level elsewhere, with no black-cell
+  reshape; with Ingrid-like, a word keeping arc consistency, else the last
+  resort on that slot, provided it is a candidate slot (not blocked, not
+  crossing a blocked one's empty cells); a red (blocked) selected
+  emplacement is tried too; the blue outline then shows that slot only.
+  The user's further rule: when a zone is selected, "Suivant" fills that
+  zone (every other cell assumed locked) and answers that the zone is
+  complete once all its emplacements are filled (`_zone_slot_indices`,
+  `_zone_complete`, Java `Interactive.zoneSlotIndices`/`zoneComplete`).
+  Choices made with it, to revisit with the user: a zone emplacement is a
+  slot whose every cell is in the zone (the zone is already expanded to
+  whole emplacements, so the perpendicular slots of the cells it added
+  stay outside); "filled" means every cell lettered, whether or not the
+  word is valid; no black-cell reshape inside a zone; crossing checks keep
+  looking at the whole grid; a selected emplacement outside the zone is
+  ignored.
 - **The ratio draw selects white runs by their summed word-length score**
   (`_place_black_cells`, `_crossing_length_score`, `_run_score`) — the
   user's rule: each white cell scores the sum of the lengths of the words
@@ -1318,6 +1401,14 @@ the current defaults/behavior to know before touching this code.
   budget. They are an extra chance within the palier, not extra lineages:
   the next palier resumes only the best `PARALLEL_ATTEMPTS - reset_count`
   cleaned grids (N-1 of N) plus its blank-grid worker(s) (`_seed_pool`).
+- **Only distinct solutions count as successes** — the user's rule
+  ("ne compter que les solutions distinctes"): the gold-medal counter, the
+  `MIN_SUCCESSFUL_ATTEMPTS` threshold and the successes kept for the grid
+  choice count a solution (same pattern, same words, `_success_key`, Java
+  `Generator.successKey`) once, so the counter equals the grids offered and
+  a choice is always offered. Choice made with it, to revisit with the
+  user: two distinct solutions that the parallel minimization turns into
+  one grid are still offered once.
 - A single successful grid never concludes `generate_grid`'s search on its
   own: at least `MIN_SUCCESSFUL_ATTEMPTS` (2) genuine successes, counted
   cumulatively across the whole search rather than one palier alone, are
@@ -2659,25 +2750,19 @@ the current defaults/behavior to know before touching this code.
   from a new grid — the user's rule: when several grids fail, new grids
   are generated so there are always as many grids as processors (a pool
   grid is never resumed by two workers once a pool was built).
-- **In French, selecting the American ("grouped") style raises "Taux
-  noir" to at least 18 %** (`script.js`'s `GROUPED_MIN_BLACK_PERCENT`,
-  `groupedBlackMinimumApplies`), the user's rule; the player may lower it
-  again by hand. Under that style every "Préconfigurations" preset shows
-  and applies 18 %, in French too (`presetBlack`). The user's rule: the
-  other languages no longer force it — the rate and the presets' own
-  rates stay. Choice made with it, to revisit with the user: "the
-  language" is the interface/grid language selector (`uiLanguage`).
-- **A large American grid starts at 18 % black and 70 % "Groupé"** —
-  the user's rule: when the creation form is set to a grid with a side
-  above 15 in the American style, "Taux noir" becomes 18 % and the
-  "Groupé" share is raised to 70 %, both changeable afterwards
-  (`script.js`'s `applyLargeAmericanDefaults`). Choices made with it, to
-  revisit with the user: every language; applied once each time the form
-  enters that state (size field change, preset, or style leaving 100/0/0),
-  never when a record's settings are restored; "Taux noir" is set to 18 %
-  even when it was higher; the 70 % is taken from "Aligné" then "Aéré"
-  (30/40/30 -> 30/70/0), a "Groupé" share already above 70 % is kept;
-  presets with a side above 15 show 18 % under that style.
+- **The pattern style never changes "Taux noir"** — the user's rule: no
+  black rate is raised to 18 % any more, 15 % stays the default
+  everywhere; the "Préconfigurations" presets keep their own rates
+  whatever the style.
+- **A large American grid starts at 70 % "Groupé"** — the user's rule:
+  when the creation form is set to a grid with a side above 15 in the
+  American style, the "Groupé" share is raised to 70 %, changeable
+  afterwards (`script.js`'s `applyLargeAmericanDefaults`). Choices made
+  with it, to revisit with the user: every language; applied once each
+  time the form enters that state (size field change, preset, or style
+  leaving 100/0/0), never when a record's settings are restored; the 70 %
+  is taken from "Aligné" then "Aéré" (30/40/30 -> 30/70/0), a "Groupé"
+  share already above 70 % is kept.
 - **Both cross-palier resume paths start the next palier the same way**,
   differing only in their cleanup — the user's rule: "La différence est au
   niveau du nettoyage, pas au niveau du démarrage du cycle suivant. Ça

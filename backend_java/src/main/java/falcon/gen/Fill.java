@@ -461,6 +461,10 @@ public final class Fill {
         public String reshapeSymmetry;
         /** Scrabble family of the candidate order (mirrors try_fill's scrabble_words). */
         public PW scrabbleWords;
+        /** The search filling the grid (IngridSolver.FILL_METHODS, mirrors try_fill's fill_method), "falcon" by
+         * default (every fill that is not a generation attempt's own search): "ingrid" runs IngridSolver on the
+         * Filler instead of Filler.solve. */
+        public String fillMethod = "falcon";
     }
 
     /** Indices of the slots whose word is the same as, or shares a canonical form with, another slot's word of
@@ -649,8 +653,15 @@ public final class Fill {
             for (String w : a.preseedAssignment) if (w != null) n++;
             filler.bestAssignedCount = n;
         }
-        filler.markImmediatelyImpossibleSlots();
-        boolean solvedInternally = filler.solve(deadline);
+        boolean ingrid = "ingrid".equals(a.fillMethod);
+        boolean solvedInternally;
+        if (ingrid) {
+            filler.reshapeEnabled = false;
+            solvedInternally = new IngridSolver(filler, deadline).solve();
+        } else {
+            filler.markImmediatelyImpossibleSlots();
+            solvedInternally = filler.solve(deadline);
+        }
         // A failed search has undone every reshape, but its record may have
         // been taken on a reshaped grid: carry on from that grid, and hand its
         // pattern back to the caller through `grid` (mirrors try_fill).
@@ -727,6 +738,18 @@ public final class Fill {
                     diag.impossibleSlots = new ArrayList<>(is);
                     TreeSet<Integer> ic = new TreeSet<>(diag.impossibleCells);
                     for (int i : quota) for (int c : slots.get(i)) ic.add(c);
+                    diag.impossibleCells = new ArrayList<>(ic);
+                }
+                // "ingrid" method: the open slot whose crossings caused the most domain wipe-outs, the one the
+                // cleanup between paliers repairs.
+                List<Integer> ingridBlocked = new ArrayList<>();
+                if (ingrid) for (int i : filler.ingridBlockedSlots) if (filler.bestAssignment[i] == null) ingridBlocked.add(i);
+                if (!ingridBlocked.isEmpty()) {
+                    TreeSet<Integer> is = new TreeSet<>(diag.impossibleSlots);
+                    is.addAll(ingridBlocked);
+                    diag.impossibleSlots = new ArrayList<>(is);
+                    TreeSet<Integer> ic = new TreeSet<>(diag.impossibleCells);
+                    for (int i : ingridBlocked) for (int c : slots.get(i)) ic.add(c);
                     diag.impossibleCells = new ArrayList<>(ic);
                 }
                 if (!canonicalConflicts.isEmpty()) {

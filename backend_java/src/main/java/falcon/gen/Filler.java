@@ -326,6 +326,9 @@ public final class Filler {
     public RecentSlots impossibleThisAttempt = new RecentSlots(MAX_EXCLUDED_SLOTS);
     public String[] bestAssignment;
     public int bestAssignedCount;
+    /** "ingrid" fill method (IngridSolver.solve): on failure, the open slot of the record whose crossings caused the
+     * most domain wipe-outs, reported impossible by Fill.tryFill (mirrors ingrid_blocked_slots). */
+    public List<Integer> ingridBlockedSlots = new ArrayList<>();
     int initialAssignedCount;
     boolean inherited;
     public Consumer<String[]> onNewBest;

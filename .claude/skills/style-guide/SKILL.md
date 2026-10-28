@@ -4772,8 +4772,10 @@ end through the real running API (interactive start/step/save,
   Playwright/Chromium); "Précision thématique" (`#theme-precision`) is the
   first item of `#form-actions`, left of "Thématique", its plain
   label-above-input shape top-aligned with Thématique's label by the row's
-  `align-items: flex-start`; "Difficulté", "Mots par pose", "Effort" and the
-  "Voir les mots (spoiler)" toggle sit on a line of their own,
+  `align-items: flex-start`; "Difficulté", "Effort", "Méthode" (localhost
+  only) and "Mots par pose" (only while "Méthode" is "Falcon
+  (expérimental)", `#words-per-node-field[hidden]` beating `label`'s own
+  `display`) sit on a line of their own,
   `#generate-options-row` (`flex-basis: 100%`, `gap: 1rem`,
   `align-items: end` like the option row, so the toggle lines up with the
   input boxes), right above `#generate-row`, and are hidden with the other
@@ -4797,14 +4799,9 @@ end through the real running API (interactive start/step/save,
   confirmed** with Playwright/Chromium on a real 9x9 English grid (computed
   `background-size: 100% 100%`, full blue squares) and on its PDF.
 
-- **Presets under the American style**: while the "Style de motif" mix is
-  not 100/0/0 and the language is French, every "Préconfigurations"
-  option shows and applies an 18 % black rate (the other languages keep
-  each preset's own rate) (`script.js`'s `presetBlack`,
-  `GROUPED_MIN_BLACK_PERCENT`); the list is rebuilt whenever the style
-  changes. No visual change otherwise. **Visually confirmed** with
-  Playwright/Chromium: the eight options read "… 18 % noir", picking
-  Mocha sets 21/21/18, and switching back to Aéré restores 0/10/12/15 %.
+- **Presets under the American style**: every "Préconfigurations" option
+  shows and applies its own black rate whatever the "Style de motif" mix
+  (`script.js`'s `GRID_PRESETS`).
 
 - **Usage-score statistics** (`#usage-stats-btn`, `#usage-stats`), at the
   user's explicit request: a localhost-only icon button right after

@@ -660,6 +660,13 @@ label {
   font-size: 0.9rem;
 }
 
+/* "Méthode" (localhost only) and "Mots par pose" (Falcon method only):
+   `label`'s own `display` beats the browser's [hidden] rule. */
+#fill-method-field[hidden],
+#words-per-node-field[hidden] {
+  display: none;
+}
+
 input, select, button {
   font-size: 1rem;
   padding: 0.5rem 0.6rem;

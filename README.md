@@ -32,6 +32,9 @@ the grid for you.
 - Seven levels of computing effort ("Effort") for filling the grid
   automatically, from the quick "Flash" to the exhaustive "GridZilla",
   each showing how many words one attempt may try.
+- Grids are filled by a search inspired by the Ingrid crossword filler
+  ("Ingrid-like"); when the page is opened on the machine running the
+  server, a "Method" choice also offers the experimental "Falcon" search.
 - Themed grids: vocabulary and clues steered toward a subject you choose.
 - "Challenge Words": force your own words into the grid.
 
@@ -433,7 +436,11 @@ you enter this mode, so you can look up words while you fill in the grid:
 
 - **"Next"** places one more word for you wherever it fits best, picked
   at random from among the best candidates for that spot — so undoing it
-  and clicking again usually offers a different word;
+  and clicking again usually offers a different word. If you have
+  selected an incomplete word in the grid, it fills that word first,
+  whenever some word can go there. If you have selected a zone, it only
+  places words inside that zone, leaving the rest of the grid untouched,
+  and tells you when the zone is complete;
   **"Back"** undoes the last change, one step at a time.
 - You can click any cell and type a letter, press **.** (or any other
   punctuation key) to add or remove a black cell — mirrored according to

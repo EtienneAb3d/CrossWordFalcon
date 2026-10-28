@@ -72,6 +72,15 @@ public final class UsedWords extends HashSet<String> {
         return ids;
     }
 
+    /** {@code word} and every word of the index sharing a canonical form with it: the words its placement makes
+     * unavailable (mirrors IngridSolver._blockers). */
+    public Set<String> blockersOf(String word) {
+        Set<String> out = new HashSet<>();
+        out.add(word);
+        for (int lemma : lemmasOf(word)) out.addAll(wordsOf(lemma));
+        return out;
+    }
+
     /** Every word of the index carrying the lemma {@code lemmaId} (mirrors _lemma_words). */
     private List<String> wordsOf(int lemmaId) {
         List<String> words = siblings.get(lemmaId);

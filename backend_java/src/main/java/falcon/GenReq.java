@@ -19,6 +19,8 @@ public final class GenReq {
     public String patternStyle = "airy";
     /** The form's three "Style de motif" percentages; when given, patternStyle is derived from it (App.applyPatternMix). */
     public List<Integer> patternMix;
+    /** The "Méthode" selector (IngridSolver.FILL_METHODS), validated by App.validateFillMethod. */
+    public String fillMethod = falcon.gen.IngridSolver.FILL_METHOD_DEFAULT;
     public String mode = "medium";
     public String pseudo;
     public String theme;
@@ -42,6 +44,7 @@ public final class GenReq {
         r.symmetry = b.str("symmetry", "none");
         r.patternStyle = b.str("pattern_style", "airy");
         r.patternMix = b.optIntList("pattern_mix");
+        r.fillMethod = b.str("fill_method", falcon.gen.IngridSolver.FILL_METHOD_DEFAULT);
         r.mode = b.str("mode", "medium");
         r.pseudo = b.str("pseudo", null);
         r.theme = b.str("theme", null);
@@ -66,6 +69,7 @@ public final class GenReq {
         m.put("symmetry", symmetry);
         m.put("pattern_style", patternStyle);
         m.put("pattern_mix", patternMix == null ? null : new java.util.ArrayList<>(patternMix));
+        m.put("fill_method", fillMethod);
         m.put("mode", mode);
         m.put("pseudo", pseudo);
         m.put("theme", theme);

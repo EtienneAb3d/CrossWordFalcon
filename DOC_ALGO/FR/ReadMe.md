@@ -95,7 +95,10 @@ et tout le moteur décrit ici.
 2. Choisir un **Effort** parmi Flash/Turbo/Rapide/Moyen/Fort/Ultra/Megatron/GridZilla
    (Ultra, Megatron et GridZilla seulement quand la page est ouverte en local) — ce choix ne
    fixe qu'un budget de recherche par tentative (« Limites de la
-   recherche », chapitre 4), pas la qualité du résultat.
+   recherche », chapitre 4), pas la qualité du résultat. En local, le
+   sélecteur **Méthode** choisit en plus la recherche de remplissage :
+   Falcon ou Ingrid-like (« La méthode de remplissage Ingrid-like »,
+   chapitre 4).
 3. Facultatif : lister des mots dans le champ **Thématique** pour orienter
    le choix des mots, et/ou dans le champ **Mots Défi
    (personnalisation)** pour forcer des mots précis (jamais montrés dans
@@ -309,7 +312,11 @@ toutes les tentatives se terminent d'elles-mêmes.
 
 Il faut au moins **2** réussites, cumulées sur toute la recherche : un
 palier peut fournir la deuxième réussite d'un palier précédent
-(`generate_grid`, `MIN_SUCCESSFUL_ATTEMPTS`).
+(`generate_grid`, `MIN_SUCCESSFUL_ATTEMPTS`). Seules les solutions
+**distinctes** comptent : une réussite aboutissant à une grille déjà
+trouvée (même motif, mêmes mots) n'est ni comptée ni gardée
+(`_success_key`), si bien que le joueur a toujours au moins deux grilles
+différentes à choisir.
 
 **Seconde chance.** Une tentative qui échoue alors qu'une tentative
 **d'origine** du palier est encore en course n'est pas aussitôt déclarée
@@ -908,6 +915,11 @@ affiché : **Précédent** annule le mot et son réaménagement.
 ---
 
 ## Chapitre 4 — Phase 2 : remplir la grille avec de vrais mots
+
+Deux méthodes de remplissage existent : **Ingrid-like**, la méthode par
+défaut, décrite en fin de chapitre (« La méthode de remplissage
+Ingrid-like »), et **Falcon (expérimental)**, décrite dans tout le reste
+de ce chapitre, que le sélecteur **Méthode** permet de choisir en local.
 
 Chaque suite d'au moins 2 cases blanches est un emplacement à remplir
 (`extract_slots`). Le remplissage se fait par **essais successifs avec
@@ -1781,6 +1793,28 @@ général), mais sans recherche récursive : une seule décision est prise, et
 elle doit être bonne du premier coup, puisqu'il n'y a pas de palier suivant
 pour réparer.
 
+**L'emplacement sélectionné passe d'abord.** Quand un emplacement encore
+incomplet est sélectionné dans la grille (le mot qui passe par la case
+sélectionnée, dans le sens de saisie), **Suivant** essaie d'abord de le
+remplir : les trois familles et les trois niveaux de tolérance décrits
+plus bas sont appliqués à cet emplacement seul, sans remodelage de cases
+noires, et le mot y est posé dès qu'un candidat est accepté
+(`_selected_slot_index`, bloc `focus` d'`interactive_place_word`). Ce
+n'est que si aucun mot ne peut y aller que les règles ci-dessous
+choisissent l'emplacement. Le contour bleu montre alors cet emplacement
+seul.
+
+**Une zone sélectionnée borne le remplissage.** Quand une zone est
+sélectionnée dans la grille, toutes les cases hors zone sont tenues pour
+verrouillées : **Suivant** ne pose son mot que sur un emplacement
+entièrement compris dans la zone, sans remodelage de cases noires, et
+l'emplacement sélectionné ne passe d'abord que s'il en fait partie
+(`_zone_slot_indices`). Les vérifications de croisement restent celles
+de la grille entière. Quand tous les emplacements de la zone sont
+entièrement lettrés, rien n'est posé et la réponse indique que la zone
+est complète (`_zone_complete`, `_zone_complete_result`). La méthode
+Ingrid-like applique la même borne à ses emplacements candidats.
+
 **Le choix de l'emplacement évite les emplacements bloqués.** Un mot n'est
 jamais posé **sur** un emplacement bloqué tant qu'un autre emplacement peut
 en recevoir un : la liste des emplacements bloqués est calculée une fois par
@@ -2041,6 +2075,154 @@ machineries de tentatives parallèles :
 - **Vérifier** — contrôle que chaque mot posé est bien dans le
   dictionnaire ; comme les précédents, il n'a jamais un Mot Défi
   validement posé pour invalide.
+
+### La méthode de remplissage « Ingrid-like »
+
+Le sélecteur **Méthode** du formulaire, à droite d'**Effort** (visible
+seulement quand la page est ouverte en local), choisit la recherche que
+chaque tentative applique à son motif : **Ingrid-like** (par défaut), une recherche
+inspirée du remplisseur de grilles Ingrid (`github.com/rf-/ingrid_core`)
+(`backend/crossword_gen.py`, `IngridSolver` ; `try_fill(fill_method=)`,
+`generate_grid(fill_method=)`, `FILL_METHODS`, `FILL_METHOD_DEFAULT`), ou
+**Falcon (expérimental)**, la recherche décrite dans le reste de ce
+chapitre. Seule la recherche d'une
+tentative change : le lexique de la grille (sélection par niveau selon
+l'usage et la fréquence), les familles de candidats (Mots Défi, glossaire
+thématique, dictionnaire Scrabble, reste du dictionnaire), la limite
+« Multi-mots max », la règle des formes canoniques, la pose des cases
+noires, les nettoyages entre paliers (chapitre 5) et l'optimisation finale
+(chapitre 6) sont les mêmes pour les deux méthodes. La recherche
+Ingrid-like ne réaménage jamais de case noire et n'utilise ni zone
+d'attention, ni mots par pose, ni hardclean interne.
+
+**Le problème posé.** Chaque emplacement a un **domaine** : les mots du
+lexique compatibles avec ses lettres connues (lettres verrouillées, mots
+déjà posés), moins les mots déjà utilisés, plus les Mots Défi qui y
+tiennent. Un emplacement déjà occupé par un mot garde ce mot ; un
+emplacement exclu (« Finir la zone ») ou déjà sans aucun mot possible au
+départ reste hors du problème, et donc vide (`IngridSolver.__init__`).
+
+**La cohérence d'arc.** Après chaque décision, le programme retire de
+chaque domaine tout mot dont la lettre, sur une case croisée, n'apparaît
+plus chez aucun candidat de l'emplacement croisé ; et quand un emplacement
+n'a plus qu'un seul mot, ce mot et ceux qui partagent une forme canonique
+avec lui sont retirés de tous les autres domaines. Il recommence jusqu'à
+ce que plus rien ne change (algorithme AC-3, `IngridSolver._propagate`).
+Si un domaine se vide, la décision est impossible. Pour que ce test soit
+rapide, chaque emplacement tient à jour, position par position, le nombre
+de ses candidats portant chaque lettre. Chaque retrait est inscrit dans
+une pile, qui permet de revenir exactement à un état antérieur
+(`IngridSolver._remove`, `IngridSolver._undo_to`).
+
+**Choisir l'emplacement.** Parmi les emplacements ayant encore plusieurs
+mots possibles — ceux où tient encore un Mot Défi d'abord, s'il y en a —,
+le programme calcule une priorité : la taille du domaine divisée par la
+somme des **poids** des croisements avec un emplacement encore ouvert
+(heuristique *dom/wdeg*). Chaque fois qu'un domaine se vide, chacun de ses
+croisements gagne en poids la part du domaine qu'il a éliminée, et tous
+les poids vieillissent d'un facteur 0,99 (`INGRID_WEIGHT_AGE_FACTOR`).
+L'emplacement du tour précédent est conservé tant que sa priorité reste à
+moins de 0,15 de la meilleure (`INGRID_ADAPTIVE_BRANCHING_THRESHOLD`) ;
+sinon l'un des 3 meilleurs est tiré au hasard avec les poids 4, 2 et 1
+(`INGRID_RANDOM_SLOT_WEIGHTS`, `IngridSolver._choose_slot`).
+
+**Choisir le mot.** L'ordre des mots d'un emplacement est calculé une
+seule fois, à partir des domaines laissés par la cohérence d'arc initiale
+(`IngridSolver._order`) : les familles de candidats d'abord, dans l'ordre
+habituel, puis, dans chaque famille, le score décroissant 900 × score de
+remplissage + 60 × note d'usage + 20 × log10(1 + fréquence)
+(`INGRID_FILL_SCORE_WEIGHT`, `INGRID_USAGE_WEIGHT`, `INGRID_FREQ_WEIGHT`).
+Le **score de remplissage** est la moyenne, sur les lettres du mot, du
+logarithme du nombre de mots de l'emplacement croisé portant cette lettre
+sur la case partagée (0 pour une case non croisée) : il favorise les mots
+qui laissent le plus de choix aux mots croisés. Le programme prend ensuite
+les 6 premiers mots de cet ordre encore dans le domaine et non refusés par
+la limite « Multi-mots max », ne garde que ceux de la famille du premier,
+et en tire un au hasard, chacun deux fois moins probable que le précédent
+(poids 32, 16, 8, 4, 2 et 1, `INGRID_RANDOM_WORD_WEIGHTS`,
+`IngridSolver._pick_word`).
+
+**Le premier mot, choisi par Falcon.** Tant que la grille ne contient
+encore aucun mot (aucune lettre verrouillée, aucun mot déjà posé, aucun
+choix fait depuis le départ de la recherche), l'emplacement et le mot sont
+choisis comme le ferait la méthode Falcon, pour favoriser la diversité des
+grilles : l'emplacement par sa cascade de choix
+(`Filler._select_target_slot`), le mot par sa fenêtre de tirage
+(`Filler.ordered_candidates`), les familles de candidats toujours en tête
+(`IngridSolver._falcon_pick`). Ce mot est ensuite vérifié par la cohérence
+d'arc comme tout autre ; Ingrid-like reprend la main pour tous les mots
+suivants.
+
+**Avancer et revenir en arrière.** Le mot choisi devient le seul mot de
+son emplacement et la cohérence d'arc est rétablie. En cas d'échec, le
+programme essaie l'hypothèse inverse : ce mot est retiré du domaine, et la
+cohérence d'arc rétablie à nouveau. Si cela échoue aussi, c'est le choix
+précédent qui est impossible : il est défait et son mot retiré à son tour,
+et ainsi de suite (`IngridSolver._run`). Si même le premier choix doit
+être défait sans issue, le motif est prouvé impossible à remplir. Au-delà
+de 500 retours en arrière (`INGRID_INITIAL_MAX_BACKTRACKS`), la recherche
+repart de l'état initial avec une limite multipliée par 1,1
+(`INGRID_RETRY_GROWTH_FACTOR`), en gardant les poids appris
+(`IngridSolver.solve`).
+
+**Budget et fin.** Chaque décision et chaque retrait d'hypothèse compte
+une vérification, plus une par tranche de 10 mots retirés des domaines
+par la cohérence d'arc (`INGRID_WORDS_PER_CHECK`), dans le même budget
+d'**Effort** que la recherche Falcon, avec la même prolongation tant
+qu'une tentative sœur travaille encore (`IngridSolver._deadline_reached`).
+Le meilleur état atteint (le plus d'emplacements réduits à un seul mot)
+est le record publié dans l'aperçu et transmis au palier suivant. En cas
+d'échec, l'emplacement encore ouvert de ce record dont les croisements ont
+le plus vidé de domaines est déclaré impossible, pour que le nettoyage
+entre paliers retire les mots qui le croisent (`ingrid_blocked_slots`,
+`try_fill`).
+
+**« Suivant » en mode Ingrid-like.** Quand le sélecteur Méthode est sur
+Ingrid-like, le bouton **Suivant** du mode Interactif pose son mot par une
+seule décision de cette recherche (`interactive_place_word_ingrid`). Tout
+est recalculé à chaque clic à partir de la grille affichée — emplacements,
+domaines, cohérence d'arc, ordre des mots —, si bien qu'une lettre ou une
+case noire changée à la main est toujours prise en compte. La session ne
+garde d'un clic à l'autre que les **poids des croisements**, rangés par
+couple d'emplacements qui se croisent (un croisement dont un emplacement a
+changé est oublié), et le **dernier emplacement rempli**, repéré par ses
+cases, pour le maintien de l'emplacement précédent
+(`IngridSolver.load_weights`/`export_weights`).
+
+1. La cohérence d'arc initiale **écarte du problème** chaque emplacement
+   qu'elle laisserait sans mot, en apprenant de cet échec, et recommence
+   jusqu'à ce que le reste soit cohérent (`IngridSolver.settle`). Ces
+   emplacements sont bloqués : aucun mot n'est écrit sur une de leurs
+   cases encore vides, ce qui reviendrait à croiser un emplacement bloqué.
+2. Parmi les autres emplacements pas encore écrits — ceux qui gardent
+   plusieurs mots d'abord —, l'emplacement est choisi comme dans la
+   recherche (*dom/wdeg*, maintien de l'emplacement précédent, Mots Défi
+   d'abord), et le mot tiré comme dans la recherche. Sur une grille encore
+   sans aucune lettre, emplacement et mot sont choisis par la méthode
+   Falcon (`IngridSolver._falcon_pick`), comme le premier mot de la
+   recherche automatique.
+3. Le mot est posé si la cohérence d'arc tient une fois qu'il est placé.
+   Sinon il est réfuté (retiré du domaine, ce qui se propage aussi) ; un
+   emplacement dont la réfutation échoue à son tour, ou qui n'a plus de
+   mot, est **écarté** (jaune) et un autre emplacement est choisi.
+4. Au-delà de 20 000 vérifications (`INGRID_INTERACTIVE_BUDGET`), ou quand
+   plus aucun emplacement ne convient, le **dernier recours** pose sur
+   l'emplacement de meilleure priorité le premier mot de son ordre encore
+   compatible avec la grille, même s'il laisse un emplacement sans mot —
+   l'équivalent du dernier niveau de tolérance de la méthode Falcon.
+
+Quand un emplacement encore incomplet est sélectionné dans la grille et
+qu'il fait partie des emplacements candidats, il passe avant les étapes 2
+à 4 : ses mots sont tirés comme à l'étape 2 jusqu'à ce que l'un garde la
+cohérence d'arc (un mot refusé est réfuté), puis, à défaut, le dernier
+recours de l'étape 4 lui est appliqué ; le choix d'emplacement habituel
+ne reprend que s'il ne reçoit aucun mot (`interactive_place_word_ingrid`,
+`_selected_slot_index`). Le contour bleu montre alors sa première case.
+
+La grille est déclarée impossible quand aucun emplacement ne peut plus
+recevoir de mot ; les emplacements bloqués sont alors montrés en rouge.
+Les emplacements candidats (contour bleu) sont les 3 meilleurs du dernier
+choix, repérés par leur première case.
 
 ---
 

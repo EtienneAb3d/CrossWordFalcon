@@ -102,10 +102,8 @@ full again whenever a new generation or an Interactive session starts.
   in bold followed by width x height and black rate: Ristretto noisette
   (6x6, 0 %), Expresso latte (10x10, 10 %), Macchiato (15x10, 12 %),
   Cappuccino (15x15, 15 %), Mocha (21x21, 15 %), Tazza grande (30x20, 15 %),
-  Frappuccino (30x30, 15 %), Caffeteria (50x50, 15 %) — every one at
-  18 % while the pattern style is American (Sparse below 100 %) in French,
-  and every one with a side above 15 at 18 % under that style in any
-  language. Picking one fills Largeur, Hauteur and Taux
+  Frappuccino (30x30, 15 %), Caffeteria (50x50, 15 %), whatever the
+  pattern style. Picking one fills Largeur, Hauteur and Taux
   noir at once; the three fields stay editable. The button shows the
   preset matching the current values, or "Personnalisée / Custom" when
   none does. Presets wider or taller than 20 cells are greyed out when the
@@ -140,7 +138,8 @@ full again whenever a new generation or an Interactive session starts.
   network; same out-of-range snap-back on blur as **Largeur / Width**
   above (`frontend/static/script.js`, `clampDimensionInputs`).
 - **Niveau / Level** (`#difficulty`, first field of the line
-  above "Générer les mots croisés", followed by Mots par pose and Mode)
+  above "Générer les mots croisés", followed by Effort, Méthode and Mots
+  par pose)
   — Easy, Medium, or Hard.
   Easy and Medium use a smaller, more common vocabulary; Easy never places
   a word that looks like it could be a proper noun (a person's or place's
@@ -195,19 +194,21 @@ full again whenever a new generation or an Interactive session starts.
   one, and in Interactive mode a 2-letter word is flagged invalid).
   Such a grid draws its black cells as full squares — on screen, in the
   previews and in the PDF/SVG/PNG pages — instead of the usual centered
-  half-size square. In French, leaving 100/0/0 raises Taux noir to 18 %
-  if it was lower (it can then be lowered again by hand); the other
-  languages keep the Taux noir set. In every language, as soon as the
+  half-size square. The pattern style never changes Taux noir (15 % by
+  default). In every language, as soon as the
   form describes an American-style grid with a side above 15 (typing a
   larger Largeur/Hauteur, picking such a preset, or leaving 100/0/0 on
-  such a size), Taux noir is set to 18 % and Grouped is raised to 70 %,
-  the difference taken from Aligned then Sparse — both can then be changed
+  such a size), Grouped is raised to 70 %,
+  the difference taken from Aligned then Sparse — it can then be changed
   again by hand (`applyLargeAmericanDefaults`). Choosing French
   as the language sets 100/0/0, any other language 30/40/30, English also
   selecting the Diagonal symmetry (`frontend/static/script.js`,
   `setUiLanguage`, `setPatternMix`; `backend/crossword_gen.py`, `pattern_mix`, `PATTERN_STYLES`,
   `_place_black_cells`).
-- **Mots par pose / Words per placement** (`#words-per-node`) — the most
+- **Mots par pose / Words per placement** (`#words-per-node`, right of
+  **Méthode**, shown only while the **Falcon (expérimental)** method is
+  selected, `frontend/static/script.js`, `syncWordsPerNodeVisibility`; the
+  Ingrid-like method places one word per decision) — the most
   words the search places in one go before checking how the rest of the
   grid copes, and takes back off together when that leads nowhere (1-50,
   2 by default). The search uses this many while the area it is currently filling (the attention zone) is
@@ -239,6 +240,27 @@ full again whenever a new generation or an Interactive session starts.
   `applyBackendModeDefaults`). The
   same mode is used by **Finir la grille / Finish the grid** and **Finir
   la zone / Finish the zone** in Interactive mode.
+- **Méthode / Method** (`#fill-method`, right of **Effort**) — only shown
+  when the page is opened on the local machine (`frontend/static/
+  script.js`, `showFillMethodOnLocalhost`); elsewhere every generation
+  uses **Ingrid-like**. Picks how each attempt fills its black-cell pattern
+  with words: **Falcon (expérimental) / Falcon (experimental)** is the
+  search described in "How a grid is actually built" below; **Ingrid-like**
+  (the default) is a search modelled on
+  the Ingrid crossword filler, which keeps every slot's list of possible
+  words pruned against its crossings at all times and restarts with what
+  it learnt about the hardest crossings (`backend/crossword_gen.py`,
+  `IngridSolver`). Both use the same dictionary, difficulty level, theme
+  glossary, "Mots Défi" and every other setting of the form. Also used by
+  Interactive mode's **Suivant / Next**, **Finir la grille / Finish the
+  grid** and **Finir la zone / Finish the zone**, and restored with a
+  grid's other generation settings. With Ingrid-like, **Suivant / Next**
+  works the grid out again from what is on screen at every click — so
+  letters or black cells changed by hand always count — and remembers
+  between clicks only which crossings have been hardest so far: a slot
+  that can no longer take any word is shown red and no word is written
+  across it; a slot whose every word fails is shown yellow (`backend/
+  crossword_gen.py`, `interactive_place_word_ingrid`).
 - **Précision thématique / Theme precision** (`#theme-precision`, left
   of "Thématique" on the same line) — the
   minimum closeness a word must have to the theme to enter the theme
@@ -383,8 +405,10 @@ main form (`#run-actions`); "Continuer" sits above the "Générer les mots crois
 - **Gold medal counter** (`#success-medal`, `frontend/static/script.js`,
   `runGeneration`/`pollJob`) — while an automatic generation runs, a gold
   medal sits fixed in the page's left margin, vertically centered, showing
-  how many grids the search has completed successfully so far (0 at the
-  start). The search keeps going until at least two grids have succeeded,
+  how many different grids the search has completed successfully so far
+  (0 at the start; a grid found again by another attempt is not counted
+  twice), so it matches the number of grids offered to choose from. The
+  search keeps going until at least two different grids have succeeded,
   then keeps the best one, so this number tells how many finished
   candidates it is choosing from. Hidden again once the generation ends.
   Each recorded step of the search history keeps the count it had at
@@ -1244,7 +1268,12 @@ to the left of **Mots / Words** to open it as an overlay panel.
   shaded gray. **Finir la zone / Finish the zone** then runs the same
   automatic fill as "Finir la grille" below, but only inside that zone —
   everything outside it, letters and black cells alike, is frozen exactly
-  as it stands.
+  as it stands. While a zone is selected, **Suivant / Next** also places
+  its word only on a word lying entirely inside the zone, never changing
+  a cell outside it, and says "The selected zone is complete" once every
+  word of the zone is filled (`frontend/static/script.js`,
+  `interactiveZoneSelection`; `backend/crossword_gen.py`,
+  `_zone_slot_indices`).
 - Click **Finir la grille / Finish the grid** so Falcon fills in the cells
   that are still empty. It writes no definition: use **Définitions /
   Definitions** afterwards for the new words.
@@ -1297,7 +1326,11 @@ real letter. Both update after every edit.
 **Building the grid**
 
 - **Suivant / Next** (`#interactive-next-btn`, `POST /api/interactive/
-  step`) — places exactly one more word, choosing the spot where the
+  step`) — places exactly one more word. When an incomplete spot is
+  selected in the grid (the word through the selected cell, in the typing
+  direction), that spot is filled first whenever some word can go there
+  (`frontend/static/script.js`, `selectedInteractiveWord`; `backend/
+  crossword_gen.py`, `_selected_slot_index`); otherwise it chooses the spot where the
   fewest words still fit and preferring a theme word where one does. The
   spot is picked separately for each kind of word it tries — "Mots Défi"
   first, then theme words, then any dictionary word — each looking only
@@ -1566,7 +1599,8 @@ real letter. Both update after every edit.
 
 - The text field below the grid holds the definition of the currently
   selected word; typing there stores it for that word, and it comes back
-  when you reselect the word.
+  when you reselect the word. It stays empty while the word has no
+  definition (`frontend/static/script.js`, `renderInteractive`).
 - **Corriger / Correct** (`#interactive-correct-btn`, `frontend/static/
   script.js`, `GET /api/correct`) — just left of "Proposer une
   définition": asks the language model to correct the definition typed
@@ -2098,6 +2132,28 @@ paragraph), an attempt that reaches its own budget first keeps searching
 past it for as long as some other attempt of the same cycle is still
 genuinely working towards its own — stopping it right away would only
 leave its own core sitting idle in the meantime for no benefit.
+
+**The default filling method: Ingrid-like.** The search described above
+(trial and backtracking) is the experimental "Falcon" method, only used
+when picked in the **Méthode / Method** selector on the local machine. By
+default, grids are filled with a different search, modelled on the Ingrid
+crossword filler. Every slot keeps
+its full list of still-possible words, and after each decision every list
+is pruned against its crossings until they all agree (a word whose letter
+at a crossing no word of the crossing slot carries is dropped, and so is
+a word already used elsewhere). The next slot is the one with the fewest
+words left relative to how often its crossings have caused dead ends so
+far; its words are tried in an order fixed once, favoring the words that
+leave the most choice to their crossings, then the most common ones,
+within the usual families ("Mots Défi", theme words, Scrabble words, the
+rest). The very first word of an empty grid is chosen the Falcon way
+instead (the same slot choice and word draw as the experimental method),
+so that two attempts — or two empty Interactive grids — start
+differently. A dead end makes it try "not this word" instead, then undo the
+previous choice; after too many dead ends it restarts from the beginning,
+keeping what it learnt about the hardest crossings. Everything else —
+black cells, cycles, clean-ups, the final optimization — is the same as
+with the default method.
 
 **Many attempts running in parallel, and carrying progress forward
 between cycles.** Rather than only ever trying one pattern-and-fill

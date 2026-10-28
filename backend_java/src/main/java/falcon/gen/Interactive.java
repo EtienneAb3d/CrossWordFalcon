@@ -436,14 +436,73 @@ public final class Interactive {
 
     public static Map<String, Object> placeWord(char[][] grid, int rows, int cols, DualIndex index, Rng rng, PW pwIn,
                                                 Set<String> challengeIn, PW scrabble, int multiWordPercent) {
-        return placeWord(grid, rows, cols, index, rng, pwIn, challengeIn, null, scrabble, multiWordPercent);
+        return placeWord(grid, rows, cols, index, rng, pwIn, challengeIn, null, scrabble, multiWordPercent, null, null);
+    }
+
+    /** The slots lying entirely inside the zone selected in the grid ({@code zoneCells}, [row, col] pairs), the only
+     * ones "Suivant" may write while a zone is selected; null when none is (mirrors _zone_slot_indices). */
+    static Set<Integer> zoneSlotIndices(List<int[]> slots, List<int[]> zoneCells) {
+        if (zoneCells == null || zoneCells.isEmpty()) return null;
+        Set<Integer> zone = new HashSet<>();
+        for (int[] rc : zoneCells) if (rc.length == 2) zone.add(Cells.of(rc[0], rc[1]));
+        Set<Integer> out = new LinkedHashSet<>();
+        for (int i = 0; i < slots.size(); i++) {
+            boolean inside = true;
+            for (int cell : slots.get(i)) if (!zone.contains(cell)) inside = false;
+            if (inside) out.add(i);
+        }
+        return out;
+    }
+
+    /** True when every slot of {@code zoneSlots} has all its cells lettered (mirrors _zone_complete). */
+    static boolean zoneComplete(List<int[]> slots, Set<Integer> zoneSlots, Map<Integer, Character> known) {
+        for (int i : zoneSlots) for (int cell : slots.get(i)) if (!known.containsKey(cell)) return false;
+        return true;
+    }
+
+    /** "Suivant"'s answer when the selected zone is complete (mirrors _zone_complete_result). */
+    static Map<String, Object> zoneCompleteResult(char[][] grid, int rows, int cols, DualIndex index,
+                                                  Set<String> challenge) {
+        List<Object>[] d = fillDiagnostics(grid, rows, cols, index, challenge);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("impossible", false);
+        m.put("zone_complete", true);
+        m.put("grid", Grids.toJson(grid));
+        m.put("impossible_cells", d[0]);
+        m.put("low_candidate_cells", d[1]);
+        m.put("deadlock_cells", d[2]);
+        m.put("excluded_cells", new ArrayList<>());
+        m.put("window_cells", new ArrayList<>());
+        return m;
+    }
+
+    /** Index in {@code slots} of the emplacement selected in the grid ({@code selectedCells}, [row, col] pairs),
+     * when it still holds an empty cell; null otherwise (mirrors _selected_slot_index). */
+    static Integer selectedSlotIndex(List<int[]> slots, List<int[]> selectedCells, Map<Integer, Character> known) {
+        if (selectedCells == null || selectedCells.isEmpty()) return null;
+        int[] wanted = new int[selectedCells.size()];
+        for (int k = 0; k < wanted.length; k++) {
+            int[] rc = selectedCells.get(k);
+            if (rc.length != 2) return null;
+            wanted[k] = Cells.of(rc[0], rc[1]);
+        }
+        for (int i = 0; i < slots.size(); i++) {
+            if (!Arrays.equals(slots.get(i), wanted)) continue;
+            for (int cell : wanted) if (!known.containsKey(cell)) return i;
+            return null;
+        }
+        return null;
     }
 
     /** {@code multiWordPercent}: the cap on multi-word expressions (Filler.MULTI_WORD_PERCENT), applied to every
-     * candidate drawn through Filler.orderedCandidates (mirrors interactive_place_word's multi_word_percent). */
+     * candidate drawn through Filler.orderedCandidates (mirrors interactive_place_word's multi_word_percent).
+     * {@code selectedCells}: the emplacement selected in the grid, tried first while incomplete (mirrors
+     * selected_cells). {@code zoneCells}: the zone selected in the grid, the only slots written being those inside it
+     * (mirrors zone_cells). */
     public static Map<String, Object> placeWord(char[][] grid, int rows, int cols, DualIndex index, Rng rng, PW pwIn,
                                                 Set<String> challengeIn, List<int[]> lastPlacedCells, PW scrabble,
-                                                int multiWordPercent) {
+                                                int multiWordPercent, List<int[]> selectedCells,
+                                                List<int[]> zoneCells) {
         PW pw = pwIn == null ? PW.EMPTY : pwIn;
         Set<String> challenge = challengeIn == null ? Set.of() : challengeIn;
         char[][] pattern = Grids.patternOf(grid);
@@ -456,10 +515,14 @@ public final class Interactive {
         List<int[]> slots = (List<int[]>) built[1];
         if (slots.isEmpty()) return new LinkedHashMap<>(Map.of("impossible", true));
         f.lastPlacedCells = placedWordOriginCells(lastPlacedCells, known);
+        Set<Integer> zoneSlots = zoneSlotIndices(slots, zoneCells);
+        if (zoneSlots != null && zoneComplete(slots, zoneSlots, known)) {
+            return zoneCompleteResult(grid, rows, cols, index, challenge);
+        }
         Map<Integer, Dom> domains = new LinkedHashMap<>();
         Map<Integer, Set<String>> viable = new LinkedHashMap<>();
         for (int i = 0; i < slots.size(); i++) {
-            if (f.assignment[i] != null) continue;
+            if (f.assignment[i] != null || (zoneSlots != null && !zoneSlots.contains(i))) continue;
             Dom d = f.domain(i);
             Set<String> cands = new LinkedHashSet<>(d.minus(f.usedWords));
             if (!cands.isEmpty()) {
@@ -469,7 +532,7 @@ public final class Interactive {
         }
         if (viable.isEmpty()) return impossibleResult(grid, rows, cols, index, challenge, new ArrayList<>(), new ArrayList<>());
         // Whether the theme tier may still reshape the grid (mirrors theme_reshape).
-        final boolean themeReshape = Cleanup.themeReshapeAllowed(Fill.placedThemeWords(slots, f.assignment, f.priorityWords));
+        final boolean themeReshape = zoneSlots == null && Cleanup.themeReshapeAllowed(Fill.placedThemeWords(slots, f.assignment, f.priorityWords));
         Set<Integer> blockedTargets = new HashSet<>(Cleanup.impossibleIndices(slots, index, known, challenge));
         List<Integer> selectable = new ArrayList<>();
         for (int i : viable.keySet()) if (!blockedTargets.contains(i)) selectable.add(i);
@@ -502,13 +565,63 @@ public final class Interactive {
         List<Integer> blockedViable = new ArrayList<>();
         for (int i : viable.keySet()) if (!selectableSet.contains(i)) blockedViable.add(i);
         Map<Integer, Map<Integer, Base>> baselines = new HashMap<>();
+        // The selected emplacement, while incomplete, takes the word whenever one can go there: the same tiers and
+        // levels restricted to it, no reshape (mirrors the focus pass of interactive_place_word).
+        Integer focus = selectedSlotIndex(slots, selectedCells, known);
+        if (zoneSlots != null && focus != null && !zoneSlots.contains(focus)) focus = null;
+        if (focus != null) {
+            Map<Integer, Set<String>> focusViable = new LinkedHashMap<>();
+            focusViable.put(focus, viable.getOrDefault(focus, new LinkedHashSet<>()));
+            for (int level : new int[]{PLACEMENT_LEVEL_STRICT, PLACEMENT_LEVEL_DISJOINT, PLACEMENT_LEVEL_BREAKING}) {
+                Object[] found = null;
+                Set<String> challengePool = new LinkedHashSet<>(f.activeChallengeWords());
+                challengePool.removeAll(f.usedWords);
+                if (!challengePool.isEmpty()) {
+                    found = findPriorityWordPlacement(challengePool, focusViable, f, slots, focus, pattern, rows, cols,
+                            rng, index, known, pw, challenge, f::challengeWordFits,
+                            w -> !f.challengeAbandoned.contains(w), f::registerChallengeWordBreak,
+                            v -> f.challengeWordBudget = v, level, false, null);
+                    if (found != null) placedFrom = "challenge";
+                }
+                if (found == null && !pw.isEmpty()) {
+                    Set<String> themePool = new LinkedHashSet<>(pw.flatten());
+                    themePool.removeAll(f.usedWords);
+                    if (!themePool.isEmpty()) {
+                        BiPredicate<Integer, String> themeFits = (i, w) -> focusViable.get(i).contains(w)
+                                && f.priorityWords.forCells(slots.get(i)).contains(w);
+                        found = findPriorityWordPlacement(themePool, focusViable, f, slots, focus, pattern, rows, cols,
+                                rng, index, known, pw, challenge, themeFits, w -> !f.themeAbandoned.contains(w),
+                                f::registerThemeWordBreak, v -> f.themeWordBudget = v, level, false, null);
+                        if (found != null) placedFrom = "theme";
+                    }
+                }
+                if (found != null) {
+                    placedTarget = (Integer) found[0];
+                    placedWord = (String) found[1];
+                    cells = (int[]) found[2];
+                    patternToCommit = (char[][]) found[3];
+                    break;
+                }
+                String word = generalDictionaryPick(f, focusViable, focus, exclude, baselines, level);
+                if (word != null) {
+                    placedTarget = focus;
+                    placedWord = word;
+                    cells = slots.get(focus);
+                    patternToCommit = pattern;
+                    placedFrom = "dictionary";
+                    break;
+                }
+            }
+            if (placedFrom != null) windowCellsRef[0] = originClosestCells(f, List.of(focus));
+        }
         for (int level : new int[]{PLACEMENT_LEVEL_STRICT, PLACEMENT_LEVEL_DISJOINT, PLACEMENT_LEVEL_BREAKING}) {
+            if (placedFrom != null) break;
             Set<String> challengePool = new LinkedHashSet<>(f.activeChallengeWords());
             challengePool.removeAll(f.usedWords);
             if (!challengePool.isEmpty()) {
                 Object[] found = findPriorityWordPlacement(challengePool, viable, f, slots, tierTarget.apply("challenge"), pattern, rows, cols, rng,
                         index, known, pw, challenge, f::challengeWordFits, w -> !f.challengeAbandoned.contains(w),
-                        f::registerChallengeWordBreak, v -> f.challengeWordBudget = v, level, true, null);
+                        f::registerChallengeWordBreak, v -> f.challengeWordBudget = v, level, zoneSlots == null, null);
                 if (found != null) {
                     placedTarget = (Integer) found[0];
                     placedWord = (String) found[1];
@@ -595,6 +708,225 @@ public final class Interactive {
         m.put("low_candidate_cells", d[1]);
         m.put("deadlock_cells", d[2]);
         m.put("excluded_cells", excluded);
+        m.put("window_cells", windowCells);
+        m.put("placed", placed);
+        return m;
+    }
+
+    /** Interactive session state of the "ingrid" fill method between "Suivant" clicks (mirrors the session's
+     * "ingrid" dict): the learnt crossing weights by pair of crossing slots, and the cells of the slot last filled. */
+    public static final class IngridState {
+        public Map<String, Double> weights = new HashMap<>();
+        public int[] lastSlot;
+    }
+
+    /** Last resort of an "ingrid" "Suivant": the first word of slot {@code i}'s order still in its domain and not
+     * refused by the multi-word cap, whatever it leaves; null when none (mirrors _first_fitting). */
+    private static String firstFitting(IngridSolver solver, Filler f, DualIndex index, List<int[]> slots, int i) {
+        boolean blockedMulti = solver.multiBlocked();
+        for (String w : solver.order(i)) {
+            if (solver.inDomain(i, w) && !(blockedMulti && !f.challengeWords.contains(w)
+                    && Fill.isMultiWord(index, slots.get(i), w))) return w;
+        }
+        return null;
+    }
+
+    /** Check budget of one "Suivant" click with the "ingrid" fill method (mirrors INGRID_INTERACTIVE_BUDGET). */
+    public static final long INGRID_INTERACTIVE_BUDGET = 20000;
+
+    /** "Suivant" with the "ingrid" fill method: places exactly one more word the way IngridSolver takes one decision,
+     * everything recomputed from {@code grid}, {@code state} updated in place (mirrors interactive_place_word_ingrid). */
+    public static Map<String, Object> placeWordIngrid(char[][] grid, int rows, int cols, DualIndex index, Rng rng,
+                                                      PW pwIn, Set<String> challengeIn, PW scrabble,
+                                                      int multiWordPercent, IngridState state,
+                                                      List<int[]> selectedCells, List<int[]> zoneCells) {
+        PW pw = pwIn == null ? PW.EMPTY : pwIn;
+        Set<String> challenge = challengeIn == null ? Set.of() : challengeIn;
+        char[][] pattern = Grids.patternOf(grid);
+        Map<Integer, Character> known = Grids.knownLetters(grid);
+        Object[] built = buildInteractiveFiller(pattern, rows, cols, index, rng, known, pw, challenge);
+        Filler f = (Filler) built[0];
+        f.scrabbleWords = scrabble == null ? PW.EMPTY : scrabble;
+        f.multiWordPercent = multiWordPercent;
+        @SuppressWarnings("unchecked")
+        List<int[]> slots = (List<int[]>) built[1];
+        if (slots.isEmpty()) return new LinkedHashMap<>(Map.of("impossible", true));
+        Set<Integer> zoneSlots = zoneSlotIndices(slots, zoneCells);
+        if (zoneSlots != null && zoneComplete(slots, zoneSlots, known)) {
+            return zoneCompleteResult(grid, rows, cols, index, challenge);
+        }
+        IngridSolver solver = new IngridSolver(f, INGRID_INTERACTIVE_BUDGET);
+        solver.loadWeights(state.weights);
+        solver.settle();
+        solver.freezeInitial();
+        int root = solver.trailMark();
+        List<Integer> blocked = new ArrayList<>();
+        for (int i = 0; i < slots.size(); i++) if (!solver.isActive(i) && f.assignment[i] == null) blocked.add(i);
+        Set<Integer> forbidden = new HashSet<>();
+        for (int i : blocked) for (int cell : slots.get(i)) if (!known.containsKey(cell)) forbidden.add(cell);
+        List<Integer> candidates = new ArrayList<>();
+        for (int i = 0; i < slots.size(); i++) {
+            if (!solver.isActive(i) || f.assignment[i] != null) continue;
+            if (zoneSlots != null && !zoneSlots.contains(i)) continue;
+            boolean crossesBlocked = false;
+            for (int cell : slots.get(i)) if (forbidden.contains(cell)) crossesBlocked = true;
+            if (!crossesBlocked) candidates.add(i);
+        }
+        int last = -1;
+        if (state.lastSlot != null) {
+            for (int i = 0; i < slots.size(); i++) if (Arrays.equals(slots.get(i), state.lastSlot)) last = i;
+        }
+        Filler.RecentSlots setAside = new Filler.RecentSlots(Filler.MAX_EXCLUDED_SLOTS);
+        Set<Integer> triedOut = new HashSet<>();
+        int placedSlot = -1;
+        String placedWord = null;
+        // The selected emplacement, while incomplete, takes the word whenever one can go there (mirrors the focus
+        // pass of interactive_place_word_ingrid).
+        Integer focusIdx = selectedSlotIndex(slots, selectedCells, known);
+        int focus = focusIdx != null && candidates.contains(focusIdx) ? focusIdx : -1;
+        if (focus >= 0) {
+            while (placedWord == null && solver.domainSize(focus) > 0 && !solver.step()) {
+                Object[] picked = solver.pickWord(focus, 0);
+                if (picked == null) break;
+                String word = (String) picked[1];
+                int mark = solver.trailMark();
+                solver.keepOnly(focus, word);
+                Map<Integer, Double> updates = solver.propagate(List.of(focus), List.of(focus));
+                if (updates == null) {
+                    placedSlot = focus;
+                    placedWord = word;
+                    break;
+                }
+                solver.learn(updates);
+                solver.undoTo(mark);
+                mark = solver.trailMark();
+                solver.refute(focus, word);
+                if (solver.domainSize(focus) == 0) updates = Map.of();
+                else updates = solver.propagate(List.of(focus),
+                        solver.domainSize(focus) == 1 ? List.of(focus) : List.of());
+                if (updates != null) {
+                    solver.learn(updates);
+                    solver.undoTo(mark);
+                    break;
+                }
+            }
+            if (placedWord == null) {
+                solver.undoTo(root);
+                String word = firstFitting(solver, f, index, slots, focus);
+                if (word != null) {
+                    placedSlot = focus;
+                    placedWord = word;
+                }
+            }
+        }
+        while (placedWord == null && !solver.step()) {
+            List<Integer> pool = new ArrayList<>();
+            for (int i : candidates) if (!triedOut.contains(i) && solver.domainSize(i) > 1) pool.add(i);
+            if (pool.isEmpty()) for (int i : candidates) if (!triedOut.contains(i) && solver.domainSize(i) == 1) pool.add(i);
+            if (pool.isEmpty()) break;
+            int i;
+            Object[] picked;
+            if (known.isEmpty()) {
+                // Empty grid: its first word is chosen the "falcon" way.
+                Object[] fp = solver.falconPick(pool);
+                i = (int) fp[0];
+                picked = fp[1] != null ? new Object[]{0, fp[1]} : solver.pickWord(i, 0);
+            } else {
+                i = solver.chooseSlot(pool.contains(last) ? last : -1, pool);
+                picked = solver.pickWord(i, 0);
+            }
+            if (picked == null) {
+                triedOut.add(i);
+                setAside.add(i);
+                last = -1;
+                continue;
+            }
+            String word = (String) picked[1];
+            int mark = solver.trailMark();
+            solver.keepOnly(i, word);
+            Map<Integer, Double> updates = solver.propagate(List.of(i), List.of(i));
+            if (updates == null) {
+                placedSlot = i;
+                placedWord = word;
+                break;
+            }
+            solver.learn(updates);
+            solver.undoTo(mark);
+            mark = solver.trailMark();
+            solver.refute(i, word);
+            if (solver.domainSize(i) == 0) updates = Map.of();
+            else updates = solver.propagate(List.of(i), solver.domainSize(i) == 1 ? List.of(i) : List.of());
+            if (updates != null) {
+                solver.learn(updates);
+                solver.undoTo(mark);
+                triedOut.add(i);
+                setAside.add(i);
+                last = -1;
+                continue;
+            }
+            last = i;
+        }
+        if (placedWord == null) {
+            // Last resort: the slot of best priority, its first word still fitting the grid, whatever it leaves.
+            solver.undoTo(root);
+            List<Integer> pool = new ArrayList<>();
+            for (int i : candidates) if (solver.domainSize(i) > 1) pool.add(i);
+            if (pool.isEmpty()) pool = candidates;
+            int i = pool.isEmpty() ? -1 : solver.chooseSlot(-1, pool);
+            if (i >= 0) {
+                String w = firstFitting(solver, f, index, slots, i);
+                if (w != null) {
+                    placedSlot = i;
+                    placedWord = w;
+                }
+            }
+        }
+        state.weights = solver.exportWeights();
+        List<Object> windowCells = new ArrayList<>();
+        List<Integer> windowSlots = focus >= 0 && placedWord != null && placedSlot == focus
+                ? List.of(focus) : solver.lastWindow;
+        for (int j : windowSlots) windowCells.add(List.of(Cells.r(slots.get(j)[0]), Cells.c(slots.get(j)[0])));
+        if (placedWord == null) {
+            List<Object>[] d = fillDiagnostics(grid, rows, cols, index, challenge);
+            TreeSet<Integer> imp = new TreeSet<>();
+            for (Object o : d[0]) {
+                List<?> rc = (List<?>) o;
+                imp.add(Cells.of(((Number) rc.get(0)).intValue(), ((Number) rc.get(1)).intValue()));
+            }
+            for (int j : blocked) for (int cell : slots.get(j)) imp.add(cell);
+            List<Object> impCells = new ArrayList<>();
+            for (int cell : imp) impCells.add(List.of(Cells.r(cell), Cells.c(cell)));
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("impossible", true);
+            m.put("impossible_cells", impCells);
+            m.put("low_candidate_cells", d[1]);
+            m.put("deadlock_cells", d[2]);
+            m.put("excluded_cells", slotCellsOf(slots, setAside.toList()));
+            m.put("window_cells", windowCells);
+            return m;
+        }
+        int[] cells = slots.get(placedSlot);
+        state.lastSlot = cells.clone();
+        setAside.discard(placedSlot);
+        char[][] newGrid = new char[rows][];
+        for (int r = 0; r < rows; r++) newGrid[r] = grid[r].clone();
+        for (int p = 0; p < cells.length; p++) newGrid[Cells.r(cells[p])][Cells.c(cells[p])] = placedWord.charAt(p);
+        List<Object>[] d = fillDiagnostics(newGrid, rows, cols, index, challenge);
+        int family = solver.familyOf(placedSlot).applyAsInt(placedWord);
+        Map<String, Object> placed = new LinkedHashMap<>();
+        placed.put("cells", Cells.toJson(cells));
+        placed.put("word", placedWord);
+        placed.put("direction", Words.slotDirection(cells));
+        placed.put("from_theme", family == 1);
+        placed.put("from_challenge", family == 0);
+        placed.put("from_scrabble", family == 2);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("impossible", false);
+        m.put("grid", Grids.toJson(newGrid));
+        m.put("impossible_cells", d[0]);
+        m.put("low_candidate_cells", d[1]);
+        m.put("deadlock_cells", d[2]);
+        m.put("excluded_cells", slotCellsOf(slots, setAside.toList()));
         m.put("window_cells", windowCells);
         m.put("placed", placed);
         return m;

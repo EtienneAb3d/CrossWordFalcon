@@ -237,6 +237,8 @@ public final class App {
         final PW scrabbleWords;
         /** The expressions' word breaks, for each placed word's "breaks" (addPlacedBreaks). */
         Words.Breaks multiBreaks;
+        /** The "ingrid" fill method's state between "Suivant" clicks (Interactive.placeWordIngrid). */
+        final Interactive.IngridState ingrid = new Interactive.IngridState();
 
         Session(DualIndex index, Set<String> priorityWords, Rng rng, Object seed, String resumedFrom, PW scrabbleWords) {
             this.scrabbleWords = scrabbleWords;
@@ -374,6 +376,13 @@ public final class App {
         validateSymmetry(req.symmetry);
         applyPatternMix(req);
         validatePatternStyle(req.patternStyle);
+        validateFillMethod(req.fillMethod);
+    }
+
+    static void validateFillMethod(String fillMethod) {
+        if (!falcon.gen.IngridSolver.FILL_METHODS.contains(fillMethod)) {
+            throw http(400, "méthode inconnue : " + Log.repr(fillMethod) + " (attendu : ['falcon', 'ingrid'])");
+        }
     }
 
     static void validateSymmetry(String symmetry) {
@@ -1076,9 +1085,9 @@ public final class App {
         };
         try {
             Log.info("[%s] starting generation: language=%s bilingual_language=%s width=%s height=%s difficulty=%s "
-                            + "force_letters_percent=%s black_enrichment_percent=%s words_per_node=%s multi_word_percent=%s symmetry=%s pattern_style=%s mode=%s theme_precision=%s source=%s", shortId,
+                            + "force_letters_percent=%s black_enrichment_percent=%s words_per_node=%s multi_word_percent=%s symmetry=%s pattern_style=%s mode=%s fill_method=%s theme_precision=%s source=%s", shortId,
                     req.language, req.bilingualLanguage, req.width, req.height, req.difficulty, req.forceLettersPercent,
-                    req.blackEnrichmentPercent, req.wordsPerNode, req.multiWordPercent, req.symmetry, req.patternStyle, req.mode, req.themePrecision, req.source);
+                    req.blackEnrichmentPercent, req.wordsPerNode, req.multiWordPercent, req.symmetry, req.patternStyle, req.mode, req.fillMethod, req.themePrecision, req.source);
             String theme = req.theme == null ? "" : Py.strip(req.theme);
             List<String> themePriority = null, bilingualThemePriority = null;
             String themeDescription = "";
@@ -1139,6 +1148,7 @@ public final class App {
                         p.blackEnrichmentFraction = req.blackEnrichmentPercent / 100.0;
                         p.wordsPerNode = req.wordsPerNode;
                         p.multiWordPercent = req.multiWordPercent;
+                        p.fillMethod = req.fillMethod;
                         p.blackSymmetry = req.symmetry;
                         p.patternStyle = req.patternStyle;
                         p.patternMix = req.patternMix;
@@ -1300,7 +1310,7 @@ public final class App {
             progress.on("saving", new LinkedHashMap<>());
             String pseudo = pseudoOf(req.pseudo);
             Map<String, Object> generationParams = Json.obj("black_enrichment_percent", req.blackEnrichmentPercent,
-                    "words_per_node", req.wordsPerNode, "multi_word_percent", req.multiWordPercent, "symmetry", req.symmetry, "pattern_style", req.patternStyle, "pattern_mix", req.patternMix, "force_letters_percent", req.forceLettersPercent, "mode", req.mode, "theme_precision", req.themePrecision);
+                    "words_per_node", req.wordsPerNode, "multi_word_percent", req.multiWordPercent, "symmetry", req.symmetry, "pattern_style", req.patternStyle, "pattern_mix", req.patternMix, "force_letters_percent", req.forceLettersPercent, "mode", req.mode, "fill_method", req.fillMethod, "theme_precision", req.themePrecision);
             if (a.publish) {
                 // On the result too: the play view and the SVG/PNG pages draw a "grouped" grid's black cells full
                 // size (pattern_style).
@@ -2458,22 +2468,31 @@ public final class App {
             List<Object> gridJson = b.grid("grid");
             Set<String> cw = challengeSet(b.strList("challenge_words"));
             List<int[]> lastPlaced = b.cells("last_placed_cells", false);
+            List<int[]> selectedCells = b.cells("selected_cells", false);
+            List<int[]> zoneCells = b.cells("zone_cells", false);
             int mwp = b.integer("multi_word_percent", falcon.gen.Filler.MULTI_WORD_PERCENT, 0, 100);
+            String fillMethod = b.str("fill_method", falcon.gen.IngridSolver.FILL_METHOD_DEFAULT);
             Session s = session(jobId);
             int[] d = dims(gridJson);
+            validateFillMethod(fillMethod);
             Map<String, Object> placed;
             synchronized (s) {
-                placed = Interactive.placeWord(gridOf(gridJson), d[0], d[1], s.index, s.rng, s.pw(), cw, lastPlaced,
-                        s.scrabbleWords, mwp);
+                placed = "ingrid".equals(fillMethod)
+                        ? Interactive.placeWordIngrid(gridOf(gridJson), d[0], d[1], s.index, s.rng, s.pw(), cw,
+                                s.scrabbleWords, mwp, s.ingrid, selectedCells, zoneCells)
+                        : Interactive.placeWord(gridOf(gridJson), d[0], d[1], s.index, s.rng, s.pw(), cw, lastPlaced,
+                                s.scrabbleWords, mwp, selectedCells, zoneCells);
             }
             addPlacedBreaks(placed.get("placed"), s.multiBreaks);
             boolean impossible = Boolean.TRUE.equals(placed.get("impossible"));
+            boolean zoneComplete = Boolean.TRUE.equals(placed.get("zone_complete"));
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("width", d[1]);
             out.put("height", d[0]);
-            out.put("grid", impossible ? gridJson : placed.get("grid"));
-            out.put("placed", impossible ? null : placed.get("placed"));
+            out.put("grid", impossible || zoneComplete ? gridJson : placed.get("grid"));
+            out.put("placed", impossible || zoneComplete ? null : placed.get("placed"));
             out.put("impossible", impossible);
+            if (zoneComplete) out.put("zone_complete", true);
             out.put("impossible_cells", placed.getOrDefault("impossible_cells", List.of()));
             out.put("low_candidate_cells", placed.getOrDefault("low_candidate_cells", List.of()));
             out.put("deadlock_cells", placed.getOrDefault("deadlock_cells", List.of()));
@@ -2813,6 +2832,7 @@ public final class App {
             List<Object> gridJson = b.grid("grid");
             List<Object> definitions = b.list("definitions", false);
             String mode = b.str("mode", "medium");
+            String fillMethod = b.str("fill_method", falcon.gen.IngridSolver.FILL_METHOD_DEFAULT);
             int bep = b.integer("black_enrichment_percent", 15, 0, 100);
             int wpn = b.integer("words_per_node", falcon.gen.Filler.WORDS_PER_NODE, 1, MAX_WORDS_PER_NODE);
             int mwp = b.integer("multi_word_percent", falcon.gen.Filler.MULTI_WORD_PERCENT, 0, 100);
@@ -2931,6 +2951,7 @@ public final class App {
             genreq.patternStyle = patternStyle;
             genreq.patternMix = patternMix;
             genreq.mode = mode;
+            genreq.fillMethod = fillMethod;
             genreq.theme = theme.isEmpty() ? null : theme;
             genreq.themePrecision = themePrecision;
             genreq.challengeWords = challengeWords;

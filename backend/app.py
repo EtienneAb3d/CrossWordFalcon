@@ -55,13 +55,13 @@ from .ipuz_export import IPUZ_MEDIA_TYPE, render_ipuz
 from .jpz_export import JPZ_MEDIA_TYPE, render_jpz
 from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, GenerationPaused,
-    BLACK_SYMMETRIES, PATTERN_STYLES, valid_pattern_mix, pattern_style_of_mix, PREFILL_MIN_WORD_COUNT, style_index, WORDS_PER_NODE, MULTI_WORD_PERCENT, DualIndex, DualSet, build_letters_grid,
+    BLACK_SYMMETRIES, PATTERN_STYLES, FILL_METHODS, FILL_METHOD_DEFAULT, valid_pattern_mix, pattern_style_of_mix, PREFILL_MIN_WORD_COUNT, style_index, WORDS_PER_NODE, MULTI_WORD_PERCENT, DualIndex, DualSet, build_letters_grid,
     build_word_entries, challenge_word_grid_form, extract_slots, generate_grid, slot_direction,
     word_forms,
     _interactive_fill_diagnostics, _interactive_letter_stats,
     _serialize_resume_state, interactive_boundary_candidates, interactive_clean_impossible_zones,
     interactive_crossing_words, interactive_minimize_black_cells,
-    interactive_place_word, interactive_slot_candidates, lexicon_length_counts, lexicon_words,
+    interactive_place_word, interactive_place_word_ingrid, interactive_slot_candidates, lexicon_length_counts, lexicon_words,
     multi_lexicon_length_counts, multi_only_mots,
     load_lexicon,
     make_pattern,
@@ -929,6 +929,13 @@ class GenerateRequest(BaseModel):
     # to 100; when given, `pattern_style` is derived from it
     # (`_apply_pattern_mix`).
     pattern_mix: Optional[list[int]] = None
+    # "Méthode" selector (crossword_gen.py's FILL_METHODS): the search the
+    # attempts fill their grid with, "falcon" or "ingrid"
+    # (`IngridSolver`); 400 otherwise (`_validate_fill_method`).
+    fill_method: str = Field(
+        default=FILL_METHOD_DEFAULT,
+        description=f"Fill method: {list(FILL_METHODS)}",
+    )
     # "Effort" selector (see BUDGET_MODES above), at the user's explicit
     # request — directly sets the search budget per
     # attempt, replacing for this request the default formula of
@@ -1037,12 +1044,32 @@ class InteractiveStepRequest(BaseModel):
     when there is none.
 
     `multi_word_percent` is the generation form's current "Multi-mots"
-    value (see `interactive_place_word`'s own `multi_word_percent`)."""
+    value (see `interactive_place_word`'s own `multi_word_percent`).
+
+    `selected_cells` are the cells (`[[row, col], ...]`) of the emplacement
+    selected in the grid (the word through the selected cell in the current
+    direction), empty when there is none: while it is incomplete, the word
+    goes there whenever one can (see `interactive_place_word`'s own
+    `selected_cells`).
+
+    `zone_cells` are the cells of the zone selected in the grid (empty when
+    there is none): the word only goes on a slot lying entirely inside it,
+    every other cell counting as locked, and the answer carries
+    `zone_complete: true` (nothing placed) once every such slot is lettered
+    (see `interactive_place_word`'s own `zone_cells`).
+
+    `fill_method` is the generation form's current "Méthode" (crossword_
+    gen.py's FILL_METHODS): "ingrid" places the word with
+    `interactive_place_word_ingrid`, whose state between clicks the
+    session keeps (`INTERACTIVE_SESSIONS[job_id]["ingrid"]`)."""
     job_id: str
     grid: list[list[str]]
     challenge_words: list[str] = []
     last_placed_cells: list[list[int]] = []
+    selected_cells: list[list[int]] = []
+    zone_cells: list[list[int]] = []
     multi_word_percent: int = Field(default=MULTI_WORD_PERCENT, ge=0, le=100)
+    fill_method: str = FILL_METHOD_DEFAULT
 
 
 class InteractiveCleanRequest(BaseModel):
@@ -1319,7 +1346,7 @@ class InteractiveFinishRequest(BaseModel):
     words of that language, so the search must keep its dictionary.
     Every other generation parameter mirrors the generation form's own
     CURRENT values, which the player may have changed since the session
-    started: `mode`/`black_enrichment_percent`/`words_per_node`/`multi_word_percent`/`symmetry`/`pattern_style`/`pattern_mix`/`force_letters_percent`/
+    started: `mode`/`fill_method`/`black_enrichment_percent`/`words_per_node`/`multi_word_percent`/`symmetry`/`pattern_style`/`pattern_mix`/`force_letters_percent`/
     `difficulty`/`theme`/`theme_precision`/`challenge_words`. The last four
     fall back to the session's own value when omitted (`None`). The
     session's already-resolved theme glossary is reused only while it
@@ -1329,6 +1356,7 @@ class InteractiveFinishRequest(BaseModel):
     grid: list[list[str]]
     definitions: list[dict] = []
     mode: str = "medium"
+    fill_method: str = FILL_METHOD_DEFAULT
     black_enrichment_percent: int = Field(default=15, ge=0, le=100)
     words_per_node: int = Field(default=WORDS_PER_NODE, ge=1, le=MAX_WORDS_PER_NODE)
     multi_word_percent: int = Field(default=MULTI_WORD_PERCENT, ge=0, le=100)
@@ -4437,11 +4465,11 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
             "[%s] starting generation: language=%s bilingual_language=%s width=%s "
             "height=%s difficulty=%s force_letters_percent=%s black_enrichment_percent=%s "
             "words_per_node=%s multi_word_percent=%s symmetry=%s pattern_style=%s mode=%s "
-            "theme_precision=%s source=%s",
+            "fill_method=%s theme_precision=%s source=%s",
             short_id, req.language, req.bilingual_language, req.width, req.height,
             req.difficulty, req.force_letters_percent, req.black_enrichment_percent,
-            req.words_per_node, req.multi_word_percent, req.symmetry, req.pattern_style, req.mode, req.theme_precision,
-            req.source,
+            req.words_per_node, req.multi_word_percent, req.symmetry, req.pattern_style, req.mode,
+            req.fill_method, req.theme_precision, req.source,
         )
         # Grid (CPU) queue, at the user's explicit request — see GRID_
         # QUEUE's own module-level docstring: at most one grid search runs
@@ -4618,6 +4646,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                         pattern_style=req.pattern_style,
                         pattern_mix=req.pattern_mix,
                         start_grid=start_grid,
+                        fill_method=req.fill_method,
                     )
                     break
                 except GenerationPaused as p:
@@ -5006,6 +5035,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
             "pattern_mix": req.pattern_mix,
             "force_letters_percent": req.force_letters_percent,
             "mode": req.mode,
+            "fill_method": req.fill_method,
             "theme_precision": req.theme_precision,
         }
         if publish:
@@ -5616,6 +5646,15 @@ def _validate_generate_request(req):
     _validate_symmetry(req.symmetry)
     _apply_pattern_mix(req)
     _validate_pattern_style(req.pattern_style)
+    _validate_fill_method(req.fill_method)
+
+
+def _validate_fill_method(fill_method):
+    if fill_method not in FILL_METHODS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"méthode inconnue : {fill_method!r} (attendu : {list(FILL_METHODS)})",
+        )
 
 
 def _validate_symmetry(symmetry):
@@ -5740,14 +5779,31 @@ async def interactive_step(req: InteractiveStepRequest):
         for w in req.challenge_words
         if w and (grid_form := challenge_word_grid_form(w))
     )
-    placed = await asyncio.to_thread(
-        interactive_place_word,
-        [list(row) for row in req.grid], rows, cols,
-        sess["index"], sess["rng"], sess["priority_words"],
-        challenge_words, req.last_placed_cells, sess.get("scrabble_words"),
-        req.multi_word_percent,
-    )
+    _validate_fill_method(req.fill_method)
+    if req.fill_method == "ingrid":
+        placed = await asyncio.to_thread(
+            interactive_place_word_ingrid,
+            [list(row) for row in req.grid], rows, cols,
+            sess["index"], sess["rng"], sess["priority_words"],
+            challenge_words, sess.get("scrabble_words"), req.multi_word_percent,
+            sess.setdefault("ingrid", {}), req.selected_cells, req.zone_cells,
+        )
+    else:
+        placed = await asyncio.to_thread(
+            interactive_place_word,
+            [list(row) for row in req.grid], rows, cols,
+            sess["index"], sess["rng"], sess["priority_words"],
+            challenge_words, req.last_placed_cells, sess.get("scrabble_words"),
+            req.multi_word_percent, req.selected_cells, req.zone_cells,
+        )
     _add_placed_breaks(placed.get("placed"), sess.get("multi_breaks"))
+    if placed.get("zone_complete"):
+        return {"width": cols, "height": rows, "grid": req.grid,
+                "placed": None, "impossible": False, "zone_complete": True,
+                "impossible_cells": placed.get("impossible_cells", []),
+                "low_candidate_cells": placed.get("low_candidate_cells", []),
+                "deadlock_cells": placed.get("deadlock_cells", []),
+                "excluded_cells": [], "window_cells": []}
     if placed["impossible"]:
         return {"width": cols, "height": rows, "grid": req.grid,
                 "placed": None, "impossible": True,
@@ -6943,6 +6999,7 @@ async def interactive_finish(req: InteractiveFinishRequest):
         pattern_style=req.pattern_style,
         pattern_mix=req.pattern_mix,
         mode=req.mode,
+        fill_method=req.fill_method,
         theme=theme or None,
         theme_precision=theme_precision,
         pseudo=req.pseudo,

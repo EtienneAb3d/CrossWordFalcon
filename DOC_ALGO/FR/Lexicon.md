@@ -271,6 +271,22 @@ plusieurs signaux) :
 
 ## Choix des mots
 
+- **Méthode de remplissage** : la recherche qu'une tentative applique à
+  son motif, choisie par le sélecteur **Méthode** du formulaire (visible
+  en local seulement). **Ingrid-like** (par défaut) et **Falcon
+  (expérimental)**, la recherche avec retour en arrière décrite dans ce
+  document. **Ingrid-like** est une
+  recherche inspirée du remplisseur Ingrid : cohérence d'arc maintenue sur
+  tous les domaines, emplacement choisi par *dom/wdeg*, ordre des mots
+  fixé une fois par emplacement, redémarrages avec poids de croisement
+  appris. Le bouton **Suivant** du mode Interactif suit le même
+  sélecteur (`interactive_place_word_ingrid`). Les deux partagent le
+  lexique, les familles de candidats, les nettoyages entre paliers et
+  l'optimisation finale ; la fenêtre de tirage
+  des mots ci-dessous n'existe que pour Falcon.
+  (`backend/crossword_gen.py`, `FILL_METHODS`, `IngridSolver`,
+  `try_fill`.)
+
 - **Fenêtre de tirage des mots** : la règle unique par laquelle le moteur
   décide dans quel ordre essayer les mots candidats d'un emplacement.
   Les candidats sont mélangés, réduits par le filtre d'usage (voir
@@ -490,7 +506,28 @@ plusieurs signaux) :
   signalé par sa ou ses cases les plus proches de ce point, entourées en
   bleu. (`backend/crossword_gen.py`, `Filler.last_selection_window`,
   `_origin_closest_cells` ; `frontend/static/script.js`,
-  `interactiveWindowCells`.)
+  `interactiveWindowCells`.) Quand « Suivant » pose son mot sur
+  l'emplacement sélectionné, seul celui-ci est signalé.
+
+- **Emplacement sélectionné** : en mode Interactif, l'emplacement qui
+  passe par la case sélectionnée dans le sens de saisie. Tant qu'il garde
+  une case vide, « Suivant » essaie d'abord d'y poser son mot, avec les
+  mêmes familles et niveaux de tolérance (méthode Falcon) ou la même
+  cohérence d'arc puis le même dernier recours (méthode Ingrid-like) que
+  d'ordinaire ; le choix habituel de l'emplacement ne s'applique que si
+  aucun mot ne peut y aller. (`backend/crossword_gen.py`,
+  `_selected_slot_index`, `interactive_place_word`,
+  `interactive_place_word_ingrid` ; `frontend/static/script.js`,
+  `selectedInteractiveWord`.)
+
+- **Zone sélectionnée** : en mode Interactif, l'ensemble de cases choisi
+  par cliquer-glisser, étendu à chaque emplacement entier qui touche le
+  rectangle tracé. Hors de la zone, tout est tenu pour verrouillé :
+  « Finir la zone » n'y complète rien, et « Suivant » ne pose son mot que
+  sur un emplacement entièrement compris dans la zone ; une fois tous ces
+  emplacements lettrés, « Suivant » répond que la zone est complète.
+  (`backend/crossword_gen.py`, `_zone_slot_indices`, `_zone_complete` ;
+  `frontend/static/script.js`, `interactiveZoneSelection`.)
 
 - **Retrait fantôme** (*backghost*) : simple nettoyage du conflit, qui
   remplace un saut arrière de plus de `MAX_BACKJUMP_LEVELS` (5) nœuds : seul

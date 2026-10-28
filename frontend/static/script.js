@@ -319,10 +319,6 @@ const patternMixInputs = ["pattern-mix-airy", "pattern-mix-grouped", "pattern-mi
 let patternMix = [100, 0, 0];
 const FRENCH_PATTERN_MIX = [100, 0, 0];
 const AMERICAN_PATTERN_MIX = [30, 40, 30];
-// In French, selecting the "grouped" (American) style raises "Taux noir" to
-// at least this percentage (the player may lower it again afterwards), and
-// every preset takes it (groupedBlackMinimumApplies).
-const GROUPED_MIN_BLACK_PERCENT = 18;
 
 // The GenerateRequest.pattern_style the current mix stands for.
 function patternStyle() {
@@ -333,22 +329,18 @@ function readPatternMix() {
   return patternMix.slice();
 }
 
-// Shows `mix` (three percentages totalling 100) in the three fields; a
-// switch to the "grouped" style raises "Taux noir" unless `restoring`.
+// Shows `mix` (three percentages totalling 100) in the three fields.
 function setPatternMix(mix, restoring = false) {
-  const wasGrouped = patternStyle() === "grouped";
   patternMix = mix.slice();
   patternMixInputs.forEach((input, i) => { input.value = String(patternMix[i]); });
-  if (!restoring && !wasGrouped && patternStyle() === "grouped") applyGroupedBlackMinimum();
-  else if (gridPresetsReady) renderGridPresets();
   applyLargeAmericanDefaults(restoring);
 }
 
 // A grid whose larger side exceeds LARGE_AMERICAN_MIN_SIDE under the
-// "grouped" (American) style gets "Taux noir" GROUPED_MIN_BLACK_PERCENT and
-// a "Groupé" share of at least LARGE_AMERICAN_GROUPED_PERCENT, taken from
-// "Aligné" then "Aéré" — once, when the form enters that state (size, preset
-// or style change), so the player may change both afterwards.
+// "grouped" (American) style gets a "Groupé" share of at least
+// LARGE_AMERICAN_GROUPED_PERCENT, taken from "Aligné" then "Aéré" — once,
+// when the form enters that state (size, preset or style change), so the
+// player may change it afterwards. "Taux noir" is left as it is.
 const LARGE_AMERICAN_MIN_SIDE = 15;
 const LARGE_AMERICAN_GROUPED_PERCENT = 70;
 let largeAmericanGrid = false;
@@ -375,8 +367,6 @@ function applyLargeAmericanDefaults(restoring = false) {
     }
     setPatternMix(mix);
   }
-  blackEnrichmentInput.value = String(GROUPED_MIN_BLACK_PERCENT);
-  if (gridPresetsReady) syncGridPresetSelection();
 }
 
 // A field changed: its new value (clamped to 0-100) is kept and the
@@ -413,22 +403,6 @@ function restorePatternMix(params) {
   }
 }
 
-// The 18 % minimum black rate of the "grouped" style: French only — the
-// other languages keep the rate the player or the preset set.
-function groupedBlackMinimumApplies() {
-  return patternStyle() === "grouped" && uiLanguage === "fr";
-}
-
-function applyGroupedBlackMinimum() {
-  // The presets' black rates follow the pattern style (presetBlack).
-  if (gridPresetsReady) renderGridPresets();
-  if (!groupedBlackMinimumApplies()) return;
-  const current = Number(blackEnrichmentInput.value);
-  if (!(current >= GROUPED_MIN_BLACK_PERCENT)) {
-    blackEnrichmentInput.value = GROUPED_MIN_BLACK_PERCENT;
-    if (gridPresetsReady) syncGridPresetSelection();
-  }
-}
 // "Thématique" field — shared const so both the generation form's submit
 // handler and Interactive mode's own enterInteractiveMode() (re-filling
 // it from a re-edited grid's own origin theme, at the user's explicit
@@ -3923,6 +3897,37 @@ const modeSelect = document.getElementById("mode");
   if (LOCALHOST_ONLY_MODES.includes(modeSelect.value)) modeSelect.value = "medium";
 })();
 
+// "Méthode" selector (#fill-method, GenerateRequest.fill_method): shown on
+// localhost only; elsewhere every request sends the default, "ingrid"
+// (`readFillMethod`).
+const fillMethodField = document.getElementById("fill-method-field");
+const fillMethodSelect = document.getElementById("fill-method");
+(function showFillMethodOnLocalhost() {
+  if (isLocalhostOrigin()) fillMethodField.hidden = false;
+})();
+
+// "Mots par pose" (#words-per-node-field) only applies to the Falcon
+// method: shown right of "Méthode" while it is selected.
+const wordsPerNodeField = document.getElementById("words-per-node-field");
+
+function syncWordsPerNodeVisibility() {
+  wordsPerNodeField.hidden = readFillMethod() !== "falcon";
+}
+
+fillMethodSelect.addEventListener("change", syncWordsPerNodeVisibility);
+syncWordsPerNodeVisibility();
+
+function readFillMethod() {
+  return isLocalhostOrigin() ? fillMethodSelect.value : "ingrid";
+}
+
+function restoreFillMethod(fillMethod) {
+  if (fillMethod && fillMethodSelect.querySelector(`option[value="${fillMethod}"]`)) {
+    fillMethodSelect.value = fillMethod;
+  }
+  syncWordsPerNodeVisibility();
+}
+
 function applyBackendModeDefaults(info) {
   if (!info || info.backend !== "java") return;
   const option = modeSelect.querySelector(`option[value="${JAVA_BACKEND_UNLOCKED_MODE}"]`);
@@ -3954,19 +3959,10 @@ function gridPresetAllowed(preset) {
     || (preset.width <= REMOTE_MAX_DIMENSION && preset.height <= REMOTE_MAX_DIMENSION);
 }
 
-// A preset's black rate: GROUPED_MIN_BLACK_PERCENT for every preset under
-// the "grouped" (American) pattern style in French, and for a preset with a
-// side above LARGE_AMERICAN_MIN_SIDE under that style in every language;
-// its own otherwise.
-function presetBlack(preset) {
-  const large = patternStyle() === "grouped" && isLargeSide(preset.width, preset.height);
-  return groupedBlackMinimumApplies() || large ? GROUPED_MIN_BLACK_PERCENT : preset.black;
-}
-
 function matchingGridPreset() {
   return GRID_PRESETS.find((p) => String(p.width) === widthInput.value
     && String(p.height) === heightInput.value
-    && String(presetBlack(p)) === blackEnrichmentInput.value) || null;
+    && String(p.black) === blackEnrichmentInput.value) || null;
 }
 
 // Fills `el` with "<b>name</b> : WxH N % noir".
@@ -3975,7 +3971,7 @@ function fillGridPresetText(el, preset) {
   el.textContent = "";
   const name = document.createElement("strong");
   name.textContent = preset.name;
-  el.append(name, t.presetDescription(preset.width, preset.height, presetBlack(preset)));
+  el.append(name, t.presetDescription(preset.width, preset.height, preset.black));
 }
 
 function syncGridPresetSelection() {
@@ -4017,7 +4013,7 @@ function applyGridPreset(preset) {
   if (!gridPresetAllowed(preset)) return;
   widthInput.value = String(preset.width);
   heightInput.value = String(preset.height);
-  blackEnrichmentInput.value = String(presetBlack(preset));
+  blackEnrichmentInput.value = String(preset.black);
   syncGridPresetSelection();
   applySizeEffort();
   applyLargeAmericanDefaults();
@@ -8007,18 +8003,8 @@ function renderInteractive() {
   // the user's explicit request (see gridContainsWord()'s own docstring).
   renderInteractiveChallengeList();
   const w = selectedInteractiveWord();
-  // Falls back to the word itself when no clue has been written yet AND
-  // the word is already entirely filled in — at the user's explicit
-  // request: "Also automatically fill in the 'Proposer une définition'
-  // input field the same way." Never overwrites an existing,
-  // already-stored clue (interactiveDefs still wins whenever it has one)
-  // — this is only a convenient starting point to type a real definition
-  // from, not a value that gets silently saved on its own: setting
-  // .value here doesn't fire the field's own "input" listener, so it's
-  // never mistaken for a real clue unless the player actually edits it.
-  interactiveDefinitionInput.value = w
-    ? interactiveDefs.get(interactiveKey(w)) || (w.filled ? w.answer : "")
-    : "";
+  // The selected word's own definition, empty when none is assigned.
+  interactiveDefinitionInput.value = w ? interactiveDefs.get(interactiveKey(w)) || "" : "";
   interactiveDefinitionInput.disabled = !w;
   interactivePrevBtn.disabled = interactiveUndoStack.length <= 1;
   // The shared "Mots"/"Croisés" answer zone (#interactive-answers) is
@@ -8192,12 +8178,14 @@ function interactiveErase() {
   setInteractiveMessage("");
   renderInteractive();
 }
+// Every edit pushes the grid as it stood BEFORE it (interactivePushUndo),
+// above the session's starting grid: undoing one edit restores the
+// snapshot it pushed, and the bottom entry is never popped.
 function interactiveUndo() {
   if (interactiveUndoStack.length <= 1) return;
-  interactiveUndoStack.pop();
-  const top = interactiveUndoStack[interactiveUndoStack.length - 1];
-  interactiveGrid = top.map((r) => r.slice());
-  interactiveBreaks = new Set(top.breaks || []);
+  const before = interactiveUndoStack.pop();
+  interactiveGrid = before.map((r) => r.slice());
+  interactiveBreaks = new Set(before.breaks || []);
   clearInteractiveDiagnostics();
   setInteractiveMessage("");
   renderInteractive();
@@ -9423,6 +9411,7 @@ function enterInteractiveMode(state) {
     if (gp.mode && modeSelect.querySelector(`option[value="${gp.mode}"]`)) {
       modeSelect.value = gp.mode;
     }
+    restoreFillMethod(gp.fill_method);
     if (gp.black_enrichment_percent !== undefined && gp.black_enrichment_percent !== null) {
       blackEnrichmentInput.value = gp.black_enrichment_percent;
       syncGridPresetSelection();
@@ -9986,6 +9975,7 @@ function applyStopDumpRequest(req) {
   if (req.height) heightInput.value = String(req.height);
   if (req.difficulty) document.getElementById("difficulty").value = req.difficulty;
   if (req.mode && modeSelect.querySelector(`option[value="${req.mode}"]`)) modeSelect.value = req.mode;
+  restoreFillMethod(req.fill_method);
   if (req.black_enrichment_percent != null) blackEnrichmentInput.value = req.black_enrichment_percent;
   if (req.words_per_node != null) wordsPerNodeInput.value = req.words_per_node;
   if (req.multi_word_percent != null) multiWordPercentInput.value = req.multi_word_percent;
@@ -10206,6 +10196,15 @@ interactiveNextBtn.addEventListener("click", async () => {
   interactivePushUndo();
   try {
     const wireGrid = interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch)));
+    // The selected emplacement, while incomplete, takes the word whenever
+    // one can go there (the backend ignores a complete one too).
+    const selectedWord = selectedInteractiveWord();
+    const selectedCells = selectedWord && !selectedWord.filled
+      ? selectedWord.cells.map((p) => [p.row, p.col]) : [];
+    // A selected zone: the word only goes on one of its own emplacements,
+    // every other cell counting as locked.
+    const zoneCells = interactiveZoneSelection && interactiveZoneSelection.size
+      ? [...interactiveZoneSelection].map((key) => key.split(",").map(Number)) : [];
     // "Mots Défi" sent along on every "Suivant" click, at the user's
     // explicit request, so the backend can draw the placed word from this
     // list first (ahead of the theme glossary) whenever one still fits —
@@ -10217,7 +10216,10 @@ interactiveNextBtn.addEventListener("click", async () => {
         job_id: interactiveJobId, grid: wireGrid,
         challenge_words: interactiveChallengeWords,
         last_placed_cells: interactiveOriginCells(),
+        selected_cells: selectedCells,
+        zone_cells: zoneCells,
         multi_word_percent: readMultiWordPercent(),
+        fill_method: readFillMethod(),
       }),
     }, FETCH_TIMEOUT_MS);
     if (resp.status === 404) {
@@ -10229,6 +10231,14 @@ interactiveNextBtn.addEventListener("click", async () => {
     if (!resp.ok) {
       interactiveUndoStack.pop();
       setInteractiveMessage(describeErrorCode(t, data.detail && data.detail.code, data.detail), true);
+      return;
+    }
+    if (data.zone_complete) {
+      // Every emplacement of the selected zone is filled: nothing placed.
+      interactiveUndoStack.pop();
+      setInteractiveDiagnostics(data);
+      setInteractiveMessage(t.interactiveZoneComplete, false);
+      renderInteractive();
       return;
     }
     if (data.impossible) {
@@ -11076,6 +11086,7 @@ async function runInteractiveFinish(zoneCells) {
           grid: wireGrid,
           definitions: interactiveDefinitionsPayload(),
           mode: finishMode,
+          fill_method: readFillMethod(),
           black_enrichment_percent: Number(blackEnrichmentInput.value),
           words_per_node: Number(wordsPerNodeInput.value),
           multi_word_percent: readMultiWordPercent(),
@@ -11447,6 +11458,7 @@ form.addEventListener("submit", async (event) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           language, width, height, difficulty, mode,
+          fill_method: readFillMethod(),
           bilingual_language: bilingualLanguage !== language ? bilingualLanguage : undefined,
           black_enrichment_percent: blackEnrichmentPercent,
           words_per_node: wordsPerNode,
