@@ -1395,9 +1395,11 @@ real letter. Both update after every edit.
   interactive/crossing`) — for the selected cell, computes both the
   horizontal AND the vertical emplacement crossing there and lists every
   letter that a real word can take in BOTH of them at once, restricted by
-  whatever letters are already in place elsewhere on the grid. For each
-  such letter, it lists the matching horizontal words and the matching
-  vertical words (comma-separated, click one to place it), with that
+  whatever letters are already in place elsewhere on the grid. The result
+  is a three-column table: one row per such letter, its narrow first
+  column showing the letter, the second the matching horizontal words and
+  the third the matching vertical words (comma-separated, click one to
+  place it), with that
   common letter highlighted in blue within every listed word — the same
   blue highlight as "Mots". Useful when a cell has no letter yet and you
   want to see, at a glance, which choices actually keep both crossing

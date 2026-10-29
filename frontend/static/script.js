@@ -8983,11 +8983,10 @@ function interactiveRunAt(row, col, direction) {
 // convention as "Mots" (renderInteractiveWords) and for the same reason:
 // each block stays bound to the exact cell it was fetched for, regardless
 // of the live selection, so it's safe to keep several around for
-// comparison. For each letter compatible with a real word in BOTH
-// directions, lists its own horizontal and vertical candidates
-// (comma-separated) with that one letter highlighted in blue within every
-// word — at the user's explicit request: "highlight the shared letter in
-// blue (like the selected letter in the Mots function)". Every
+// comparison. A three-column table: one row per letter compatible with a
+// real word in BOTH directions, then its horizontal and vertical
+// candidates (comma-separated) with that one letter highlighted in blue
+// within every word. Every
 // listed word is clickable to place it on its own emplacement, same
 // interaction as "Mots".
 function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
@@ -9047,42 +9046,36 @@ function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
   header.appendChild(label);
   header.appendChild(createInteractiveWordsEyeToggle(block));
   block.appendChild(header);
+  // Three columns: the common letter (one table row per letter), then the
+  // across words, then the down words taking that letter at the cell.
+  const table = document.createElement("table");
+  table.className = "interactive-crossing-table";
+  const headRow = table.createTHead().insertRow();
+  for (const [cls, text] of [
+    ["interactive-crossing-letter-cell", ""],
+    ["", t.interactiveCrossingAcrossLabel],
+    ["", t.interactiveCrossingDownLabel],
+  ]) {
+    const th = document.createElement("th");
+    if (cls) th.className = cls;
+    th.textContent = text;
+    headRow.appendChild(th);
+  }
+  const body = table.createTBody();
   for (const { letter, across_words: acrossWords, down_words: downWords } of letters) {
-    const group = document.createElement("div");
-    group.className = "interactive-crossing-group";
-    // The reference letter on its own line, at the user's explicit
-    // request: "put the reference letter on one line, then H and V on 2
-    // lines underneath" — previously prefixed onto the H line
-    // itself ("A : H mot1, mot2..."), now its own row above both.
-    const letterLine = document.createElement("p");
-    letterLine.className = "interactive-crossing-line interactive-crossing-letter-line";
+    const row = body.insertRow();
+    const letterCell = row.insertCell();
+    letterCell.className = "interactive-crossing-letter-cell";
     const letterMark = document.createElement("span");
     letterMark.className = "interactive-word-highlight-letter";
     letterMark.textContent = letter;
-    letterLine.appendChild(letterMark);
-    group.appendChild(letterLine);
-    const acrossLine = document.createElement("p");
-    acrossLine.className = "interactive-crossing-line";
-    const acrossLabel = document.createElement("span");
-    acrossLabel.className = "interactive-crossing-dir-label";
-    acrossLabel.textContent = t.interactiveCrossingAcrossLabel;
-    acrossLine.appendChild(acrossLabel);
-    acrossLine.appendChild(document.createTextNode(" "));
-    appendWordList(acrossLine, acrossWords, acrossCells, posAcross,
+    letterCell.appendChild(letterMark);
+    appendWordList(row.insertCell(), acrossWords, acrossCells, posAcross,
       challengeWordsForCells(acrossCells, posAcross, letter));
-    group.appendChild(acrossLine);
-    const downLine = document.createElement("p");
-    downLine.className = "interactive-crossing-line interactive-crossing-line-down";
-    const downLabel = document.createElement("span");
-    downLabel.className = "interactive-crossing-dir-label";
-    downLabel.textContent = t.interactiveCrossingDownLabel;
-    downLine.appendChild(downLabel);
-    downLine.appendChild(document.createTextNode(" "));
-    appendWordList(downLine, downWords, downCells, posDown,
+    appendWordList(row.insertCell(), downWords, downCells, posDown,
       challengeWordsForCells(downCells, posDown, letter));
-    group.appendChild(downLine);
-    block.appendChild(group);
   }
+  block.appendChild(table);
   interactiveAnswers.insertBefore(block, interactiveAnswers.firstChild);
   interactiveAnswers.hidden = false;
 }

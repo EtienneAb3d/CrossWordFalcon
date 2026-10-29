@@ -3677,35 +3677,37 @@ button:disabled {
   ~ .interactive-word-item:not(.interactive-word-item-hidden)::before {
   content: ", ";
 }
-/* "Croisés" button — one .interactive-crossing-group per compatible
-   letter, inside its own .interactive-words-block (same stacking
-   convention as "Mots"). Each group holds three stacked lines — the
-   reference letter itself, then H, then V, all flush against the
-   group's own left edge — at the user's explicit request: "mettre la
-   lettre de référence sur une ligne, puis H et V sur 2 lignes en
-   dessous" (the letter used to be prefixed directly onto the H line,
-   "A : H mot1, mot2..."). Before that, H/V themselves were already split
-   from a single "H ... — V ..." line into their own two rows ("H sur une
-   ligne, et V sur une autre ligne, alignés à gauche"), which could wrap
-   unevenly once either word list got long. Each line reuses
-   .interactive-word-item/.interactive-word-highlight-letter for its own
-   word list. */
-.interactive-crossing-group {
-  margin: 0 0 0.35rem;
+/* "Croisés" button — a three-column table inside its own
+   .interactive-words-block (same stacking convention as "Mots"): a narrow
+   column for the common letter (one row per letter), then the across
+   words, then the down words, each word list wrapping inside its own
+   half. Word lists reuse .interactive-word-item/
+   .interactive-word-highlight-letter. */
+.interactive-crossing-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
 }
-.interactive-crossing-line {
-  margin: 0 0 0.15rem;
-  text-align: left;
-}
-.interactive-crossing-letter-line {
-  font-size: 1.05rem;
-}
-.interactive-crossing-line-down {
-  margin-bottom: 0;
-}
-.interactive-crossing-dir-label {
+.interactive-crossing-table th {
   font-size: 0.75rem;
-  opacity: 0.7;
+  font-weight: 600;
+  color: #777;
+  text-align: left;
+  padding: 0.15rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.interactive-crossing-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.25rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: break-word;
+}
+.interactive-crossing-table th.interactive-crossing-letter-cell,
+.interactive-crossing-table td.interactive-crossing-letter-cell {
+  width: 2rem;
+  text-align: center;
+  font-size: 1.05rem;
 }
 /* Theme-glossary words shown first, in the same bright magenta already
    used everywhere else in this app for a theme-glossary match (see

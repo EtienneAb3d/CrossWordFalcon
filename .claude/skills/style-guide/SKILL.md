@@ -4917,3 +4917,15 @@ end through the real running API (interactive start/step/save,
   (`.qdrant-admin-endpoint ~ .qdrant-admin-endpoint`). The dashboard link
   and the two populate commands close the panel. No new token.
   **Visually confirmed** with Playwright/Chromium at 1400×1000.
+
+- **"Croisés" results are a three-column table**
+  (`.interactive-crossing-table`, `script.js`'s
+  `renderInteractiveCrossing`), at the user's explicit request: a narrow
+  2rem centered column holding the common letter (one table row per
+  letter, blue `.interactive-word-highlight-letter`), then the across
+  words, then the down words taking that letter at the cell, each list
+  wrapping inside its own column (`table-layout: fixed`, the two word
+  columns sharing the rest equally). Small grey header row (`#777`,
+  0.75rem, the `interactiveCrossingAcrossLabel`/`DownLabel` names), thin
+  `--border` row dividers like the other tables. Replaces the former
+  letter line + "H :"/"V :" lines per letter. No new token.
