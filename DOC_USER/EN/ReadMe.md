@@ -869,6 +869,12 @@ language codes side by side in its language column (e.g. "Français
 langues" — picking one specific language (e.g. "Français" alone) hides
 every bilingual grid, even one whose across words happen to be in that
 exact language (`backend/app.py`, `_library_page`).
+A grid in a language other than French whose black cells were drawn with
+the 100 % "Aéré" pattern mix shows **Style français / French style**, in
+bold, after its language (`frontend/static/script.js`,
+`renderLibraryList`; `backend/grid_store.py`, `_iter_stored_grids`'s
+`pattern_style`). A grid saved without its generation settings shows no
+such mention.
 
 A level filter (`#library-difficulty-filter`, in the panel's top-right
 row alongside the other filters) narrows the list to one difficulty —

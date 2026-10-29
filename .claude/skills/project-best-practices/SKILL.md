@@ -2775,6 +2775,14 @@ the current defaults/behavior to know before touching this code.
   from a new grid — the user's rule: when several grids fail, new grids
   are generated so there are always as many grids as processors (a pool
   grid is never resumed by two workers once a pool was built).
+- **The Library marks a non-French grid drawn 100 % "Aéré"** — the
+  user's rule: in the Library list, a grid of another language whose
+  settings are 100 % airy shows "Style français" (translated), in bold,
+  next to its language. Choices made with it, to revisit with the user:
+  "non-French" means the grid's main (across) language is not French;
+  "100 % airy" is the `pattern_style` "airy" of its `generation_params`
+  (only a 100/0/0 mix gives it; an Interactive grid stores the style
+  alone); a record without `generation_params` gets no mention.
 - **The pattern style never changes "Taux noir"** — the user's rule: no
   black rate is raised to 18 % any more, 15 % stays the default
   everywhere; the "Préconfigurations" presets keep their own rates

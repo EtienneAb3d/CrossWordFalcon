@@ -75,7 +75,9 @@ the grid for you.
 
 **Library and export**
 
-- Every grid stored in a shared Library, filterable by language and level.
+- Every grid stored in a shared Library, filterable by language and level;
+  a non-French grid drawn with the French (airy) black-cell layout is
+  marked "French style".
 - Grids from obsolete Falcon versions can be archived (from the server
   machine itself); archived grids stay viewable and playable.
 - Player count per grid; "seen" tracking.

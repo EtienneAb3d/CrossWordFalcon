@@ -5320,6 +5320,15 @@ async function renderLibraryList() {
     if (entry.bilingual) {
       languageTd.textContent += ` (${entry.language}/${entry.bilingual})`;
     }
+    // A grid of another language built with the 100 % "Aéré" mix (its
+    // generation_params' pattern_style "airy") is tagged "French style",
+    // in bold, after its language.
+    if (entry.language !== "fr" && entry.pattern_style === "airy") {
+      const frenchStyle = document.createElement("strong");
+      frenchStyle.className = "library-french-style";
+      frenchStyle.textContent = t.libraryFrenchStyle;
+      languageTd.append(" ", frenchStyle);
+    }
     const dateTd = document.createElement("td");
     dateTd.textContent = entry.created_at ? new Date(entry.created_at).toLocaleString(uiLanguage) : "";
     // Software version the grid was published with (empty for a record

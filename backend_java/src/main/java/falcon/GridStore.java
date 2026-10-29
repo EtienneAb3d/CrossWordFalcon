@@ -199,9 +199,12 @@ public final class GridStore {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("id", r.getOrDefault("id", stem(path)));
                 for (String k : List.of("created_at", "falcon_version", "language", "bilingual", "pseudo",
-                        "interactive", "origin", "theme", "difficulty", "title", "width", "height")) {
+                        "interactive", "origin", "theme")) {
                     m.put(k, r.get(k));
                 }
+                // Mirrors _iter_stored_grids' pattern_style, read from the record's generation_params.
+                m.put("pattern_style", r.get("generation_params") instanceof Map<?, ?> gp ? gp.get("pattern_style") : null);
+                for (String k : List.of("difficulty", "title", "width", "height")) m.put(k, r.get(k));
                 out.add(m);
             }
         }

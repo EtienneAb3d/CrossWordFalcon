@@ -527,7 +527,11 @@ json`. Holds all server-side state in plain module dicts/lists:
 - *Library*: `GET|POST /api/library` (paginated, filterable listing;
   each returned grid carries `player_count`, its number of `GRID_GAME`
   records — `grid_store.grid_game_player_count` — shown in the
-  "Joueurs" column),
+  "Joueurs" column, and `pattern_style`, its `generation_params`'
+  pattern style or null — `_iter_stored_grids`, Java `GridStore.
+  iterStoredGrids` —, a non-French "airy" grid, i.e. a 100/0/0 mix,
+  getting a bold "Style français" (`libraryFrenchStyle`) after its
+  language in `renderLibraryList`),
   `LibraryListRequest.archived` lists the archived grids instead, and
   every response carries `has_archived` (whether `GRID_STORE/BACKUP/`
   holds grids); `GET /api/library/{grid_id}` (optionally merges a

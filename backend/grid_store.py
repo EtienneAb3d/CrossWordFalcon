@@ -266,7 +266,7 @@ def _version_key(version):
 def _iter_stored_grids(archived=False):
     """Yields every stored grid's own compact metadata dict ({id,
     created_at, falcon_version, language, bilingual, pseudo, interactive, origin, theme,
-    difficulty, title, width, height}) — never the full pattern/solution/
+    pattern_style, difficulty, title, width, height}) — never the full pattern/solution/
     words payload, so listing
     many grids stays cheap even though each file can run to several
     dozen KB.
@@ -317,6 +317,11 @@ def _iter_stored_grids(archived=False):
             # field. Shown in the Library's "Theme" column
             # (frontend/static/script.js, renderLibraryList).
             "theme": record.get("theme"),
+            # Pattern style the grid was built with ("airy" = a 100/0/0
+            # "Style de motif" mix), from its generation_params — None for
+            # a record predating them. Drives the library's "French style"
+            # tag (frontend/static/script.js, renderLibraryList).
+            "pattern_style": (record.get("generation_params") or {}).get("pattern_style"),
             "difficulty": record.get("difficulty"),
             "title": record.get("title"),
             "width": record.get("width"),

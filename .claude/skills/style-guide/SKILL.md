@@ -1912,6 +1912,10 @@ English (see `project-best-practices`).
   tag-balance, a real JS syntax check via `esprima`) rather than by
   watching it render live.
 
+- **"Style français" tag in the Library's language cell**
+  (`.library-french-style`, a plain `<strong>`, no colour of its own):
+  bold text after the language name, separated by a space, for a
+  non-French grid drawn 100 % "Aéré" — the user's rule (bold).
 - **Real bug found and fixed**: the virtual keyboard's letters were
   invisible, reported directly by the user ("Les touches du clavier
   virtuel sont trop petites, et on ne voit pas les lettres"). Root cause:
