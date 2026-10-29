@@ -1413,9 +1413,8 @@ real letter. Both update after every edit.
   than the slot also turns the single cell right beyond it black when
   clicked, to terminate it there — only offered when that cell is free to
   become black (never one that would erase an existing letter) and doing
-  so keeps the grid valid. Results are sorted shortest first, then
-  alphabetically. Useful when no word fills the whole slot but part of it
-  still can.
+  so keeps the grid valid. Useful when no word fills the whole slot but
+  part of it still can.
 - The sponge button right after "Fin" (`#interactive-results-clear-btn`)
   empties the display area below the buttons (status message, "Vérifier"
   report, candidate lists) and removes the matching red/orange
@@ -1426,6 +1425,20 @@ real letter. Both update after every edit.
   "quart de finale") — so inflected forms and word breaks are visible at
   a glance; clicking it still places its bare letters in the grid
   (`frontend/static/script.js`, `appendWordLetters`).
+- Every word of these four lists is followed by its score in grey
+  parentheses, and each list is sorted by decreasing score — the score the
+  "Ingrid-like" fill method gives a word: high when each of its letters
+  leaves many words possible in the emplacement crossing there, plus a
+  bonus for a common, frequent word. It runs from 0 to 100: 100 would be
+  a word combining, at once, the best letter at every crossing, the
+  highest usage rating and the highest frequency of its length. "(−∞)"
+  marks a word with a letter no word of a crossing emplacement can take;
+  such words come last (`backend/crossword_gen.py`, `_ingrid_scored`).
+- Each list shows its first 20 words; a **Plus / More** button at the
+  end of the list shows all of them, and then becomes **Moins / Less**,
+  which goes back to the first 20. Words hidden by the eye button do
+  not count in the 20 (`frontend/static/script.js`,
+  `applyWordListLimit`).
 - In every one of these four lists, a letter shown underlined in red within a candidate word means placing
   that word would leave the crossing emplacement through that letter with
   no real dictionary word left to complete it (unless a still-available

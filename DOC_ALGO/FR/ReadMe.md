@@ -2040,6 +2040,22 @@ machineries de tentatives parallèles :
   (pas déjà lettrée, et structurellement valide à `min_interior_free=1`) ;
   le plafond de 300 s'applique par longueur, pour que les longueurs courtes
   ne saturent pas la liste.
+- Ces trois fonctions classent leurs mots par **score Ingrid** décroissant,
+  affiché entre parenthèses après chaque mot (`_ingrid_scored`) : le score
+  de l'ordre des mots d'Ingrid-like (« Choisir le mot », 900 × score de
+  remplissage + 60 × note d'usage + 20 × log10(1 + fréquence)), calculé sur
+  les cases du mot, ramené entre 0 et 100 : il est exprimé en pourcentage
+  du score maximal que l'emplacement permet — la lettre la plus fréquente
+  de chaque croisement, la note d'usage 5 (si la langue a des notes) et
+  la plus forte fréquence des mots de cette longueur, réunies
+  (`_max_dict_freq`). Ce maximum est une borne qu'aucun mot n'atteint
+  forcément ; le score brut n'étant jamais négatif, 0 est le minimum. Le nombre de mots de l'emplacement croisé portant
+  chaque lettre est compté sur les mots du dictionnaire compatibles avec
+  ses lettres connues, hors mots déjà utilisés, plus les Mots Défi qui y
+  tiennent (`_ingrid_crossing_counts`) ; un croisement sans aucun candidat
+  (déjà impossible) compte comme une case non croisée. Un mot portant une
+  lettre qu'aucun candidat d'un croisement n'a reçoit « −∞ » et passe en
+  dernier. Le plafond de 300 garde les mots les mieux notés.
 - Ces trois fonctions renvoient chaque mot avec ses **positions
   dangereuses** (`_words_with_unsafe_positions`) : les positions où écrire
   cette lettre rendrait **nouvellement** un emplacement croisé impossible à

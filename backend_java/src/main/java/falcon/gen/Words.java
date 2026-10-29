@@ -367,6 +367,8 @@ public final class Words {
 
     /** Usage score of a word the usage-score file does not rate (mirrors USAGE_SCORE_UNKNOWN). */
     public static final int USAGE_SCORE_UNKNOWN = -1;
+    /** The highest usage score of that scale (mirrors USAGE_SCORE_MAX). */
+    public static final int USAGE_SCORE_MAX = 5;
 
     public static Path usageScorePath(String language) {
         return falcon.Env.ROOT.resolve("data").resolve("usage_score_" + language + "_scrabble.tsv");

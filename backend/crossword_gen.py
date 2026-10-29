@@ -3109,6 +3109,8 @@ def scrabble_wordlist_path(language):
 # form of an everyday word, 2 technical, 1 dated, 0 practically unknown.
 # `USAGE_SCORE_UNKNOWN` marks a word of the lexicon the file does not rate.
 USAGE_SCORE_UNKNOWN = -1
+# The highest usage score of that scale.
+USAGE_SCORE_MAX = 5
 
 
 def usage_score_path(language):
@@ -12451,18 +12453,139 @@ def _unsafe_letter_positions(cells, word, crossing_map, index, known, used_words
     return unsafe
 
 
+def _ingrid_crossing_counts(cells, crossing_map, index, known, used_words, challenge_words):
+    """For each position of `cells`, `{letter: count}` over the candidates
+    of the crossing slot through that cell — its real dictionary words
+    fitting the letters known there, minus `used_words`, plus the unused
+    "Mots Défi" words fitting it — counted at the shared cell; `None` for
+    a cell with no crossing slot, or whose crossing slot has no candidate
+    at all (already impossible, left out like a slot `IngridSolver.settle`
+    drops)."""
+    out = []
+    for cell in cells:
+        cross_cells = crossing_map.get(cell)
+        if cross_cells is None:
+            out.append(None)
+            continue
+        opos = cross_cells.index(cell)
+        length = len(cross_cells)
+        known_cross = {c: known[c] for c in cross_cells if c in known}
+        idx = index.for_cells(cross_cells).get(length)
+        counts = {}
+        if idx is not None:
+            words = _slot_candidates(index, length, cross_cells, known_cross)
+            if words is idx["words"]:
+                for ch, members in idx["pos"][opos].items():
+                    counts[ch] = len(members)
+                for w in used_words:
+                    if len(w) == length and w in idx["ids"]:
+                        ch = w[opos]
+                        counts[ch] -= 1
+                        if not counts[ch]:
+                            del counts[ch]
+            else:
+                for w in words:
+                    if w not in used_words:
+                        counts[w[opos]] = counts.get(w[opos], 0) + 1
+        for w in challenge_words or ():
+            if (len(w) == length and w not in used_words
+                    and (idx is None or w not in idx["ids"])
+                    and all(w[p] == known_cross[c] for p, c in enumerate(cross_cells)
+                            if c in known_cross)):
+                counts[w[opos]] = counts.get(w[opos], 0) + 1
+        out.append(counts or None)
+    return out
+
+
+_MAX_DICT_FREQ = {}
+
+
+def _max_dict_freq(idx):
+    """The highest `dict_freq` of `idx`'s words (0 for none), computed once
+    per loaded index."""
+    entry = _MAX_DICT_FREQ.get(id(idx))
+    if entry is None or entry[0] is not idx:
+        col = idx["dict_freq"]
+        values = col.values if isinstance(col, _WordColumn) else col.values()
+        entry = (idx, max(values, default=0.0))
+        _MAX_DICT_FREQ[id(idx)] = entry
+    return entry[1]
+
+
+def _ingrid_scored(words, cells, crossing_map, index, known, used_words, challenge_words):
+    """`(sorted words, {word: score})` for the "Mots"/"Croisés"/"Début"/
+    "Fin" panels. A word's raw score on `cells` is its `IngridSolver._order`
+    score: INGRID_FILL_SCORE_WEIGHT x the mean, over its letters, of log10
+    of the crossing slot's candidates carrying that letter at the shared
+    cell (`_ingrid_crossing_counts`, 0 for an uncrossed cell) +
+    INGRID_USAGE_WEIGHT x usage score (unrated 0) + INGRID_FREQ_WEIGHT x
+    log10(1 + frequency) — never negative. It is shown as a percentage of
+    the highest raw score the slot allows: the most frequent letter of
+    every crossing, USAGE_SCORE_MAX (when the language rates usage) and
+    the highest frequency of the slot's length, all at once — an upper
+    bound no single word need reach; rounded to an integer, 0 when the
+    bound is 0. `None` (minus infinity) for a word carrying a letter no
+    candidate of a crossing slot has. Sorted by decreasing score, `None`
+    last, ties by word."""
+    crossing = _ingrid_crossing_counts(cells, crossing_map, index, known, used_words,
+                                       challenge_words)
+    length = len(cells)
+    idx = index.for_cells(cells).get(length)
+    usage = idx.get("usage") if idx is not None else None
+    dict_freq = idx["dict_freq"] if idx is not None else {}
+    log10 = math.log10
+    best_fill = 0.0
+    for c in crossing:
+        if c is not None:
+            best_fill += log10(max(c.values()))
+    best = INGRID_FILL_SCORE_WEIGHT * best_fill / length
+    if usage is not None:
+        best += INGRID_USAGE_WEIGHT * USAGE_SCORE_MAX
+    if idx is not None:
+        best += INGRID_FREQ_WEIGHT * log10(1.0 + _max_dict_freq(idx))
+    exact = {}
+    for w in words:
+        fill = 0.0
+        for pos, ch in enumerate(w):
+            c = crossing[pos]
+            if c is not None:
+                n = c.get(ch, 0)
+                if not n:
+                    fill = None
+                    break
+                fill += log10(n)
+        if fill is None:
+            exact[w] = None
+            continue
+        score = INGRID_FILL_SCORE_WEIGHT * fill / length
+        if usage is not None:
+            u = usage.get(w, USAGE_SCORE_UNKNOWN)
+            if u != USAGE_SCORE_UNKNOWN:
+                score += INGRID_USAGE_WEIGHT * u
+        score += INGRID_FREQ_WEIGHT * log10(1.0 + dict_freq.get(w, 0.0))
+        exact[w] = score
+    ordered = sorted(
+        exact, key=lambda w: (exact[w] is None, -(exact[w] or 0.0), w),
+    )
+    return ordered, {
+        w: None if v is None else (round(100.0 * v / best) if best > 0 else 0)
+        for w, v in exact.items()
+    }
+
+
 def _words_with_unsafe_positions(words, cells, crossing_map, index, known, used_words,
-                                  challenge_words):
-    """Wraps a sorted word list (as returned so far by `interactive_slot_
-    candidates`/`interactive_crossing_words`/`interactive_boundary_
-    candidates`) into `{"word", "accented", "unsafe"}` dicts, `accented`
-    being the word's main spelling read from its wordlist row (`word_
-    forms`: accents, capitals, a multi-word expression's separators — the
-    word itself when it has no row), `unsafe` the sorted list of
-    `_unsafe_letter_positions` for that candidate — the shape the
+                                  challenge_words, scores):
+    """Wraps a word list (in `_ingrid_scored`'s order, as returned by
+    `interactive_slot_candidates`/`interactive_crossing_words`/
+    `interactive_boundary_candidates`) into `{"word", "accented",
+    "unsafe", "score"}` dicts, `accented` being the word's main spelling
+    read from its wordlist row (`word_forms`: accents, capitals, a
+    multi-word expression's separators — the word itself when it has no
+    row), `unsafe` the sorted list of `_unsafe_letter_positions` for that
+    candidate, `score` its Ingrid score (`scores`) — the shape the
     "Mots"/"Croisés"/"Début"/"Fin" panels use to show each candidate in
-    its own spelling and underline, in red, whichever of its letters would
-    create a new impossible crossing slot if placed."""
+    its own spelling with its score, and underline, in red, whichever of
+    its letters would create a new impossible crossing slot if placed."""
     length_index = index.for_cells(cells) if len(cells) >= 2 else {}
     return [
         {
@@ -12472,6 +12595,7 @@ def _words_with_unsafe_positions(words, cells, crossing_map, index, known, used_
                 _unsafe_letter_positions(cells, w, crossing_map, index, known, used_words,
                                           challenge_words)
             ),
+            "score": scores.get(w),
         }
         for w in words
     ]
@@ -12489,14 +12613,15 @@ def interactive_slot_candidates(grid, rows, cols, index, cells, priority_words=N
     correct even while the slot is still partially empty (a not-yet-
     complete slot has no stable slot-list index anyway).
 
-    Returns `(theme_words, other_words)`, two sorted lists of `{"word",
-    "unsafe"}` dicts for real dictionary words compatible with the
+    Returns `(theme_words, other_words)`, two lists of `{"word",
+    "accented", "unsafe", "score"}` dicts, by decreasing Ingrid score
+    (`_ingrid_scored`), for real dictionary words compatible with the
     letters already placed on `cells` (the same per-position intersection
     as `_slot_candidates`, reused as-is) — `theme_words`: the candidates
     belonging to the theme glossary applicable to `cells`'s own direction
     (`_priority_words_for`, like `interactive_place_word`), always
-    complete, never truncated; `other_words`: the rest, capped at
-    `INTERACTIVE_SLOT_CANDIDATES_LIMIT`. A word already used elsewhere in
+    complete, never truncated; `other_words`: the rest, the best-scored
+    `INTERACTIVE_SLOT_CANDIDATES_LIMIT` only. A word already used elsewhere in
     the grid (another slot, entirely filled, already carrying this word)
     is excluded from both lists — like `interactive_place_word`, to never
     offer a duplicate. Each entry's own `unsafe` (`_words_with_unsafe_
@@ -12522,12 +12647,16 @@ def interactive_slot_candidates(grid, rows, cols, index, cells, priority_words=N
     themed = _priority_words_for(priority_words, cells) & candidates
     other = candidates - themed
     crossing_map = _crossing_cells_map(slots, cells)
+    themed, theme_scores = _ingrid_scored(themed, cells, crossing_map, index, known, used_words,
+                                          challenge_words)
+    other, other_scores = _ingrid_scored(other, cells, crossing_map, index, known, used_words,
+                                         challenge_words)
     theme_words = _words_with_unsafe_positions(
-        sorted(themed), cells, crossing_map, index, known, used_words, challenge_words,
+        themed, cells, crossing_map, index, known, used_words, challenge_words, theme_scores,
     )
     other_words = _words_with_unsafe_positions(
-        sorted(other)[:INTERACTIVE_SLOT_CANDIDATES_LIMIT], cells, crossing_map, index, known,
-        used_words, challenge_words,
+        other[:INTERACTIVE_SLOT_CANDIDATES_LIMIT], cells, crossing_map, index, known,
+        used_words, challenge_words, other_scores,
     )
     return theme_words, other_words
 
@@ -12586,10 +12715,11 @@ def interactive_crossing_words(grid, rows, cols, index, cell, challenge_words=No
       candidate word (the same per-position intersection as `_slot_
       candidates`, already reused by `_slot_candidates` itself);
       `across_words`/`down_words` are the real candidate words, each a
-      sorted list of `{"word", "unsafe"}` dicts (`_words_with_unsafe_
-      positions`, see `interactive_slot_candidates`) capped at
-      `INTERACTIVE_SLOT_CANDIDATES_LIMIT`, carrying this letter at this
-      position. A word already used elsewhere in the grid (another slot,
+      list of `{"word", "accented", "unsafe", "score"}` dicts
+      (`_words_with_unsafe_positions`, see `interactive_slot_candidates`)
+      by decreasing Ingrid score, the best-scored
+      `INTERACTIVE_SLOT_CANDIDATES_LIMIT` only, carrying this letter at
+      this position. A word already used elsewhere in the grid (another slot,
       entirely filled, already carrying this word) is excluded, like
       `interactive_slot_candidates`."""
     across_cells = _interactive_white_run_at(grid, rows, cols, cell, "across")
@@ -12627,16 +12757,28 @@ def interactive_crossing_words(grid, rows, cols, index, cell, challenge_words=No
     common_letters = sorted(set(by_letter_across) & set(by_letter_down))
     across_crossing_map = _crossing_cells_map(slots, across_cells)
     down_crossing_map = _crossing_cells_map(slots, down_cells)
+    across_order, across_scores = _ingrid_scored(
+        [w for letter in common_letters for w in by_letter_across[letter]], across_cells,
+        across_crossing_map, index, known, used_words, challenge_words,
+    )
+    down_order, down_scores = _ingrid_scored(
+        [w for letter in common_letters for w in by_letter_down[letter]], down_cells,
+        down_crossing_map, index, known, used_words, challenge_words,
+    )
     letters = [
         {
             "letter": letter,
             "across_words": _words_with_unsafe_positions(
-                sorted(by_letter_across[letter])[:INTERACTIVE_SLOT_CANDIDATES_LIMIT],
+                [w for w in across_order if w[pos_across] == letter][
+                    :INTERACTIVE_SLOT_CANDIDATES_LIMIT],
                 across_cells, across_crossing_map, index, known, used_words, challenge_words,
+                across_scores,
             ),
             "down_words": _words_with_unsafe_positions(
-                sorted(by_letter_down[letter])[:INTERACTIVE_SLOT_CANDIDATES_LIMIT],
+                [w for w in down_order if w[pos_down] == letter][
+                    :INTERACTIVE_SLOT_CANDIDATES_LIMIT],
                 down_cells, down_crossing_map, index, known, used_words, challenge_words,
+                down_scores,
             ),
         }
         for letter in common_letters
@@ -12673,14 +12815,15 @@ def interactive_boundary_candidates(grid, rows, cols, index, cells, side, priori
     check, same as `interactive_slot_candidates`.
 
     Returns `(theme_words, other_words)` exactly like `interactive_slot_
-    candidates` — lists of `{"word", "unsafe"}` dicts (`_words_with_
-    unsafe_positions`, `unsafe` positions counted within that candidate's
-    own, possibly shorter-than-`cells`, span) — both sorted by `(length,
-    word)` (length first, then alphabetically) rather than plain
-    alphabetical order, and mixing every accepted length together — the
+    candidates` — lists of `{"word", "accented", "unsafe", "score"}` dicts
+    (`_words_with_unsafe_positions`, `unsafe` positions and the Ingrid
+    `score` computed on that candidate's own, possibly shorter-than-
+    `cells`, span) — both sorted by decreasing score (`_by_score`),
+    mixing every accepted length together — the
     word's own length already tells the caller how many of `cells` (from
     `side`'s end) it covers, no separate field needed.
-    `INTERACTIVE_SLOT_CANDIDATES_LIMIT` is applied PER length rather than
+    `INTERACTIVE_SLOT_CANDIDATES_LIMIT` (the best-scored words) is applied
+    PER length rather than
     once over the combined pool: an empty/lightly-constrained slot can
     easily have hundreds of 2- or 3-letter matches, which would otherwise
     fill the entire cap on their own and silently hide every longer (more
@@ -12722,17 +12865,27 @@ def interactive_boundary_candidates(grid, rows, cols, index, cells, side, priori
         themed = _priority_words_for(priority_words, sub_cells) & candidates
         other = candidates - themed
         sub_crossing_map = _crossing_cells_map(slots, sub_cells)
+        themed, theme_scores = _ingrid_scored(themed, sub_cells, sub_crossing_map, index, known,
+                                              used_words, challenge_words)
+        other, other_scores = _ingrid_scored(other, sub_cells, sub_crossing_map, index, known,
+                                             used_words, challenge_words)
         theme_words.extend(
-            _words_with_unsafe_positions(sorted(themed), sub_cells, sub_crossing_map, index,
-                                          known, used_words, challenge_words)
+            _words_with_unsafe_positions(themed, sub_cells, sub_crossing_map, index,
+                                          known, used_words, challenge_words, theme_scores)
         )
         other_words.extend(
             _words_with_unsafe_positions(
-                sorted(other)[:INTERACTIVE_SLOT_CANDIDATES_LIMIT], sub_cells, sub_crossing_map,
-                index, known, used_words, challenge_words,
+                other[:INTERACTIVE_SLOT_CANDIDATES_LIMIT], sub_cells, sub_crossing_map,
+                index, known, used_words, challenge_words, other_scores,
             )
         )
-    return theme_words, other_words
+    return _by_score(theme_words), _by_score(other_words)
+
+
+def _by_score(entries):
+    """`entries` (`_words_with_unsafe_positions` dicts) by decreasing
+    `score`, `None` last, then by word."""
+    return sorted(entries, key=lambda e: (e["score"] is None, -(e["score"] or 0), e["word"]))
 
 
 def interactive_clean_impossible_zones(grid, rows, cols, index, rng, challenge_words=None):

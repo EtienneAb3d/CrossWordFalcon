@@ -2745,8 +2745,26 @@ single boundary cell right beyond it is free to turn black: not already
 carrying a letter, and structurally valid at `min_interior_free=1`;
 `INTERACTIVE_SLOT_CANDIDATES_LIMIT` applies per length rather than once
 over the combined pool, so short lengths never crowd out longer ones).
+Each list is ordered by decreasing Ingrid score (`_ingrid_scored`, Java
+`Interactive.ingridScored`; boundary lists merged across lengths by
+`_by_score`, Java `byScore`), the cap keeping the best-scored words: the
+`IngridSolver._order` score on the candidate's own cells —
+`INGRID_FILL_SCORE_WEIGHT` x the mean, over its letters, of log10 of the
+crossing slot's candidates carrying that letter at the shared cell
+(`_ingrid_crossing_counts`: the crossing slot's dictionary words fitting
+its known letters minus the used words, plus the unused "Mots Défi" words
+fitting it; a cell with no crossing slot, or whose crossing slot has no
+candidate at all, counts 0) + `INGRID_USAGE_WEIGHT` x usage score
+(unrated 0) + `INGRID_FREQ_WEIGHT` x log10(1 + `dict_freq`), never
+negative, returned as a percentage (rounded half-even) of the slot's
+upper bound — the most frequent letter of every crossing, `USAGE_SCORE_MAX`
+(5, when the language has usage scores) and the length's highest
+`dict_freq` (`_max_dict_freq`, Java `Interactive.maxDictFreq`, once per
+index) all at once, 0 when that bound is 0; `None`/null (minus infinity,
+last) for a word carrying a letter no candidate of a crossing slot has;
+ties by word.
 All three of these candidate-listing functions return every word wrapped
-as `{"word", "accented", "unsafe"}` (`_words_with_unsafe_positions`,
+as `{"word", "accented", "unsafe", "score"}` (`_words_with_unsafe_positions`,
 Java `Interactive.wordsWithUnsafe`) instead of a bare string — `accented`
 is the word's main spelling read from its wordlist row (`word_forms`,
 the word itself when it has none), `unsafe` the sorted list of 0-indexed positions within that
@@ -2771,7 +2789,15 @@ grid form, each character marked by the grid positions it stands for,
 adding `.interactive-word-unsafe-letter` (red
 underline, `--error`) to a flagged position — composing with the existing
 `.interactive-word-highlight-letter` (blue, the selected-cell letter) when
-both land on the same letter. Each of these four buttons' own results
+both land on the same letter, then the word's `score` in parentheses
+(`.interactive-word-score`, grey, "−∞" for a null score; none for a
+client-side "Mots Défi" match). Each list (a "Mots"/"Début"/"Fin" block,
+each "Croisés" word cell) shows its first `WORD_LIST_PREVIEW_SIZE` (20)
+words not hidden by the eye toggle, the rest `.interactive-word-item-
+overflow`; while the list holds more, a button at its end switches
+between that reduced list ("Plus", showing them all) and the whole list
+("Moins", back to 20) (`applyWordListLimit`, `data-expanded`, re-run by the
+eye toggle). Each of these four buttons' own results
 block carries an "eye" toggle button in its header
 (`createInteractiveWordsEyeToggle()`), top-right of the emplacement
 label: clicking it hides every candidate flagged with at least one

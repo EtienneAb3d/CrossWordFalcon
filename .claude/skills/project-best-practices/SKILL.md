@@ -1103,6 +1103,31 @@ the current defaults/behavior to know before touching this code.
   Falcon way if it fails); Falcon's slot cascade picks the slot; the blue
   window of such a click is Falcon's level-6 window. Measured (French
   Ristretto, 4 seeds): 16-22 distinct grids offered instead of 28-39.
+- **The "Mots"/"Croisés"/"Début"/"Fin" candidates are scored the Ingrid
+  way** — the user's rule: score the possible words with the Ingrid
+  method, sort by decreasing score, show the score in parentheses after
+  each word (`_ingrid_scored`, Java `Interactive.ingridScored`). Choices
+  made with it, to revisit with the user: the score is `IngridSolver.
+  _order`'s (900 x fill + 60 x usage + 20 x log10(1 + frequency)), but the
+  crossing counts come from each crossing slot's candidates under the
+  grid's current letters (minus used words, plus fitting "Mots Défi"
+  words), not from an arc-consistent propagation of the whole grid; a
+  crossing slot with no candidate counts as no crossing; a word a
+  crossing cannot take shows "−∞" (Ingrid's -1e9) and comes last; the
+  score is shown from 0 to 100 — the user's request (normalize, with the
+  highest score possible as reference): a percentage of the slot's upper
+  bound (the most frequent letter at every crossing, usage 5, the
+  length's highest frequency, together), a bound no word need reach, so
+  scores bunch up (measured: 56-91 over 2029 words of a 7-letter French
+  slot); the family order (theme, Scrabble) is
+  not applied inside a list — the theme words stay a list of their own,
+  each list sorted by score alone; "Début"/"Fin" mix every length by
+  score, the 300-word cap per length keeping the best-scored words; the
+  client-side "Mots Défi" matches stay first, with no score. The user's
+  rule: each list shows 20 words, a "Plus" button at its end showing the
+  whole list, then a "Moins" button going back to the reduced list; choices made with it, to revisit with the user: each
+  "Croisés" word cell is its own list; words hidden by the eye toggle do
+  not count in the 20; the backend still sends up to 300 words.
 - **Interactive "Suivant" fills the selected emplacement first** — the
   user's rule: when an incomplete emplacement is selected in the grid,
   "Suivant" tries to fill it if a possibility exists, otherwise the usual

@@ -8739,7 +8739,9 @@ function spellingCharGridLetters(ch) {
 // `unsafe` field) land on the right character, independently or together.
 // A character needing neither stays a plain text node; a space is written
 // as a non-breaking one, so an expression never wraps inside the list.
-function appendWordLetters(item, word, highlightPos, unsafeSet, accented) {
+// `score` (the backend's Ingrid score, `null` for minus infinity) follows
+// in parentheses; `undefined` (a client-side "Mots Défi" match) shows none.
+function appendWordLetters(item, word, highlightPos, unsafeSet, accented, score) {
   let chars = Array.from(word).map((ch, pos) => ({ ch, positions: [pos] }));
   if (accented && accented !== word) {
     let pos = 0;
@@ -8766,6 +8768,12 @@ function appendWordLetters(item, word, highlightPos, unsafeSet, accented) {
       item.appendChild(document.createTextNode(ch));
     }
   }
+  if (score !== undefined) {
+    const scoreEl = document.createElement("span");
+    scoreEl.className = "interactive-word-score";
+    scoreEl.textContent = `\u00a0(${score === null ? "\u2212\u221e" : score})`;
+    item.appendChild(scoreEl);
+  }
 }
 
 // "Eye" toggle button added to the header of every "Mots"/"Croisés"/
@@ -8781,6 +8789,47 @@ function appendWordLetters(item, word, highlightPos, unsafeSet, accented) {
 // block. The two SVGs (open eye / crossed-out eye) are both always
 // present, toggled via their own `hidden` attribute — see
 // .interactive-eye-icon in style.css.
+// Words shown at first in each "Mots"/"Croisés"/"Début"/"Fin" list; a
+// "Plus" button at the end of the list shows the rest.
+const WORD_LIST_PREVIEW_SIZE = 20;
+
+// Shows the first WORD_LIST_PREVIEW_SIZE words of `list` (an element whose
+// `.interactive-word-item` children are one word list) not hidden by the
+// "eye" toggle, the others marked `.interactive-word-item-overflow`. While
+// the list holds more than that, a button at its end switches between the
+// reduced list ("Plus", which shows every word) and the whole list
+// ("Moins", back to the reduced one), `data-expanded` holding the state.
+// Re-run by the eye toggle, so the 20 always count the words it leaves
+// visible.
+function applyWordListLimit(list) {
+  const t = I18N[uiLanguage];
+  const items = Array.from(list.children).filter((el) => el.classList.contains("interactive-word-item"));
+  const expanded = list.dataset.expanded === "true";
+  let shown = 0;
+  for (const item of items) {
+    const eyeHidden = item.classList.contains("interactive-word-item-hidden");
+    const overflow = !eyeHidden && shown >= WORD_LIST_PREVIEW_SIZE;
+    item.classList.toggle("interactive-word-item-overflow", overflow && !expanded);
+    if (!eyeHidden) shown++;
+  }
+  const longer = shown > WORD_LIST_PREVIEW_SIZE;
+  let toggle = Array.from(list.children).find((el) => el.classList.contains("interactive-words-more-btn"));
+  if (longer && !toggle) {
+    toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "nav-btn interactive-words-more-btn";
+    toggle.addEventListener("click", () => {
+      list.dataset.expanded = list.dataset.expanded === "true" ? "false" : "true";
+      applyWordListLimit(list);
+    });
+    list.appendChild(toggle);
+  }
+  if (toggle) {
+    toggle.hidden = !longer;
+    toggle.textContent = expanded ? t.interactiveWordsLessBtn : t.interactiveWordsMoreBtn;
+  }
+}
+
 function createInteractiveWordsEyeToggle(block) {
   const t = I18N[uiLanguage];
   const btn = document.createElement("button");
@@ -8814,6 +8863,7 @@ function createInteractiveWordsEyeToggle(block) {
     block.querySelectorAll(".interactive-word-item-unsafe").forEach((item) => {
       item.classList.toggle("interactive-word-item-hidden", hiding);
     });
+    block.querySelectorAll(".interactive-word-list").forEach(applyWordListLimit);
   });
   return btn;
 }
@@ -8854,9 +8904,9 @@ function renderInteractiveWords(themeWords, otherWords, slot, atCell) {
   const all = [
     ...challengeWords.map((word) => ({ word, cls: "interactive-word-challenge", unsafe: [] })),
     ...(themeWords || []).filter((entry) => !challengeSet.has(entry.word))
-      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "interactive-word-theme", unsafe: entry.unsafe })),
+      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "interactive-word-theme", unsafe: entry.unsafe, score: entry.score })),
     ...(otherWords || []).filter((entry) => !challengeSet.has(entry.word))
-      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "", unsafe: entry.unsafe })),
+      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "", unsafe: entry.unsafe, score: entry.score })),
   ];
   if (!all.length) return false;
   // Which position in `slot.cells` is the cell that was selected (shown
@@ -8890,13 +8940,13 @@ function renderInteractiveWords(themeWords, otherWords, slot, atCell) {
   header.appendChild(label);
   header.appendChild(createInteractiveWordsEyeToggle(block));
   block.appendChild(header);
-  all.forEach(({ word, accented, cls, unsafe }) => {
+  all.forEach(({ word, accented, cls, unsafe, score }) => {
     const item = document.createElement("span");
     item.className = cls ? `interactive-word-item ${cls}` : "interactive-word-item";
     item.tabIndex = 0;
     const unsafeSet = new Set(unsafe);
     if (unsafeSet.size) item.classList.add("interactive-word-item-unsafe");
-    appendWordLetters(item, word, highlightIndex, unsafeSet, accented);
+    appendWordLetters(item, word, highlightIndex, unsafeSet, accented, score);
     const pick = () => placeWord(word);
     item.addEventListener("click", pick);
     item.addEventListener("keydown", (e) => {
@@ -8907,6 +8957,8 @@ function renderInteractiveWords(themeWords, otherWords, slot, atCell) {
     });
     block.appendChild(item);
   });
+  block.classList.add("interactive-word-list");
+  applyWordListLimit(block);
   interactiveAnswers.insertBefore(block, interactiveAnswers.firstChild);
   interactiveAnswers.hidden = false;
   return true;
@@ -9016,7 +9068,7 @@ function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
       ...challengeWords.map((word) => ({ word, unsafe: [], challenge: true })),
       ...words.filter((entry) => !challengeSet.has(entry.word)),
     ];
-    ordered.forEach(({ word, accented, unsafe, challenge }) => {
+    ordered.forEach(({ word, accented, unsafe, challenge, score }) => {
       const item = document.createElement("span");
       item.className = challenge
         ? "interactive-word-item interactive-word-challenge"
@@ -9024,7 +9076,7 @@ function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
       item.tabIndex = 0;
       const unsafeSet = new Set(unsafe);
       if (unsafeSet.size) item.classList.add("interactive-word-item-unsafe");
-      appendWordLetters(item, word, highlightPos, unsafeSet, accented);
+      appendWordLetters(item, word, highlightPos, unsafeSet, accented, score);
       const pick = () => placeWord(cells, word);
       item.addEventListener("click", pick);
       item.addEventListener("keydown", (e) => {
@@ -9035,6 +9087,8 @@ function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
       });
       parent.appendChild(item);
     });
+    parent.classList.add("interactive-word-list");
+    applyWordListLimit(parent);
   };
   const block = document.createElement("div");
   block.className = "interactive-words-block";
@@ -9146,9 +9200,9 @@ function renderInteractiveBoundary(themeWords, otherWords, slot, side, label) {
   const all = [
     ...challengeWords.map((word) => ({ word, cls: "interactive-word-challenge", unsafe: [] })),
     ...(themeWords || []).filter((entry) => !challengeSet.has(entry.word))
-      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "interactive-word-theme", unsafe: entry.unsafe })),
+      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "interactive-word-theme", unsafe: entry.unsafe, score: entry.score })),
     ...(otherWords || []).filter((entry) => !challengeSet.has(entry.word))
-      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "", unsafe: entry.unsafe })),
+      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "", unsafe: entry.unsafe, score: entry.score })),
   ];
   if (!all.length) return false;
   const placeWord = (word) => {
@@ -9180,13 +9234,13 @@ function renderInteractiveBoundary(themeWords, otherWords, slot, side, label) {
   header.appendChild(labelEl);
   header.appendChild(createInteractiveWordsEyeToggle(block));
   block.appendChild(header);
-  all.forEach(({ word, accented, cls, unsafe }) => {
+  all.forEach(({ word, accented, cls, unsafe, score }) => {
     const item = document.createElement("span");
     item.className = cls ? `interactive-word-item ${cls}` : "interactive-word-item";
     item.tabIndex = 0;
     const unsafeSet = new Set(unsafe);
     if (unsafeSet.size) item.classList.add("interactive-word-item-unsafe");
-    appendWordLetters(item, word, -1, unsafeSet, accented);
+    appendWordLetters(item, word, -1, unsafeSet, accented, score);
     const pick = () => placeWord(word);
     item.addEventListener("click", pick);
     item.addEventListener("keydown", (e) => {
@@ -9197,6 +9251,8 @@ function renderInteractiveBoundary(themeWords, otherWords, slot, side, label) {
     });
     block.appendChild(item);
   });
+  block.classList.add("interactive-word-list");
+  applyWordListLimit(block);
   interactiveAnswers.insertBefore(block, interactiveAnswers.firstChild);
   interactiveAnswers.hidden = false;
   return true;

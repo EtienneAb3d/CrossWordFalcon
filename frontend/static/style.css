@@ -3657,6 +3657,14 @@ button:disabled {
 .interactive-word-item-hidden {
   display: none;
 }
+/* A word past the first WORD_LIST_PREVIEW_SIZE of its list, until the
+   list's "Plus" button (.interactive-words-more-btn) shows them all. */
+.interactive-word-item-overflow {
+  display: none;
+}
+.interactive-words-more-btn {
+  margin-left: 0.4rem;
+}
 .interactive-word-item {
   cursor: pointer;
   padding: 0.05rem 0.15rem;
@@ -3673,8 +3681,8 @@ button:disabled {
    ", ," or a trailing ", " behind. Matches only a word preceded, among
    its own siblings, by at least one other still-visible word — the
    very first visible word of a line/block never gets a leading comma. */
-.interactive-word-item:not(.interactive-word-item-hidden)
-  ~ .interactive-word-item:not(.interactive-word-item-hidden)::before {
+.interactive-word-item:not(.interactive-word-item-hidden):not(.interactive-word-item-overflow)
+  ~ .interactive-word-item:not(.interactive-word-item-hidden):not(.interactive-word-item-overflow)::before {
   content: ", ";
 }
 /* "Croisés" button — a three-column table inside its own
@@ -3740,6 +3748,12 @@ button:disabled {
 .interactive-word-highlight-letter {
   color: var(--accent);
   font-weight: 700;
+}
+/* A candidate's Ingrid score, in parentheses after the word: small grey
+   text, so the word itself stays the readable part of the list. */
+.interactive-word-score {
+  color: #777;
+  font-size: 0.85em;
 }
 /* A letter that would create a new impossible crossing slot if this
    candidate were placed (backend's own `unsafe` field on each candidate,

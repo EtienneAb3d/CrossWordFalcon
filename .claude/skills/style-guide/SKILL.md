@@ -4918,6 +4918,25 @@ end through the real running API (interactive start/step/save,
   and the two populate commands close the panel. No new token.
   **Visually confirmed** with Playwright/Chromium at 1400×1000.
 
+- **Ingrid score after each candidate** (`.interactive-word-score`,
+  `script.js`'s `appendWordLetters`), at the user's explicit request: in
+  the "Mots"/"Croisés"/"Début"/"Fin" lists, each word is followed by its
+  score in parentheses — "maison (2499)", "(−∞)" for a word a crossing
+  cannot take — in grey `#777` at 0.85em (the muted secondary-text grey
+  of the tables' headers), joined to the word by a non-breaking space so
+  the two never wrap apart. The lists are sorted by decreasing score. No
+  new token. **Visually confirmed** with Playwright/Chromium: grey
+  scores after every word of the four lists, computed colour
+  `rgb(119, 119, 119)`. Each list shows 20 words at first
+  (`.interactive-word-item-overflow` hides the rest, excluded from the
+  generated-comma rule like `.interactive-word-item-hidden`), followed by
+  a small `.nav-btn` "Plus" (`.interactive-words-more-btn`, 0.4rem left
+  margin) that shows them all and then reads "Moins" (the user's
+  request), going back to the 20; the eye toggle re-counts
+  the 20 among the words it leaves. **Visually confirmed**: 20/112 words
+  then "Plus", 112 after the click, still 20 with the eye on, each
+  "Croisés" cell limited on its own.
+
 - **"Croisés" results are a three-column table**
   (`.interactive-crossing-table`, `script.js`'s
   `renderInteractiveCrossing`), at the user's explicit request: a narrow

@@ -988,8 +988,130 @@ public final class Interactive {
         return unsafe;
     }
 
+    /** Mirrors _ingrid_crossing_counts: per position of {@code cells}, the letter counts at the shared cell over the
+     * crossing slot's candidates (dictionary words fitting its known letters minus {@code used}, plus the unused
+     * fitting "Mots Défi" words), null for no crossing slot or one with no candidate. */
+    static Map<Character, Integer>[] ingridCrossingCounts(int[] cells, Map<Integer, int[]> crossingMap, DualIndex index,
+                                                          Map<Integer, Character> known, Set<String> used,
+                                                          Set<String> challenge) {
+        @SuppressWarnings("unchecked")
+        Map<Character, Integer>[] out = new Map[cells.length];
+        for (int p = 0; p < cells.length; p++) {
+            int[] cross = crossingMap.get(cells[p]);
+            if (cross == null) continue;
+            int opos = 0;
+            for (int k = 0; k < cross.length; k++) if (cross[k] == cells[p]) opos = k;
+            Map<Integer, Character> knownCross = Cleanup.subKnown(cross, known);
+            LenIndex li = index.forCells(cross).get(cross.length);
+            Map<Character, Integer> counts = new HashMap<>();
+            for (String w : Words.slotCandidates(index, cross.length, cross, knownCross)) {
+                if (!used.contains(w)) counts.merge(w.charAt(opos), 1, Integer::sum);
+            }
+            if (challenge != null) {
+                for (String w : challenge) {
+                    if (w.length() != cross.length || used.contains(w) || (li != null && li.contains(w))) continue;
+                    boolean fits = true;
+                    for (int k = 0; k < cross.length; k++) {
+                        Character ch = knownCross.get(cross[k]);
+                        if (ch != null && ch != w.charAt(k)) {
+                            fits = false;
+                            break;
+                        }
+                    }
+                    if (fits) counts.merge(w.charAt(opos), 1, Integer::sum);
+                }
+            }
+            if (!counts.isEmpty()) out[p] = counts;
+        }
+        return out;
+    }
+
+    private static final Map<LenIndex, Double> MAX_DICT_FREQ =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    /** Mirrors _max_dict_freq: the highest dictFreq of {@code li}'s words (0 for none), computed once per index. */
+    static double maxDictFreq(LenIndex li) {
+        return MAX_DICT_FREQ.computeIfAbsent(li, k -> {
+            double max = 0.0;
+            if (k.dictFreq != null) for (float f : k.dictFreq) if (f > max) max = f;
+            return max;
+        });
+    }
+
+    /** Mirrors _ingrid_scored: {@code words} by decreasing IngridSolver.order score on {@code cells} (null, minus
+     * infinity, last; ties by word), with each word's score as a rounded percentage of the slot's highest possible
+     * score (the most frequent letter of every crossing, USAGE_SCORE_MAX, the length's highest frequency), into
+     * {@code scores}. */
+    static List<String> ingridScored(Collection<String> words, int[] cells, Map<Integer, int[]> crossingMap,
+                                     DualIndex index, Map<Integer, Character> known, Set<String> used,
+                                     Set<String> challenge, Map<String, Long> scores) {
+        Map<Character, Integer>[] crossing = ingridCrossingCounts(cells, crossingMap, index, known, used, challenge);
+        int length = cells.length;
+        LenIndex li = index.forCells(cells).get(length);
+        double bestFill = 0.0;
+        for (Map<Character, Integer> c : crossing) {
+            if (c != null) bestFill += Math.log10(java.util.Collections.max(c.values()));
+        }
+        double best = IngridSolver.FILL_SCORE_WEIGHT * bestFill / length;
+        if (li != null) {
+            if (li.usage != null) best += IngridSolver.USAGE_WEIGHT * Words.USAGE_SCORE_MAX;
+            best += IngridSolver.FREQ_WEIGHT * Math.log10(1.0 + maxDictFreq(li));
+        }
+        Map<String, Double> exact = new HashMap<>();
+        List<String> out = new ArrayList<>(words);
+        for (String w : out) {
+            double fill = 0.0;
+            boolean impossible = false;
+            for (int p = 0; p < length; p++) {
+                Map<Character, Integer> c = crossing[p];
+                if (c == null) continue;
+                int n = c.getOrDefault(w.charAt(p), 0);
+                if (n == 0) {
+                    impossible = true;
+                    break;
+                }
+                fill += Math.log10(n);
+            }
+            if (impossible) {
+                exact.put(w, null);
+                scores.put(w, null);
+                continue;
+            }
+            double s = IngridSolver.FILL_SCORE_WEIGHT * fill / length;
+            if (li != null) {
+                int u = li.usageOf(w);
+                if (u != Words.USAGE_SCORE_UNKNOWN) s += IngridSolver.USAGE_WEIGHT * u;
+                s += IngridSolver.FREQ_WEIGHT * Math.log10(1.0 + li.dictFreqOf(w));
+            }
+            exact.put(w, s);
+            scores.put(w, best > 0 ? falcon.Py.round(100.0 * s / best) : 0L);
+        }
+        out.sort((x, y) -> {
+            Double a = exact.get(x), b = exact.get(y);
+            if ((a == null) != (b == null)) return a == null ? 1 : -1;
+            int c = a == null ? 0 : Double.compare(b, a);
+            return c != 0 ? c : x.compareTo(y);
+        });
+        return out;
+    }
+
+    /** Mirrors _by_score: entries by decreasing score, null last, then by word. */
+    @SuppressWarnings("unchecked")
+    static List<Object> byScore(List<Object> entries) {
+        List<Object> out = new ArrayList<>(entries);
+        out.sort((x, y) -> {
+            Map<String, Object> a = (Map<String, Object>) x, b = (Map<String, Object>) y;
+            Long sa = (Long) a.get("score"), sb = (Long) b.get("score");
+            if ((sa == null) != (sb == null)) return sa == null ? 1 : -1;
+            int c = sa == null ? 0 : Long.compare(sb, sa);
+            return c != 0 ? c : ((String) a.get("word")).compareTo((String) b.get("word"));
+        });
+        return out;
+    }
+
     static List<Object> wordsWithUnsafe(List<String> words, int[] cells, Map<Integer, int[]> crossingMap, DualIndex index,
-                                        Map<Integer, Character> known, Set<String> used, Set<String> challenge) {
+                                        Map<Integer, Character> known, Set<String> used, Set<String> challenge,
+                                        Map<String, Long> scores) {
         List<Object> out = new ArrayList<>();
         Map<Integer, LenIndex> lengthIndex = cells.length >= 2 ? index.forCells(cells) : Map.of();
         for (String w : words) {
@@ -997,6 +1119,7 @@ public final class Interactive {
             entry.put("word", w);
             entry.put("accented", Words.wordForms(lengthIndex.get(w.length()), w)[0]);
             entry.put("unsafe", new ArrayList<>(unsafeLetterPositions(cells, w, crossingMap, index, known, used, challenge)));
+            entry.put("score", scores.get(w));
             out.add(entry);
         }
         return out;
@@ -1036,9 +1159,13 @@ public final class Interactive {
         Set<String> other = new HashSet<>(candidates);
         other.removeAll(themed);
         Map<Integer, int[]> cm = crossingCellsMap(slots, cells);
+        Map<String, Long> scores = new HashMap<>();
+        List<String> themeOrder = ingridScored(themed, cells, cm, index, known, used, challenge, scores);
+        List<String> otherOrder = ingridScored(other, cells, cm, index, known, used, challenge, scores);
         @SuppressWarnings("unchecked")
-        List<Object>[] out = new List[]{wordsWithUnsafe(sorted(themed), cells, cm, index, known, used, challenge),
-                wordsWithUnsafe(head(sorted(other), INTERACTIVE_SLOT_CANDIDATES_LIMIT), cells, cm, index, known, used, challenge)};
+        List<Object>[] out = new List[]{wordsWithUnsafe(themeOrder, cells, cm, index, known, used, challenge, scores),
+                wordsWithUnsafe(head(otherOrder, INTERACTIVE_SLOT_CANDIDATES_LIMIT), cells, cm, index, known, used, challenge,
+                        scores)};
         return out;
     }
 
@@ -1082,15 +1209,28 @@ public final class Interactive {
         for (String w : aw) byA.computeIfAbsent(w.charAt(pa), k -> new ArrayList<>()).add(w);
         for (String w : dw) byD.computeIfAbsent(w.charAt(pd), k -> new ArrayList<>()).add(w);
         Map<Integer, int[]> acm = crossingCellsMap(slots, across), dcm = crossingCellsMap(slots, down);
+        List<String> commonA = new ArrayList<>(), commonD = new ArrayList<>();
+        for (Character letter : byA.keySet()) {
+            if (!byD.containsKey(letter)) continue;
+            commonA.addAll(byA.get(letter));
+            commonD.addAll(byD.get(letter));
+        }
+        Map<String, Long> aScores = new HashMap<>(), dScores = new HashMap<>();
+        List<String> aOrder = ingridScored(commonA, across, acm, index, known, used, challenge, aScores);
+        List<String> dOrder = ingridScored(commonD, down, dcm, index, known, used, challenge, dScores);
         List<Object> letters = new ArrayList<>();
         for (Character letter : byA.keySet()) {
             if (!byD.containsKey(letter)) continue;
+            final int fa = pa, fd = pd;
+            List<String> aw2 = new ArrayList<>(), dw2 = new ArrayList<>();
+            for (String w : aOrder) if (w.charAt(fa) == letter) aw2.add(w);
+            for (String w : dOrder) if (w.charAt(fd) == letter) dw2.add(w);
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("letter", String.valueOf(letter));
-            m.put("across_words", wordsWithUnsafe(head(sorted(byA.get(letter)), INTERACTIVE_SLOT_CANDIDATES_LIMIT), across, acm,
-                    index, known, used, challenge));
-            m.put("down_words", wordsWithUnsafe(head(sorted(byD.get(letter)), INTERACTIVE_SLOT_CANDIDATES_LIMIT), down, dcm,
-                    index, known, used, challenge));
+            m.put("across_words", wordsWithUnsafe(head(aw2, INTERACTIVE_SLOT_CANDIDATES_LIMIT), across, acm,
+                    index, known, used, challenge, aScores));
+            m.put("down_words", wordsWithUnsafe(head(dw2, INTERACTIVE_SLOT_CANDIDATES_LIMIT), down, dcm,
+                    index, known, used, challenge, dScores));
             letters.add(m);
         }
         return new Object[]{acrossStart, downStart, letters};
@@ -1123,10 +1263,14 @@ public final class Interactive {
             Set<String> rest = new HashSet<>(candidates);
             rest.removeAll(themed);
             Map<Integer, int[]> cm = crossingCellsMap(slots, sub);
-            theme.addAll(wordsWithUnsafe(sorted(themed), sub, cm, index, known, used, challenge));
-            other.addAll(wordsWithUnsafe(head(sorted(rest), INTERACTIVE_SLOT_CANDIDATES_LIMIT), sub, cm, index, known, used, challenge));
+            Map<String, Long> scores = new HashMap<>();
+            List<String> themeOrder = ingridScored(themed, sub, cm, index, known, used, challenge, scores);
+            List<String> restOrder = ingridScored(rest, sub, cm, index, known, used, challenge, scores);
+            theme.addAll(wordsWithUnsafe(themeOrder, sub, cm, index, known, used, challenge, scores));
+            other.addAll(wordsWithUnsafe(head(restOrder, INTERACTIVE_SLOT_CANDIDATES_LIMIT), sub, cm, index, known, used,
+                    challenge, scores));
         }
-        return new List[]{theme, other};
+        return new List[]{byScore(theme), byScore(other)};
     }
 
     // ================================================================== clean / minimize
