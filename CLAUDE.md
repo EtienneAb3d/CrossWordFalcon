@@ -3657,7 +3657,8 @@ passthrough, an unmatched path falls through to the static-file mount
 and 405s. Runs with multiple uvicorn workers (safe: no cross-request
 state, unlike the backend). Every relay that gets no answer goes through
 `_backend_failure`, which writes a WARNING line to its log
-(`logs/frontend.log`, timestamped by its own `logging.basicConfig`: the
+(`logs/frontend.log`, `logs/frontend-https.log` for the HTTPS instance,
+timestamped by its own `logging.basicConfig`: the
 call, the timeout, the httpx error) and answers 504 `backend_timeout`
 when the back end did not answer within the route's timeout (a read,
 write or pool timeout: the back end may still finish the request with
@@ -3673,7 +3674,16 @@ and `_similar_words_impl` the LLM expansion's duration (Java `App`,
 `Themes.similarWordsImpl`), so a search outlasting the proxy's
 `SIMILAR_PROXY_TIMEOUT_S` (60 s) shows in both logs. `POST /api/interactive/
 step` has its own `STEP_PROXY_TIMEOUT_S` (60 s), the page its
-`STEP_FETCH_TIMEOUT_MS` (70 s).
+`STEP_FETCH_TIMEOUT_MS` (70 s). The `log_action` middleware appends one line
+per request to `logs/frontend-action.log` (`ACTION_LOG_PATH`), shared by the
+HTTP and HTTPS instances and all their workers, every path but
+`ACTION_LOG_EXCLUDED_PATHS` (`/api/presence`), static files and status polls
+included: time, scheme, client IP, pseudo (`_action_log_pseudo`: the
+`cwf-prefs` cookie's, as the browser declares it, `-` without one, spaces
+kept, the rest of the line starting at the first `"`), `"METHOD path?query"`,
+status, and the milliseconds until the response started, e.g. `2026-10-30
+19:06:22,002 https 192.168.0.254 Jean Luc "POST /api/generate" 202 12ms`. That
+cookie also holds the secret word, which is never logged.
 
 ### `static/`
 
@@ -4064,7 +4074,8 @@ section for the full variable list and the dual-GPU LLM routing scheme.
   then starts `java -jar backend_java/dist/crosswordfalcon-backend.jar
   --port $CROSSWORDFALCON_BACKEND_PORT` (extra JVM options from
   `CROSSWORDFALCON_JAVA_OPTS`) plus the same Python middleware. Both
-  launchers write to `logs/backend.log`. Before stopping anything (after
+  launchers write to `logs/backend.log`, and empty `logs/frontend-action.log`
+  (written by the middleware itself) as they start the middleware. Before stopping anything (after
   the jar build for `run_FalconJ.sh`), both wait for the running back end
   on `$CROSSWORDFALCON_BACKEND_PORT` to be idle (`wait_for_backend_idle`):
   `POST /api/restart/drain` puts it in drain mode (renewed every

@@ -228,6 +228,9 @@ BACKEND_PID=$!
 disown "$BACKEND_PID"
 
 echo "Starting middleware on port $FRONTEND_PORT..."
+# Written by the middleware itself (HTTP and HTTPS instances together), so it
+# is emptied here, like the logs the commands below redirect to.
+: > "$LOG_DIR/frontend-action.log"
 # --host $FRONTEND_HOST (0.0.0.0 by default) so the UI is reachable from
 # other machines on the network, not just from this one. The back end
 # ($BACKEND_PORT) stays on 127.0.0.1 only — it's an internal implementation

@@ -16,8 +16,11 @@ Usage:
 import json
 import logging
 import os
+import re
+import time
+import unicodedata
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -45,11 +48,47 @@ BACKEND_URL = os.environ.get("CROSSWORDFALCON_BACKEND_URL", "http://127.0.0.1:30
 PROXY_TIMEOUT_S = 30.0
 
 # Every relay failure is written to this server's own log (logs/frontend.log,
-# with a timestamp — uvicorn configures only its own loggers): the browser
-# shows an error, so the log must say which call failed and why
-# (_backend_failure).
+# logs/frontend-https.log for the HTTPS instance, with a timestamp — uvicorn
+# configures only its own loggers): the browser shows an error, so the log
+# must say which call failed and why (_backend_failure).
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("crosswordfalcon.proxy")
+
+# Every request but the presence heartbeats, one line each, from the HTTP and
+# HTTPS instances and all their workers alike (log_action). The file is opened
+# in append mode by each worker, and each line is one write. The launchers
+# empty it when they start the middleware.
+ACTION_LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "frontend-action.log"
+ACTION_LOG_EXCLUDED_PATHS = {"/api/presence"}
+ACTION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+_action_log_handler = logging.FileHandler(ACTION_LOG_PATH, encoding="utf-8")
+_action_log_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+action_logger = logging.getLogger("crosswordfalcon.action")
+action_logger.setLevel(logging.INFO)
+action_logger.addHandler(_action_log_handler)
+action_logger.propagate = False
+
+# Same bound as MAX_PSEUDO_LENGTH in backend/app.py.
+ACTION_LOG_PSEUDO_MAX_LENGTH = 20
+ACTION_LOG_NO_PSEUDO = "-"
+_ACTION_LOG_PSEUDO_UNSAFE_RE = re.compile(r"[^\w -]")
+
+
+def _action_log_pseudo(request: Request) -> str:
+    """The pseudo of the browser's cwf-prefs cookie (see savePrefs in
+    frontend/static/script.js), `-` when it has none. It is what the browser
+    declares, never checked against its secret word, so anything a valid
+    pseudo cannot hold is replaced to keep the line's format. That cookie also
+    carries the secret word: only the pseudo may reach the log."""
+    try:
+        prefs = json.loads(unquote(request.cookies.get("cwf-prefs", "")))
+        pseudo = prefs.get("pseudo") if isinstance(prefs, dict) else None
+    except ValueError:
+        return ACTION_LOG_NO_PSEUDO
+    if not isinstance(pseudo, str):
+        return ACTION_LOG_NO_PSEUDO
+    pseudo = unicodedata.normalize("NFC", pseudo)[:ACTION_LOG_PSEUDO_MAX_LENGTH]
+    return _ACTION_LOG_PSEUDO_UNSAFE_RE.sub("?", pseudo).strip() or ACTION_LOG_NO_PSEUDO
 
 
 def _backend_failure(exc: httpx.RequestError) -> HTTPException:
@@ -118,6 +157,37 @@ async def no_cache(request: Request, call_next):
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return response
+
+
+@app.middleware("http")
+async def log_action(request: Request, call_next):
+    """Writes one line per request to logs/frontend-action.log, the presence
+    heartbeats excepted: scheme, client IP, pseudo, method, path + query, status,
+    and the time until the response started (a streamed reply goes on after it).
+    The path is percent-encoded like uvicorn's access log, so a line always
+    keeps its format. A request that raises is logged as a 500."""
+    path = request.url.path
+    if path in ACTION_LOG_EXCLUDED_PATHS:
+        return await call_next(request)
+    started = time.monotonic()
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        query = request.url.query
+        target = quote(path) + (f"?{query}" if query else "")
+        action_logger.info(
+            '%s %s %s "%s %s" %d %dms',
+            request.url.scheme,
+            request.client.host if request.client else "-",
+            _action_log_pseudo(request),
+            request.method,
+            target,
+            status,
+            (time.monotonic() - started) * 1000,
+        )
 
 
 @app.post("/api/generate")

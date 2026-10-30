@@ -862,6 +862,20 @@ project's engineering language.
   route or long back-end operation must do the same. Choice made with
   it, to revisit with the user: a connection timeout counts as
   "unavailable", not as a timeout.
+- **`logs/frontend-action.log` traces the requests without the presence
+  noise** — the user's rule: isolate the user requests from the presence
+  heartbeats (`frontend/server.py`'s `log_action`). `logs/frontend.log` and
+  `logs/frontend-https.log` stay the full logs of their own instance.
+  Choices made with it, to revisit with the user: only `/api/presence` is
+  left out, so static files and the 2-second status polls of a running
+  generation are traced; one file for both instances, each line naming its
+  scheme; bodies are never logged; emptied by the launchers at each restart,
+  like the other logs. The user's rule: the pseudo follows the IP. Choices
+  made with it, to revisit with the user: it comes from the `cwf-prefs` cookie
+  (sent with every request, static files included), so it is what the browser
+  declares, unverified, and `-` for a client with no cookie (Populate
+  included, whose pseudo travels in its request bodies); that cookie's secret
+  word must never reach the log.
 - `frontend/server.py` proxies `/api/*` through one shared
   `httpx.AsyncClient(timeout=PROXY_TIMEOUT_S)` ("Suivant" excepted:
   `STEP_PROXY_TIMEOUT_S` 60s, the user's request; 30s, one value for every
