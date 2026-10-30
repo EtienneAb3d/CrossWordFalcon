@@ -55,7 +55,7 @@ public final class Generator {
     public static final double PALIER_ATTEMPT_INTERRUPT_FRACTION = 1.0;
     /** Only distinct solutions count (successKey): a success ending on a grid already found is neither counted —
      * here nor by the live "success_count" — nor kept (mirrors MIN_SUCCESSFUL_ATTEMPTS). */
-    public static final int MIN_SUCCESSFUL_ATTEMPTS = 2;
+    public static final int MIN_SUCCESSFUL_ATTEMPTS = 4;
 
     /** A successful attempt's solution: its pattern and its words (mirrors _success_key). */
     static String successKey(char[][] grid, Fill.Result result) {
@@ -1578,7 +1578,9 @@ public final class Generator {
                 }
                 for (Outcome o : failedAll) totalAttemptsTried += o.diag().checks == null ? 0 : o.diag().checks;
                 totalAttemptsTried += supersededChecks;
-                if (accumulatedSuccesses.size() >= MIN_SUCCESSFUL_ATTEMPTS) {
+                // On the budget's last palier, several successes below the threshold are compared and offered too.
+                if (accumulatedSuccesses.size() >= MIN_SUCCESSFUL_ATTEMPTS
+                        || (attempt == p.attempts - 1 && accumulatedSuccesses.size() >= 2)) {
                     List<Map<String, Object>> exs = new ArrayList<>();
                     for (Outcome o : accumulatedSuccesses) {
                         List<int[]> s = o.result().slots();

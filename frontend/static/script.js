@@ -1052,6 +1052,12 @@ let interactiveUserCells = new Map();
 // grayed-out ("not part of the zone") cell deselects it, at the user's
 // explicit request: "when the user clicks a grayed-out cell, deselect it."
 let interactiveZoneSelection = null;
+// "row,col" of the black cells selected by a click on a black cell or a
+// click-drag starting on one (only the black cells of the dragged rectangle),
+// `null` when none is. Never set together with interactiveZoneSelection: each
+// selection clears the other. While it is set, the move mode moves these
+// cells instead of letters (see interactiveBlackMovePlan).
+let interactiveBlackSelection = null;
 // Live drag-tracking state (module-level rather than per-listener, since
 // the drag itself spans several cells'/the document's own mouse events).
 let interactiveDragStart = null; // { row, col } while a drag is in progress, else null
@@ -2172,15 +2178,15 @@ async function openAttemptPreviewInteractive(exampleGrid, breaks) {
 // role, rather than "letters" specifically.
 let showPreviewLetters = false;
 
-function togglePreviewLetters() {
-  showPreviewLetters = !showPreviewLetters;
+function setPreviewLetters(on) {
+  showPreviewLetters = on;
   attemptPreviewRevealBtn.classList.toggle("active", showPreviewLetters);
   if (lastPreviewExamples) renderAttemptPreview(lastPreviewExamples);
   renderWordTable(lastWordTable);
   renderLiveClues();
 }
 
-attemptPreviewRevealBtn.addEventListener("click", togglePreviewLetters);
+attemptPreviewRevealBtn.addEventListener("click", () => setPreviewLetters(!showPreviewLetters));
 
 // Full history of every attempt-preview state examples_history has ever
 // produced during the current generation — one element per entry
@@ -2226,7 +2232,7 @@ let previewHistoryIndex = -1;
 let autoFollowPreview = true;
 // The `step` half of whichever previewHistory entry is currently on
 // screen (or null) — kept separately from `lastPreviewExamples` (the
-// `examples` half, used by togglePreviewLetters()'s own re-render) purely
+// `examples` half, used by setPreviewLetters()'s own re-render) purely
 // so a UI language change can re-translate the status line the same way
 // applyTranslations()'s own caller already re-renders the grids (see the
 // languageSelect "change" handler further below).
@@ -2337,7 +2343,7 @@ function renderPreviewStatus() {
 // table naturally disappears while navigating to an earlier/later step.
 //
 // Only actually shown while `showPreviewLetters` ("Voir", see
-// togglePreviewLetters()) is on, at the user's explicit request — kept in
+// setPreviewLetters()) is on, at the user's explicit request — kept in
 // `lastWordTable` regardless of that flag (mirroring `lastPreviewExamples`)
 // so toggling the button re-renders instantly, from whatever the current
 // previewHistory entry already holds, with no need to re-navigate.
@@ -3041,6 +3047,9 @@ function renderGrid() {
           if (interactiveZoneSelection && !interactiveZoneSelection.has(`${r},${c}`)) {
             cell.classList.add("zone-unselected");
           }
+          if (interactiveBlackSelection && interactiveBlackSelection.has(`${r},${c}`)) {
+            cell.classList.add("black-selected");
+          }
           cell.addEventListener("click", () => selectCell(r, c));
           attachInteractiveDragHandlers(cell, r, c);
           cellElements.set(`${r},${c}`, cell);
@@ -3733,7 +3742,7 @@ function setUiLanguage(lang) {
   // directly inside renderAttemptPreview() rather than through the generic
   // [data-i18n] walker applyTranslations() just ran — so a language switch
   // while a preview is showing needs its own explicit re-render, same as
-  // togglePreviewLetters() already does below. renderPreviewStatus() is the
+  // setPreviewLetters() already does below. renderPreviewStatus() is the
   // same kind of parameterized text (describeStep()'s own localized
   // "Tentative X/Y..." message), needing the same explicit re-render —
   // same for attemptPreviewPosition ("Étape X/Y").
@@ -7884,9 +7893,9 @@ function scheduleInteractiveDiagnosticsRefresh() {
 // the server: under the "grouped" style, every white run of 1 or 2 cells (no
 // word that short, a cell belonging to a single word); in any style, a white
 // cell alone in both directions.
-function interactiveElementaryImpossibleCells() {
-  const rows = interactiveGrid.length;
-  const cols = rows ? interactiveGrid[0].length : 0;
+function interactiveElementaryImpossibleCells(grid = interactiveGrid) {
+  const rows = grid.length;
+  const cols = rows ? grid[0].length : 0;
   const grouped = interactivePatternStyle === "grouped";
   const out = new Set();
   const single = new Map();
@@ -7895,7 +7904,7 @@ function interactiveElementaryImpossibleCells() {
       let start = 0;
       for (let i = 0; i <= cellCount; i++) {
         const [r, c] = i < cellCount ? at(line, i) : [-1, -1];
-        if (i < cellCount && interactiveGrid[r][c] !== "#") continue;
+        if (i < cellCount && grid[r][c] !== "#") continue;
         const run = [];
         for (let j = start; j < i; j++) run.push(`${at(line, j)[0]},${at(line, j)[1]}`);
         if (grouped && run.length && run.length <= 2) for (const key of run) out.add(key);
@@ -8087,8 +8096,18 @@ function interactiveExpandZoneSelection(rawCells) {
 // so the two overlays below never conflict on the same cell.
 function renderInteractiveDragPreview() {
   const rect = interactiveDragRectCells();
+  // A drag starting on a black cell selects the black cells of the rectangle.
+  if (interactiveGrid[interactiveDragStart.row][interactiveDragStart.col] === "#") {
+    cellElements.forEach((el, key) => {
+      el.classList.remove("zone-drag-preview", "zone-unselected");
+      const [r, c] = key.split(",").map(Number);
+      el.classList.toggle("black-selected", rect.has(key) && interactiveGrid[r][c] === "#");
+    });
+    return;
+  }
   const previewSelection = interactiveExpandZoneSelection(rect);
   cellElements.forEach((el, key) => {
+    el.classList.remove("black-selected");
     el.classList.toggle("zone-drag-preview", rect.has(key));
     el.classList.toggle("zone-unselected", !previewSelection.has(key));
   });
@@ -8274,8 +8293,113 @@ function finishInteractiveMove() {
   renderInteractive();
 }
 
-// Interactive mode's move mode: while on, a click-drag on the grid moves
-// letters (as Shift+click-drag does), the grid shows the "move" cursor (two
+// Black-cell move (Interactive mode), the move mode's drag while black cells
+// are selected: the cell the drag started on and the cell the pointer is over
+// now, or null when no such move is in progress.
+let interactiveBlackMoveStart = null;
+let interactiveBlackMoveCurrent = null;
+
+// The move such a drag would make right now. The offset is held back at the
+// grid's edges so every selected cell stays inside. Each selected cell moves
+// by the offset and, under the "Symétrie" selector, each of its images that is
+// black moves to the image of its destination; a selected cell that is itself
+// the image of a cell closer to the drag's start follows that cell instead, so
+// the grid stays symmetric. `sources` are the cells left, `targets` the cells
+// blackened, `follow` maps a source to its destination, `grid` is the result.
+// Nothing here refuses a destination: a letter there is overwritten.
+function interactiveBlackMovePlan() {
+  const rows = interactiveGrid.length;
+  const cols = interactiveGrid[0].length;
+  const cells = [...interactiveBlackSelection].map((key) => key.split(",").map(Number));
+  const start = interactiveBlackMoveStart;
+  const clamp = (delta, values, size) => Math.min(
+    size - 1 - Math.max(...values),
+    Math.max(-Math.min(...values), delta),
+  );
+  const dr = clamp(interactiveBlackMoveCurrent.row - start.row, cells.map(([r]) => r), rows);
+  const dc = clamp(interactiveBlackMoveCurrent.col - start.col, cells.map(([, c]) => c), cols);
+  const distance = ([r, c]) => (r - start.row) ** 2 + (c - start.col) ** 2;
+  cells.sort((a, b) => distance(a) - distance(b));
+  const transforms = symmetryTransforms(rows, cols, symmetrySelect.value);
+  const sources = new Set();
+  const targets = new Set();
+  const follow = new Map();
+  for (const [r, c] of cells) {
+    if (follow.has(`${r},${c}`)) continue;
+    for (const transform of transforms) {
+      const [sr, sc] = transform(r, c);
+      if (interactiveGrid[sr][sc] !== "#") continue;
+      const [tr, tc] = transform(r + dr, c + dc);
+      sources.add(`${sr},${sc}`);
+      targets.add(`${tr},${tc}`);
+      if (!follow.has(`${sr},${sc}`)) follow.set(`${sr},${sc}`, `${tr},${tc}`);
+    }
+  }
+  const grid = interactiveGrid.map((row) => row.slice());
+  for (const key of sources) {
+    const [r, c] = key.split(",").map(Number);
+    grid[r][c] = "";
+  }
+  for (const key of targets) {
+    const [r, c] = key.split(",").map(Number);
+    grid[r][c] = "#";
+  }
+  return { dr, dc, sources, targets, follow, grid };
+}
+
+// Live feedback while black cells are dragged, toggled on the rendered cells
+// (no full re-render): the cells left turn white, the destinations black and
+// framed, and what the geometry alone would make impossible turns red. The
+// emplacements blocked for lack of a word only show once the cells are dropped
+// (scheduleInteractiveDiagnosticsRefresh).
+function renderInteractiveBlackMovePreview() {
+  const plan = interactiveBlackMovePlan();
+  const moving = plan.dr !== 0 || plan.dc !== 0;
+  const impossible = moving ? interactiveElementaryImpossibleCells(plan.grid) : new Set();
+  cellElements.forEach((el, key) => {
+    const target = moving && plan.targets.has(key);
+    el.classList.toggle("black-selected", !moving && interactiveBlackSelection.has(key));
+    el.classList.toggle("black-move-source", moving && plan.sources.has(key) && !target);
+    el.classList.toggle("black-move-target", target);
+    el.classList.toggle("black-move-impossible", impossible.has(key));
+  });
+}
+
+// Applies the black-cell move on mouse release, as one undo step. A letter on
+// a destination is overwritten; the selection and the selected cell follow the
+// cells moved; a definition stays only while its word's cells and letters are
+// unchanged. The impossibilities the move produces are then shown like those
+// of any other edit, and the move is never refused for them.
+function finishInteractiveBlackMove() {
+  const plan = interactiveBlackMovePlan();
+  interactiveBlackMoveStart = null;
+  interactiveBlackMoveCurrent = null;
+  if (plan.dr === 0 && plan.dc === 0) {
+    renderInteractive();
+    return;
+  }
+  const wordSignature = (s) => `${s.cells.length},${s.answer}`;
+  const before = new Map(interactiveSlots().map((s) => [interactiveKey(s), wordSignature(s)]));
+  interactivePushUndo();
+  interactiveClearBreaksAt([...plan.targets].map((key) => key.split(",").map(Number))
+    .filter(([r, c]) => /[A-Z]/.test(interactiveGrid[r][c])));
+  interactiveGrid = plan.grid;
+  const after = new Map(interactiveSlots().map((s) => [interactiveKey(s), wordSignature(s)]));
+  for (const key of [...interactiveDefs.keys()]) {
+    if (before.get(key) !== after.get(key)) interactiveDefs.delete(key);
+  }
+  interactiveBlackSelection = new Set([...interactiveBlackSelection].map((key) => plan.follow.get(key) || key));
+  const selectedTo = selected && plan.follow.get(`${selected.row},${selected.col}`);
+  if (selectedTo) {
+    const [row, col] = selectedTo.split(",").map(Number);
+    selected = { row, col };
+  }
+  setInteractiveMessage("");
+  renderInteractive();
+}
+
+// Interactive mode's move mode: while on, a click-drag on the grid moves the
+// selected black cells, else letters (as Shift+click-drag does), the grid shows the "move" cursor (two
 // crossed double arrows) and #interactive-move-btn is active. The button
 // toggles it; pressing Shift turns it on and releasing Shift turns it off
 // (`interactiveMoveShiftHeld`, also synced from the mouse's own shiftKey
@@ -8317,9 +8441,15 @@ function attachInteractiveDragHandlers(cell, r, c) {
     // otherwise fight with this custom one (grid cells hold real text
     // nodes for their letters/numbers).
     e.preventDefault();
-    // Shift+click-drag, or a click-drag in move mode, moves letters instead
-    // of selecting a zone (see interactiveMoveStart).
+    // Shift+click-drag, or a click-drag in move mode, moves the selected
+    // black cells, else letters, instead of selecting a zone (see
+    // interactiveBlackMoveStart, interactiveMoveStart).
     if (e.shiftKey || interactiveMoveMode) {
+      if (interactiveBlackSelection) {
+        interactiveBlackMoveStart = { row: r, col: c };
+        interactiveBlackMoveCurrent = interactiveBlackMoveStart;
+        return;
+      }
       interactiveMoveStart = interactiveMoveSourceLetters().size ? { row: r, col: c } : null;
       interactiveMoveCurrent = interactiveMoveStart;
       if (!interactiveMoveStart) setInteractiveMessage(I18N[uiLanguage].interactiveMoveNothing, true);
@@ -8346,6 +8476,11 @@ function attachInteractiveDragHandlers(cell, r, c) {
     // only thing that reacts to it.
   });
   cell.addEventListener("mouseenter", () => {
+    if (interactiveMode && interactiveBlackMoveStart) {
+      interactiveBlackMoveCurrent = { row: r, col: c };
+      renderInteractiveBlackMovePreview();
+      return;
+    }
     if (interactiveMode && interactiveMoveStart) {
       interactiveMoveCurrent = { row: r, col: c };
       renderInteractiveMovePreview();
@@ -8371,15 +8506,14 @@ function attachInteractiveDragHandlers(cell, r, c) {
 // A drag that stays inside its starting cell: once the pointer has moved
 // INTERACTIVE_DRAG_MIN_PX away from where the button went down, the live
 // preview shows the two emplacements crossing on that cell (the one-cell
-// rectangle, expanded by renderInteractiveDragPreview()). A black cell
-// belongs to no emplacement and gets no preview.
+// rectangle, expanded by renderInteractiveDragPreview()), or, on a black
+// cell, that cell selected.
 document.addEventListener("mousemove", (e) => {
   if (!interactiveDragActive || interactiveDragMovedInCell || !interactiveDragPoint) return;
   if (Math.hypot(e.clientX - interactiveDragPoint.x, e.clientY - interactiveDragPoint.y)
     < INTERACTIVE_DRAG_MIN_PX) return;
   interactiveDragMovedInCell = true;
-  const { row, col } = interactiveDragStart;
-  if (interactiveGrid[row][col] !== "#") renderInteractiveDragPreview();
+  renderInteractiveDragPreview();
 });
 
 // Swallows the "click" that follows a drag ended on its own starting cell
@@ -8392,6 +8526,10 @@ document.addEventListener("click", (e) => {
 }, true);
 
 document.addEventListener("mouseup", () => {
+  if (interactiveBlackMoveStart) {
+    finishInteractiveBlackMove();
+    return;
+  }
   if (interactiveMoveStart) {
     finishInteractiveMove();
     return;
@@ -8409,21 +8547,42 @@ document.addEventListener("mouseup", () => {
   interactiveDragCurrent = null;
   interactiveDragPoint = null;
   interactiveDragMovedInCell = false;
+  // Started on a black cell, a click or a drag selects black cells: those of
+  // the rectangle, the starting one becoming the selected cell. A plain click
+  // leaves that to its own "click" event, which renders.
+  if (interactiveGrid[startCell.row][startCell.col] === "#") {
+    interactiveBlackSelection = new Set([...rect].filter((key) => {
+      const [r, c] = key.split(",").map(Number);
+      return interactiveGrid[r][c] === "#";
+    }));
+    interactiveZoneSelection = null;
+    if (movedInCell) {
+      interactiveSuppressNextClick = true;
+      setTimeout(() => { interactiveSuppressNextClick = false; }, 0);
+    }
+    if (moved || movedInCell) {
+      selected = { row: startCell.row, col: startCell.col };
+      renderInteractive();
+    }
+    return;
+  }
+  // Started on a white cell, it clears the selected black cells.
   let changed = false;
+  if (interactiveBlackSelection) {
+    interactiveBlackSelection = null;
+    changed = moved || movedInCell;
+  }
   if (moved) {
     interactiveZoneSelection = interactiveExpandZoneSelection(rect);
     changed = true;
   } else if (movedInCell) {
     // A drag inside one cell selects the across and down emplacements
-    // crossing on it (a black cell: nothing changes). The click the
-    // browser fires next is swallowed either way.
+    // crossing on it. The click the browser fires next is swallowed.
     interactiveSuppressNextClick = true;
     // Never outlives this mouseup: the click, when the browser fires one,
     // is dispatched before this timer runs.
     setTimeout(() => { interactiveSuppressNextClick = false; }, 0);
-    if (interactiveGrid[startCell.row][startCell.col] !== "#") {
-      interactiveZoneSelection = interactiveExpandZoneSelection(rect);
-    }
+    interactiveZoneSelection = interactiveExpandZoneSelection(rect);
     changed = true;
   } else if (
     startCell && interactiveZoneSelection
@@ -8454,17 +8613,19 @@ document.addEventListener("mouseup", () => {
   }
 });
 
-// Escape clears an active drag-selected zone (Édition mode only) — the
-// only other way to clear one short of dragging a fresh replacement or
-// leaving Interactive mode entirely (see hideInteractivePanel()).
+// Escape clears an active drag-selected zone or black-cell selection
+// (Édition mode only) — the only other way to clear a zone short of dragging
+// a fresh replacement or leaving Interactive mode entirely (see
+// hideInteractivePanel()).
 // shouldGridIgnoreKeydown() keeps this from firing while the player is
 // typing in an unrelated text field (chat, dictionary search, ...).
 document.addEventListener("keydown", (event) => {
   if (
-    interactiveMode && interactiveZoneSelection
+    interactiveMode && (interactiveZoneSelection || interactiveBlackSelection)
     && event.key === "Escape" && !shouldGridIgnoreKeydown()
   ) {
     interactiveZoneSelection = null;
+    interactiveBlackSelection = null;
     renderInteractive();
   }
 });
@@ -8623,6 +8784,15 @@ function renderInteractiveCellStats() {
 }
 
 function renderInteractive() {
+  // A selected black cell that is no longer black (undo, erase, typed letter)
+  // leaves the selection.
+  if (interactiveBlackSelection) {
+    const stillBlack = [...interactiveBlackSelection].filter((key) => {
+      const [r, c] = key.split(",").map(Number);
+      return interactiveGrid[r] && interactiveGrid[r][c] === "#";
+    });
+    interactiveBlackSelection = stillBlack.length ? new Set(stillBlack) : null;
+  }
   // Drop any theme-word cell that no longer carries a letter (undo, erase,
   // toggle-to-black) so the magenta mark tracks the real grid content.
   for (const key of interactiveThemeCells) {
@@ -8816,23 +8986,33 @@ function interactiveToggleBlack() {
   renderInteractive();
 }
 
-// The cells a black cell at (r, c) brings with it under the "Symétrie"
-// selector's `symmetry` — the same images as backend/crossword_gen.py's
-// symmetry_cells, (r, c) included.
-function symmetryCells(rows, cols, r, c, symmetry) {
+// The transformations of a cell under the "Symétrie" selector's `symmetry`,
+// the identity first — the same images as backend/crossword_gen.py's
+// symmetry_cells.
+function symmetryTransforms(rows, cols, symmetry) {
   const w = cols - 1;
   const h = rows - 1;
   const sym = symmetry === "rotation" && rows !== cols ? "bidirectional" : symmetry;
+  const horizontal = (r, c) => [r, w - c];
+  const vertical = (r, c) => [h - r, c];
+  const diagonal = (r, c) => [h - r, w - c];
   const images = {
-    horizontal: [[r, w - c]],
-    vertical: [[h - r, c]],
-    diagonal: [[h - r, w - c]],
-    bidirectional: [[r, w - c], [h - r, c], [h - r, w - c]],
-    rotation: [[c, w - r], [h - r, w - c], [h - c, r]],
+    horizontal: [horizontal],
+    vertical: [vertical],
+    diagonal: [diagonal],
+    bidirectional: [horizontal, vertical, diagonal],
+    rotation: [(r, c) => [c, w - r], diagonal, (r, c) => [h - c, r]],
   }[sym] || [];
-  const seen = new Set([`${r},${c}`]);
-  const out = [[r, c]];
-  for (const [ir, ic] of images) {
+  return [(r, c) => [r, c], ...images];
+}
+
+// The cells a black cell at (r, c) brings with it under `symmetry`, (r, c)
+// included.
+function symmetryCells(rows, cols, r, c, symmetry) {
+  const seen = new Set();
+  const out = [];
+  for (const transform of symmetryTransforms(rows, cols, symmetry)) {
+    const [ir, ic] = transform(r, c);
     if (!seen.has(`${ir},${ic}`)) {
       seen.add(`${ir},${ic}`);
       out.push([ir, ic]);
@@ -10222,6 +10402,7 @@ function enterInteractiveMode(state) {
   // one editing session — never carried over into a freshly loaded/
   // started one.
   interactiveZoneSelection = null;
+  interactiveBlackSelection = null;
   interactiveTitleRow.hidden = true;
   interactiveSaveBtn.hidden = true;
   interactiveDraftSaveBtn.disabled = false;
@@ -10365,6 +10546,9 @@ function hideInteractivePanel() {
   interactiveCellStats.hidden = true;
   hideGridStats();
   interactiveZoneSelection = null;
+  interactiveBlackSelection = null;
+  interactiveBlackMoveStart = null;
+  interactiveBlackMoveCurrent = null;
   interactiveDragStart = null;
   interactiveDragCurrent = null;
   interactiveDragActive = false;
@@ -11789,6 +11973,9 @@ async function runInteractiveFinish(zoneCells) {
   // outside the selection green-framed too, not just already-lettered
   // ones — see computeFinishLockedCells()'s own docstring.
   finishLockedCells = computeFinishLockedCells(zoneCells);
+  // The author is about to see this grid in Interactive mode anyway: nothing
+  // to hide. It stays on afterwards, like any other choice of this toggle.
+  setPreviewLetters(true);
   // Close the Dictionnaire/Paraphraseur RIGHT NOW, at the user's explicit
   // correction: "It must no longer be visible during the following fill
   // phase" — closing them only once the whole job is done

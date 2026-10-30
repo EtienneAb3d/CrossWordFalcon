@@ -1241,14 +1241,15 @@ own rng drawn from the parent's in candidate order:
 
 **Minimum successful attempts, with worker reassignment** — a single
 successful grid is never enough to conclude the search: `generate_grid`
-only stops once at least `MIN_SUCCESSFUL_ATTEMPTS=2` attempts have
+only stops once at least `MIN_SUCCESSFUL_ATTEMPTS=4` attempts have
 genuinely succeeded, counted cumulatively across the *whole* search (every
 palier, not just the one that just ran), and only distinct solutions
 count: a success whose pattern and words (`_success_key`, Java
 `Generator.successKey`) equal an earlier one's is neither counted (nor by
 the live `success_count`) nor kept in `accumulated_successes`
-(`accumulated_keys`), so the grid choice always has at least two grids
-to offer. A failure while some ORIGINAL attempt of the palier is still racing is
+(`accumulated_keys`), so the grid choice has at least four grids to offer
+(fewer only when the palier budget runs out first: its last palier compares
+and offers the 2 or 3 successes found). A failure while some ORIGINAL attempt of the palier is still racing is
 not declared failed at once: it gets a **second chance**
 (`_second_chance_seed`) — a hard clean of its blocked slots
 (`_clean_blocked_slots` given no `grid`, so no black cell is added, moved
@@ -3837,7 +3838,23 @@ step` has its own `STEP_PROXY_TIMEOUT_S` (60 s), the page its
   turned on by pressing Shift and off by releasing it
   (`setInteractiveMoveShift`, also synced from the mouse's `shiftKey`),
   reset on leaving Interactive mode — and the grid then shows the `move`
-  cursor, `#grid.move-cursor`) —, calls to every `/api/interactive/*` endpoint, "Définitions"/
+  cursor, `#grid.move-cursor`) —, black-cell selection and move (a click on
+  a black cell, or a click-drag starting on one, sets
+  `interactiveBlackSelection` to the black cells of the rectangle, framed
+  `.black-selected`, clearing any zone, and a click or drag starting on a
+  white cell or Escape clears it; while it is set the move mode drags these
+  cells instead of letters, `interactiveBlackMoveStart`/
+  `interactiveBlackMovePlan`/`renderInteractiveBlackMovePreview`/
+  `finishInteractiveBlackMove`: the offset is held back at the grid's edges;
+  under the form's `#symmetry` every black image of a moved cell goes to the
+  image of its destination, `symmetryTransforms`, a selected cell that is the
+  image of one closer to the drag's start following that one and a cell on a
+  symmetry axis leaving two black cells; a letter on a destination is
+  overwritten and no move is refused; the preview marks the geometric
+  impossibilities, `interactiveElementaryImpossibleCells(grid)`,
+  `.black-move-impossible`, and the usual diagnostics refresh follows the
+  drop; a definition stays only while its word's cells and letters are
+  unchanged; one undo step) —, calls to every `/api/interactive/*` endpoint, "Définitions"/
   "Recalculer" (`generateInteractiveDefinitions`: `POST /api/interactive/
   verify` then `GET /api/dictionary/define` per filled valid word —
   only those lacking a definition, or all of them, replacing the

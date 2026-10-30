@@ -1069,7 +1069,7 @@ English (see `project-best-practices`).
   walker, so a UI language switch while a preview is showing needed its
   own explicit re-render call (`languageSelect`'s `change` handler now
   calls `renderAttemptPreview(lastPreviewExamples)` too, mirroring
-  `togglePreviewLetters()`'s own existing re-render). Verified live: a
+  `setPreviewLetters()`'s own existing re-render). Verified live: a
   real generation's actual `example_grid` (15×10, mid-search) computed to
   4 black cells and 62 filled cells out of 150 — 3%/41% — matching the
   exact arithmetic used in `renderAttemptPreview()`; JS syntax-checked
@@ -1653,7 +1653,7 @@ English (see `project-best-practices`).
   `renderWordTable()`, alongside the pre-existing "no data" check.
   **Not yet visually confirmed in an actual browser** — same tooling
   limitation noted throughout this file; verified by direct code-path
-  review instead (togglePreviewLetters()/renderWordTable()/showPreviewEntry()
+  review instead (setPreviewLetters()/renderWordTable()/showPreviewEntry()
   all funnel through the same `lastWordTable`/`showPreviewLetters` gate).
 
 - the word-verification table's own position column now reads `H (row,
@@ -4875,6 +4875,17 @@ end through the real running API (interactive start/step/save,
 - `.tool-icon-btn[hidden] { display: none }` is mandatory: `.tool-icon-btn`'s
   own `display: inline-flex` otherwise beats the browser's `[hidden]` rule
   and shows the localhost-only `#usage-stats-btn` on every origin.
+
+- **Selected black cells** (`.black-selected`, Interactive mode), at the
+  user's explicit request: a 3px inset amber frame (`--black-selected`,
+  `#f59e0b`, a new token: the accent blue of `.selected` is invisible on a
+  full-size black cell), winning over `.selected`'s frame on the same cell.
+  While they are dragged in move mode, the cells left lose their square
+  (`.black-move-source`), each destination shows a black cell with the same
+  frame and hides its letter (`.black-move-target`), and a cell the geometry
+  alone would make impossible takes the `--incorrect-bg` fill
+  (`.black-move-impossible`). **Visually confirmed** with Playwright/Chromium
+  on half-size and full-size black cells.
 
 - **Interactive-mode letter move preview** (Shift+click-drag,
   `script.js`'s `renderInteractiveMovePreview`): each destination cell

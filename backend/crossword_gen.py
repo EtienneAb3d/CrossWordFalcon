@@ -4563,14 +4563,15 @@ PALIER_ATTEMPT_INTERRUPT_FRACTION = 1.0
 # process freed by a success is immediately reassigned to a brand-new,
 # from-scratch attempt (see the palier's harvesting loop further below)
 # instead of sitting idle — the existing `attempts` budget (200 paliers
-# by default) remains the only cap: once it's exhausted, whichever
-# single success was actually found is accepted rather than declaring a
-# total failure (see the `best is None and accumulated_successes:`
-# fallback near the end of generate_grid). Only distinct solutions count
+# by default) remains the only cap: on its last palier the successes found
+# so far are compared like any others when there are several, and a single
+# one is accepted rather than declaring a total failure (see the
+# `best is None and accumulated_successes:` fallback near the end of
+# generate_grid). Only distinct solutions count
 # (`_success_key`): a success ending on a grid already found (same pattern,
 # same words) is neither counted — here nor by the live "success_count" —
 # nor kept.
-MIN_SUCCESSFUL_ATTEMPTS = 2
+MIN_SUCCESSFUL_ATTEMPTS = 4
 
 
 def _success_key(grid, result):
@@ -20199,9 +20200,13 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # path that can differ even if the final result converges), so
             # neither quantity of work is to be ignored.
             total_attempts_tried += sum(d["checks"] for _, d in failed_all) + superseded_checks
-            if len(accumulated_successes) >= MIN_SUCCESSFUL_ATTEMPTS:
+            if len(accumulated_successes) >= MIN_SUCCESSFUL_ATTEMPTS or (
+                attempt == attempts - 1 and len(accumulated_successes) >= 2
+            ):
                 # A single success is no longer enough to conclude the
-                # search — see MIN_SUCCESSFUL_ATTEMPTS's own docstring.
+                # search — see MIN_SUCCESSFUL_ATTEMPTS's own docstring. On
+                # the budget's last palier, several successes below the
+                # threshold are compared and offered all the same.
                 # `accumulated_successes` spans the WHOLE search (every
                 # palier included, this one's own `successes` already
                 # merged into it a few lines above), so the comparison
@@ -20240,12 +20245,10 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # success being optimized — `optimization_duration_seconds`
                 # (backend/app.py) therefore measures this parallel pass.
                 #
-                # `accumulated_successes` always holds at least
-                # MIN_SUCCESSFUL_ATTEMPTS (>= 2) entries here — the gate
-                # above guarantees it — so there's always something real to
-                # compare; unlike before MIN_SUCCESSFUL_ATTEMPTS existed,
-                # the single-success shortcut can no longer apply at this
-                # point.
+                # `accumulated_successes` always holds at least 2 entries
+                # here — the gate above guarantees it — so there's always
+                # something real to compare; the single-success shortcut
+                # can no longer apply at this point.
                 progress(
                     "minimizing",
                     # Number of successes being optimized/compared: the
@@ -21132,9 +21135,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         # success genuinely found rather than declaring a total failure,
         # at the user's explicit request (rely on the existing budget as
         # the only cap, rather than adding a new one). Can only ever hold
-        # exactly one entry here: with >= MIN_SUCCESSFUL_ATTEMPTS the
-        # palier loop above would already have picked a winner and
-        # `break`-ed, leaving `best` no longer `None`.
+        # exactly one entry here: with 2 or more, the budget's last palier
+        # above already picked a winner and `break`-ed, leaving `best` no
+        # longer `None`.
         best, best_result, best_diag = accumulated_successes[0]
 
     if best is None:

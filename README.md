@@ -488,6 +488,12 @@ you enter this mode, so you can look up words while you fill in the grid:
   for "arc-en-ciel". **Ctrl**, or a
   second click on the selected cell, flips the horizontal/vertical
   direction the cursor moves in.
+- Click a black cell to select it, or click and drag from a black cell to
+  select the black cells of a box. Then hold **Shift** (or switch on the
+  move button) and drag to move them, along with their mirrored cells when
+  the **"Symmetry"** menu applies one. Any move is allowed: letters under
+  the new black cells are overwritten, and whatever becomes impossible shows
+  in color so you can fix it later.
 - A **"Challenge Words"** box beside the grid lets you list words you
   want to see in the finished puzzle: type one and click **+** (or just
   type a space or other punctuation right after it) to add it, or **−**

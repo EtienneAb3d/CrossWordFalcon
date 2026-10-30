@@ -1164,6 +1164,25 @@ the current defaults/behavior to know before touching this code.
   whole list, then a "Moins" button going back to the reduced list; choices made with it, to revisit with the user: each
   "Croisés" word cell is its own list; words hidden by the eye toggle do
   not count in the 20; the backend still sends up to 300 words.
+- **Black cells can be selected and moved by hand in Interactive mode** —
+  the user's rules: a click-drag starting on a black cell selects the black
+  cells of the box, a click selects that black cell; move mode (button or
+  Shift) then moves them, the symmetric cells moving the same way when the
+  grid applies a symmetry; the impossibilities produced show in colour and
+  never prevent the move (`interactiveBlackMovePlan`,
+  `finishInteractiveBlackMove`, frontend only). Choices made with them, to
+  revisit with the user: this selection and the zone replace each other, a
+  click or drag starting on a white cell or Escape clearing it; a drag no
+  longer selects a zone when it starts on a black cell; the selected cells
+  have priority over letters for the move mode, wherever the drag starts; an
+  image that is not black does not move and creates nothing; a selected cell
+  that is the image of one closer to the drag's start follows that one, so
+  the result stays symmetric; a cell moved off a symmetry axis leaves two
+  black cells; the offset stops at the grid's edges; a letter on a destination,
+  images' included, is overwritten; a definition stays only while its word's
+  cells and letters are unchanged; during the drag only the geometric
+  impossibilities show (no server call), the server's follow the drop; Delete
+  and "." keep acting on the selected cell alone.
 - **Interactive "Suivant" fills the selected emplacement first** — the
   user's rule: when an incomplete emplacement is selected in the grid,
   "Suivant" tries to fill it if a possibility exists, otherwise the usual
@@ -1470,8 +1489,13 @@ the current defaults/behavior to know before touching this code.
   a choice is always offered. Choice made with it, to revisit with the
   user: two distinct solutions that the parallel minimization turns into
   one grid are still offered once.
+- **"Finir la grille"/"Finir la zone" switch the spoiler toggle on** — the
+  user's rule: nothing to hide from an author who sees the grid in
+  Interactive mode next (`runInteractiveFinish`, `setPreviewLetters`).
+  Choice made with it, to revisit with the user: it stays on afterwards,
+  including for a later "Automatique", until switched off.
 - A single successful grid never concludes `generate_grid`'s search on its
-  own: at least `MIN_SUCCESSFUL_ATTEMPTS` (2) genuine successes, counted
+  own: at least `MIN_SUCCESSFUL_ATTEMPTS` (4, the user's rule) genuine successes, counted
   cumulatively across the whole search rather than one palier alone, are
   required before the best one is picked. A failed attempt completed by
   plugging its isolated cells (`_plug_isolated_cells`) is one ordinary

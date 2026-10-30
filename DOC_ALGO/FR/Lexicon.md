@@ -557,6 +557,17 @@ plusieurs signaux) :
   (`backend/crossword_gen.py`, `_zone_slot_indices`, `_zone_complete` ;
   `frontend/static/script.js`, `interactiveZoneSelection`.)
 
+- **Sélection de cases noires** : en mode Interactif, les cases noires
+  choisies par un clic sur une case noire, ou par un cliquer-glisser commencé
+  sur une case noire (seules les cases noires du rectangle tracé). Elle
+  remplace la zone sélectionnée, et réciproquement. Tant qu'elle existe, le
+  mode déplacement déplace ces cases plutôt que des lettres, avec leurs
+  images si la grille applique une symétrie, sans jamais refuser le
+  déplacement : une lettre à l'arrivée est écrasée et les impossibilités
+  produites s'affichent en couleur. (`frontend/static/script.js`,
+  `interactiveBlackSelection`, `interactiveBlackMovePlan`,
+  `finishInteractiveBlackMove`.)
+
 - **Retrait fantôme** (*backghost*) : simple nettoyage du conflit, qui
   remplace un saut arrière de plus de `MAX_BACKJUMP_LEVELS` (5) nœuds : seul
   le mot le plus récent de l'ensemble de conflit est retiré de la grille,

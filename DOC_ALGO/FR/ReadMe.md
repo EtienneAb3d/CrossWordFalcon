@@ -69,7 +69,7 @@ précédents.
 
 ### La fin de la recherche
 
-Il faut au moins **2** tentatives réussies sur l'ensemble de la recherche
+Il faut au moins **4** tentatives réussies sur l'ensemble de la recherche
 (`MIN_SUCCESSFUL_ATTEMPTS`). La meilleure est alors retenue, une dernière
 passe (chapitre 6) lui retire le plus de cases noires possible, les
 définitions sont écrites par le modèle de langage (`backend/clues.py`) et
@@ -359,13 +359,15 @@ toutes les tentatives se terminent d'elles-mêmes.
 
 ### Nombre minimal de réussites et réaffectation des processus
 
-Il faut au moins **2** réussites, cumulées sur toute la recherche : un
-palier peut fournir la deuxième réussite d'un palier précédent
+Il faut au moins **4** réussites, cumulées sur toute la recherche : un
+palier peut compléter les réussites des paliers précédents
 (`generate_grid`, `MIN_SUCCESSFUL_ATTEMPTS`). Seules les solutions
 **distinctes** comptent : une réussite aboutissant à une grille déjà
 trouvée (même motif, mêmes mots) n'est ni comptée ni gardée
-(`_success_key`), si bien que le joueur a toujours au moins deux grilles
-différentes à choisir.
+(`_success_key`), si bien que le joueur a au moins quatre grilles
+différentes à choisir. Quand le budget de paliers s'épuise avant ce seuil,
+le dernier palier compare et propose les réussites trouvées s'il y en a au
+moins deux, et une réussite unique est acceptée telle quelle.
 
 **Seconde chance.** Une tentative qui échoue alors qu'une tentative
 **d'origine** du palier est encore en course n'est pas aussitôt déclarée

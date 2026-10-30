@@ -446,10 +446,12 @@ main form (`#run-actions`); "Continuer" sits above the "Générer les mots crois
 (`#generate-form`). All only appear when relevant.
 
 - **Voir les mots (spoiler) / Show the words (spoiler)** (`#attempt-preview-reveal-btn`, `frontend/static/
-  script.js`, `togglePreviewLetters`) — shown only once an automatic
+  script.js`, `setPreviewLetters`) — shown only once an automatic
   generation is launched ("Automatique", "Finir la grille"/"Finir la
   zone", "Continuer"), hidden again when the finished grid is displayed
-  or Interactive mode opens. While a grid is generating, shows
+  or Interactive mode opens. **Finir la grille** and **Finir la zone**
+  switch it on, since the author sees the grid in Interactive mode next
+  anyway; it stays on until switched off. While a grid is generating, shows
   the actual letters inside the search-progress preview grids (see "While
   a grid is generating" below) — off, each placed letter is drawn as "✴",
   its cell keeping every colour code, so progress stays visible — and the
@@ -480,7 +482,7 @@ main form (`#run-actions`); "Continuer" sits above the "Générer les mots crois
   how many different grids the search has completed successfully so far
   (0 at the start; a grid found again by another attempt is not counted
   twice), so it matches the number of grids offered to choose from. The
-  search keeps going until at least two different grids have succeeded,
+  search keeps going until at least four different grids have succeeded,
   then keeps the best one, so this number tells how many finished
   candidates it is choosing from. Hidden again once the generation ends.
   Each recorded step of the search history keeps the count it had at
@@ -1304,7 +1306,9 @@ to the left of **Mots / Words** to open it as an overlay panel.
   there; Escape clears the selection. Shift + click and drag moves the
   letters of the selected zone (or, with no zone, of the selected slot);
   black cells stay put (see "Click and drag" and "Shift + click and drag"
-  below).
+  below). A click on a black cell selects it, and a click and drag starting
+  on a black cell selects the black cells of the dragged box; move mode
+  then moves them (see "Selecting and moving black cells" below).
 - Place your letters in the grid. The **.** key (or any other punctuation
   mark) adds or removes a black cell. **Space**, **-** or **_** adds or
   removes a word break — a thicker line between two words of an
@@ -1716,6 +1720,24 @@ real letter. Both update after every edit.
   impossible move changes nothing and shows a message; **Précédent**
   undoes a move like any other edit
   (`frontend/static/script.js`, `finishInteractiveMove`).
+- **Selecting and moving black cells**: a click on a black cell selects it,
+  and a click and drag starting on a black cell selects every black cell of
+  the dragged box — both framed in amber, replacing any selected zone. A
+  click or drag starting on a white cell, or **Escape**, clears this
+  selection. While black cells are selected, move mode (**Shift** or the
+  move-mode button) moves them instead of letters, wherever the drag starts:
+  the cells they leave turn white and their destinations show a framed black
+  cell, stopping at the grid's edges. When the **Symmetry** menu applies a
+  symmetry, each cell's black images move the mirrored way; a selected cell
+  that is itself the image of one closer to where the drag started follows
+  that one, and a cell on a symmetry axis moved off it leaves two black cells.
+  No move is refused: a letter on a destination is overwritten, and a word
+  cut or lengthened by the move loses its definition. What a move makes
+  impossible shows in colour — the cells the geometry alone rules out in red
+  during the drag, then the usual red and orange cells once dropped — so you
+  can place black cells where you want and repair the grid afterwards.
+  **Précédent** undoes a move in one step (`frontend/static/script.js`,
+  `interactiveBlackMovePlan`, `finishInteractiveBlackMove`).
 
 **Writing the definitions**
 
@@ -2285,7 +2307,7 @@ between cycles.** Rather than only ever trying one pattern-and-fill
 combination at a time, each cycle ("palier") launches as many independent
 attempts in parallel as the machine has processor cores, each running in
 its own process. A single successful grid is never enough on its own —
-the generator always waits for at least two genuinely successful grids,
+the generator always waits for at least four genuinely successful grids,
 counted across the whole search rather than just one cycle, before it
 will settle on a winner. An attempt that fails while others of the same
 cycle are still running gets a second chance first: the words crossing
