@@ -4952,3 +4952,22 @@ end through the real running API (interactive start/step/save,
   0.75rem, the `interactiveCrossingAcrossLabel`/`DownLabel` names), thin
   `--border` row dividers like the other tables. Replaces the former
   letter line + "H :"/"V :" lines per letter. No new token.
+
+- **Version badge top right, light red when outdated** (`#version-badge`),
+  at the user's explicit request: the header's last item (after the
+  GitHub link), so it sits at the page's top-right corner; the neutral
+  white `.badge` pill while the page matches the server, switched by
+  `.outdated` (`script.js`'s `checkServerVersion`) to `--incorrect-bg`
+  with `--incorrect-fg` text and border (no new token) once the heartbeat
+  reports another server version — a reloaded page is white again. This
+  supersedes the earlier placement before `#info-badge`.
+- **"Server updated" notice** (`#version-update-overlay`,
+  `#version-update-box`), at the user's explicit request: the same scrim,
+  white card and right-aligned button pair as `#solution-confirm-overlay`
+  (selectors shared in `style.css`), title "Serveur mis à jour", text
+  naming the new version, buttons "Recharger la page" then "Plus tard"
+  (focused by default; Escape and a click on the scrim close it too). The
+  page never reloads by itself. While it is open the grid ignores the
+  keyboard. **Visually confirmed** with Playwright/Chromium: shown when
+  the heartbeat's version changes, not again for the same version, again
+  for a newer one, no page reload.

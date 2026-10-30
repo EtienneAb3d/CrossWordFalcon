@@ -4325,8 +4325,10 @@ button:disabled {
 /* Confirmation before showing the solution (#solution-confirm-overlay):
    the same scrim and white card as the welcome overlay; its two buttons
    side by side, right-aligned, "Continuer à jouer" last (the default,
-   focused choice). */
-#solution-confirm-overlay {
+   focused choice). The "server updated" notice (#version-update-overlay)
+   shares the same look, "Plus tard" last and focused. */
+#solution-confirm-overlay,
+#version-update-overlay {
   position: fixed;
   inset: 0;
   z-index: 1000;
@@ -4336,10 +4338,12 @@ button:disabled {
   padding: 1rem;
   background: rgba(31, 35, 32, 0.55);
 }
-#solution-confirm-overlay[hidden] {
+#solution-confirm-overlay[hidden],
+#version-update-overlay[hidden] {
   display: none;
 }
-#solution-confirm-box {
+#solution-confirm-box,
+#version-update-box {
   width: 100%;
   max-width: 26rem;
   display: flex;
@@ -4352,16 +4356,19 @@ button:disabled {
   color: var(--fg);
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
 }
-#solution-confirm-box h2 {
+#solution-confirm-box h2,
+#version-update-box h2 {
   margin: 0;
   font-size: 1.2rem;
   text-align: center;
 }
-#solution-confirm-text {
+#solution-confirm-text,
+#version-update-text {
   margin: 0;
   line-height: 1.5;
 }
-#solution-confirm-actions {
+#solution-confirm-actions,
+#version-update-actions {
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
@@ -4446,6 +4453,16 @@ button:disabled {
    token. */
 #online-count {
   color: var(--correct-fg);
+}
+
+/* Version badge: the header's last item (top right), a plain white pill
+   while the page matches the server; turned light red (the --incorrect-bg
+   / --incorrect-fg pair) once the server reports another version
+   (script.js's checkServerVersion), until the page is reloaded. */
+#version-badge.outdated {
+  background: var(--incorrect-bg);
+  border-color: var(--incorrect-fg);
+  color: var(--incorrect-fg);
 }
 
 /* Left-hand tool column of the board (Interactive mode): absolutely

@@ -120,6 +120,60 @@ stop_port() {
     fi
 }
 
+# Restart without breaking the work in progress: before anything is
+# stopped, the running back end (Python or Java, whichever answers on
+# $BACKEND_PORT) is put in "drain" mode — it refuses new generation/
+# Interactive jobs (503 server_restarting) — and the script waits until it
+# reports no running job left (GET /api/restart/status). The drain is renewed
+# on every poll and lapses on its own RESTART_DRAIN_TTL_S (60 s) after the
+# last one, so a script interrupted mid-wait leaves the server accepting jobs
+# again (Ctrl-C also lifts it right away). `--now` (or CROSSWORDFALCON_
+# RESTART_NOW=1) skips the wait; CROSSWORDFALCON_RESTART_MAX_WAIT_S (default
+# 0 = no limit) gives up waiting after that many seconds. A back end too old
+# to know these routes (404) or not answering is restarted at once.
+RESTART_NOW="${CROSSWORDFALCON_RESTART_NOW:-0}"
+for arg in "$@"; do
+    case "$arg" in
+        --now) RESTART_NOW=1 ;;
+    esac
+done
+RESTART_POLL_S=5
+
+restart_drain() {
+    curl -sf -m 10 -X POST -H 'Content-Type: application/json' -d "$1" \
+        "http://127.0.0.1:$BACKEND_PORT/api/restart/drain"
+}
+
+running_jobs_of() {
+    python3 -c 'import json, sys; print(int(json.load(sys.stdin).get("running_jobs") or 0))'
+}
+
+wait_for_backend_idle() {
+    local reply running max start
+    [ "$RESTART_NOW" = "1" ] && return 0
+    lsof -ti tcp:"$BACKEND_PORT" -sTCP:LISTEN >/dev/null 2>&1 || return 0
+    if ! reply=$(restart_drain '{}'); then
+        echo "Back end on port $BACKEND_PORT has no restart drain (older version or not answering): restarting now."
+        return 0
+    fi
+    trap 'restart_drain "{\"cancel\": true}" >/dev/null || true; echo; echo "Restart aborted: back end accepts jobs again."; exit 130' INT TERM
+    max="${CROSSWORDFALCON_RESTART_MAX_WAIT_S:-0}"
+    start=$SECONDS
+    running=$(echo "$reply" | running_jobs_of)
+    while [ "$running" -gt 0 ]; do
+        if [ "$max" -gt 0 ] && [ $((SECONDS - start)) -ge "$max" ]; then
+            echo "Still $running running job(s) after ${max}s: restarting anyway."
+            break
+        fi
+        echo "Waiting for $running running job(s) to finish before restarting (new jobs refused; Ctrl-C to abort, --now to skip)..."
+        sleep "$RESTART_POLL_S"
+        reply=$(restart_drain '{}') || break
+        running=$(echo "$reply" | running_jobs_of)
+    done
+    trap - INT TERM
+    return 0
+}
+
 # Build the jar first (no-op when the committed jar in backend_java/dist/
 # matches the sources, see backend_java/build.sh), before stopping
 # anything: a build failure then leaves whatever is currently running
@@ -127,6 +181,8 @@ stop_port() {
 BACKEND_JAR="backend_java/dist/crosswordfalcon-backend.jar"
 backend_java/build.sh
 JAVA_BIN="$(backend_java/build.sh --print-java)"
+
+wait_for_backend_idle
 
 stop_port "$BACKEND_PORT"
 stop_port "$FRONTEND_PORT"

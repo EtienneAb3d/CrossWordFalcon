@@ -234,7 +234,17 @@ the address to use for that when it finds one (something like
 
 This script also takes care of cleanly stopping any version of the app that
 might already be running before starting a new one — feel free to rerun it
-as often as you like.
+as often as you like. When grids are still being made at that moment, it
+first waits for them to finish (no new grid can be started meanwhile, and
+the script says how many it is waiting for), so nobody loses a grid in the
+middle of its creation. Press Ctrl-C to give up waiting (the app then
+carries on as before), or run `./run_Falcon.sh --now` to restart without
+waiting.
+
+After a restart with a new version, every page already open in a browser
+shows a message saying the app was updated: reloading the page brings the
+new features (save your work first). The page is never reloaded on its
+own.
 
 **Prefer Java?** The app's server side also exists in a Java version, which
 behaves exactly the same from the web page's point of view. Start it with:
@@ -246,8 +256,9 @@ behaves exactly the same from the web page's point of view. Start it with:
 It comes ready to run and only needs Java 21, which `./Install.sh` installs
 for you (along with Maven, used only if you modify the Java code itself).
 `./run_Falcon.sh` and `./run_FalconJ.sh` are interchangeable: each one
-stops the other version before starting, so only one runs at a time, and
-your grids, drafts and saved games are shared by both.
+stops the other version before starting (waiting for grids in progress the
+same way, `--now` included), so only one runs at a time, and your grids,
+drafts and saved games are shared by both.
 
 ## Pre-filling the library (optional)
 

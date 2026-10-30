@@ -114,6 +114,14 @@ export EMBED_N_GPU_LAYERS="${EMBED_N_GPU_LAYERS:-0}"
 # process.
 export CROSSWORDFALCON_FRONTEND_WORKERS="${CROSSWORDFALCON_FRONTEND_WORKERS:-10}"
 
+# Restart (run_Falcon.sh / run_FalconJ.sh): a restart first waits for the
+# jobs running on the back end to finish (new jobs refused meanwhile).
+# CROSSWORDFALCON_RESTART_MAX_WAIT_S: give up waiting after that many
+# seconds (0 = no limit); CROSSWORDFALCON_RESTART_NOW=1 (or --now) skips
+# the wait.
+# export CROSSWORDFALCON_RESTART_MAX_WAIT_S="0"
+# export CROSSWORDFALCON_RESTART_NOW="0"
+
 # Interface the middleware binds to (read by run_Falcon.sh, applies to both
 # the HTTP and the HTTPS instance). 0.0.0.0 = reachable from other machines;
 # 127.0.0.1 = this machine only — the setting for a development checkout

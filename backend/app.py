@@ -674,6 +674,36 @@ async def _start_rss_scheduler():
 JOBS = {}
 MAX_JOBS = 50
 
+# The software version this process was started with (VERSION.txt read
+# once, at import): returned by every POST /api/presence heartbeat so an
+# open page can tell the server was updated. Read once rather than live,
+# so a VERSION.txt edited before the restart is not announced while the
+# old code still runs.
+try:
+    SERVER_VERSION = (Path(__file__).resolve().parent.parent / "VERSION.txt").read_text(
+        encoding="utf-8").strip() or None
+except OSError:
+    SERVER_VERSION = None
+
+# Restart drain (run_Falcon.sh/run_FalconJ.sh): while `_DRAIN_UNTIL` lies in
+# the future, `_new_job()` refuses every new job (503 `server_restarting`),
+# so the running ones can finish before the launcher stops this process.
+# `POST /api/restart/drain` pushes it RESTART_DRAIN_TTL_S ahead and the
+# launcher renews it on every poll, so a launcher that dies mid-wait leaves
+# the server accepting jobs again within that delay.
+RESTART_DRAIN_TTL_S = 60
+_DRAIN_UNTIL = 0.0
+
+
+def _draining():
+    return time.monotonic() < _DRAIN_UNTIL
+
+
+def _running_job_count():
+    """Jobs a restart would kill mid-way: every JOBS entry still running
+    (queued, searching, waiting for the grid choice, writing clues)."""
+    return sum(1 for job in list(JOBS.values()) if job.get("status") == "running")
+
 # Rows per page of GET /api/library's own listing, at the user's explicit
 # request: "Ajoute une pagination à la liste des grilles de la
 # bibliothèque : 20 lignes affichées max à chaque page."
@@ -1613,6 +1643,37 @@ def health():
     return {"status": "ok"}
 
 
+# Restart coordination, used by run_Falcon.sh/run_FalconJ.sh straight on the
+# back end's own port (bound to 127.0.0.1): no frontend/server.py proxy
+# route, so the browser can never reach them.
+@app.get("/api/restart/status")
+def restart_status():
+    """`{"version", "draining", "running_jobs"}`: the launcher stops this
+    process once `running_jobs` is 0."""
+    return {"version": SERVER_VERSION, "draining": _draining(),
+            "running_jobs": _running_job_count()}
+
+
+class RestartDrainRequest(BaseModel):
+    """Body of POST /api/restart/drain: `cancel` true lifts the drain."""
+    cancel: bool = False
+
+
+@app.post("/api/restart/drain")
+def restart_drain(req: RestartDrainRequest):
+    """Starts or renews the restart drain (see `_DRAIN_UNTIL`), or lifts it
+    with `cancel`; returns the same state as GET /api/restart/status."""
+    global _DRAIN_UNTIL
+    if req.cancel:
+        _DRAIN_UNTIL = 0.0
+        logger.info("restart drain lifted")
+    else:
+        if not _draining():
+            logger.info("restart drain started (%d running job(s))", _running_job_count())
+        _DRAIN_UNTIL = time.monotonic() + RESTART_DRAIN_TTL_S
+    return restart_status()
+
+
 class PresenceRequest(BaseModel):
     """Body of POST /api/presence — a heartbeat from one web UI tab
     (every 2s). `session_id`: a stable opaque id for this page load;
@@ -1882,6 +1943,7 @@ def presence(req: PresenceRequest):
         "count": count,
         "resource_usage": _LATEST_RESOURCE_USAGE,
         "queue_lengths": {"grid": len(GRID_QUEUE), "clues": len(CLUES_QUEUE)},
+        "version": SERVER_VERSION,
     }
 
 
@@ -3650,6 +3712,11 @@ def _build_word_verification_table(words, language, bilingual_language=None):
 
 
 def _new_job():
+    if _draining():
+        raise HTTPException(status_code=503, detail={
+            "code": "server_restarting",
+            "message": "server restarting for an update, no new job accepted",
+        })
     if len(JOBS) >= MAX_JOBS:
         oldest = next(iter(JOBS))
         del JOBS[oldest]

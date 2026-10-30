@@ -68,6 +68,8 @@ function applyTranslations() {
   renderResourceMeters();
   // Queue-length rows — same reason: their labels are translated too.
   renderQueueLengths();
+  // "Server updated" notice — its text names the version.
+  renderVersionUpdateText();
 }
 
 // Idle state for #hover-definition (see the style-guide SKILL) — shown
@@ -168,6 +170,10 @@ const continueBtn = document.getElementById("continue-btn");
 const cluesEl = document.getElementById("clues");
 const downCluesSection = document.getElementById("down-clues-section");
 const versionBadge = document.getElementById("version-badge");
+const versionUpdateOverlay = document.getElementById("version-update-overlay");
+const versionUpdateText = document.getElementById("version-update-text");
+const versionUpdateReloadBtn = document.getElementById("version-update-reload-btn");
+const versionUpdateLaterBtn = document.getElementById("version-update-later-btn");
 const onlineCountEl = document.getElementById("online-count");
 const infoBadge = document.getElementById("info-badge");
 const infoTooltip = document.getElementById("info-tooltip");
@@ -1388,7 +1394,8 @@ function hasActiveTextSelection() {
 
 function shouldGridIgnoreKeydown() {
   // A modal confirmation (#solution-confirm-overlay) owns the keyboard.
-  return isTextInputFocused() || hasActiveTextSelection() || !solutionConfirmOverlay.hidden;
+  return isTextInputFocused() || hasActiveTextSelection() || !solutionConfirmOverlay.hidden
+    || !versionUpdateOverlay.hidden;
 }
 
 // Vertical word on Shift or CapsLock (either one), horizontal otherwise —
@@ -3468,6 +3475,50 @@ function renderQueueLengths() {
   );
 }
 
+// Server version check, at the user's explicit request: every presence
+// heartbeat carries the version the back end was started with
+// (backend/app.py's SERVER_VERSION). The first one received is the
+// version this page runs against; when a later one differs, a notice
+// explains that the server was updated and that reloading the page brings
+// the new features — after saving the work in progress. Shown once per
+// new version (`announcedServerVersion`): only a further version change
+// shows it again. The page is never reloaded on its own, reloading stays
+// the player's choice ("Recharger la page" button). Meanwhile the version
+// badge turns light red (.outdated): the page is behind the server.
+let pageServerVersion = null;
+let announcedServerVersion = null;
+
+function checkServerVersion(version) {
+  if (pageServerVersion === null) {
+    pageServerVersion = version;
+    return;
+  }
+  versionBadge.classList.toggle("outdated", version !== pageServerVersion);
+  if (version === pageServerVersion || version === announcedServerVersion) return;
+  announcedServerVersion = version;
+  renderVersionUpdateText();
+  versionUpdateOverlay.hidden = false;
+  versionUpdateLaterBtn.focus();
+}
+
+function renderVersionUpdateText() {
+  if (announcedServerVersion === null) return;
+  versionUpdateText.textContent = I18N[uiLanguage].versionUpdateText(announcedServerVersion);
+}
+
+function closeVersionUpdate() {
+  versionUpdateOverlay.hidden = true;
+}
+
+versionUpdateReloadBtn.addEventListener("click", () => window.location.reload());
+versionUpdateLaterBtn.addEventListener("click", closeVersionUpdate);
+versionUpdateOverlay.addEventListener("click", (event) => {
+  if (event.target === versionUpdateOverlay) closeVersionUpdate();
+});
+versionUpdateOverlay.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeVersionUpdate();
+});
+
 // The backend (backend/app.py's presence()/_presence_snapshot) is the
 // sole decider of whether it writes a LOG_USERS line, comparing the
 // LIST of users (not just the total count) against the last one
@@ -3507,6 +3558,7 @@ async function pingPresence() {
       lastQueueLengths = data.queue_lengths;
       renderQueueLengths();
     }
+    if (data.version) checkServerVersion(data.version);
   } catch (err) {
     // Transient failure — keep showing the last known count; the next
     // heartbeat (2s later) self-corrects.
@@ -4586,6 +4638,8 @@ function describeErrorCode(t, code, fallbackText, duringGeneration = false) {
       return t.errorInternal;
     case "backend_timeout":
       return t.errorBackendTimeout;
+    case "server_restarting":
+      return t.errorServerRestarting;
     case "backend_unavailable":
       return duringGeneration
         ? t.errorBackendUnavailableDuringGeneration

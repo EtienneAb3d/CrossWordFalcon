@@ -159,6 +159,33 @@ public final class App {
     // ================================================================== state
 
     static final LinkedHashMap<String, Job> JOBS = new LinkedHashMap<>();
+
+    /** backend/app.py's SERVER_VERSION: VERSION.txt read once at start-up, sent by every presence heartbeat. */
+    static final String SERVER_VERSION = GridStore.falconVersion();
+
+    /** backend/app.py's RESTART_DRAIN_TTL_S / _DRAIN_UNTIL: while the drain deadline lies ahead,
+     * newJob() refuses every new job (503 server_restarting). */
+    static final long RESTART_DRAIN_TTL_NS = 60L * 1_000_000_000L;
+    static volatile long drainUntil = Long.MIN_VALUE;
+
+    static boolean draining() {
+        return drainUntil != Long.MIN_VALUE && System.nanoTime() - drainUntil < 0;
+    }
+
+    /** backend/app.py's _running_job_count: JOBS entries still running. */
+    static int runningJobCount() {
+        List<Job> jobs;
+        synchronized (JOBS) {
+            jobs = new ArrayList<>(JOBS.values());
+        }
+        int n = 0;
+        for (Job j : jobs) if ("running".equals(j.get("status"))) n++;
+        return n;
+    }
+
+    static Map<String, Object> restartStatus() {
+        return Json.obj("version", SERVER_VERSION, "draining", draining(), "running_jobs", runningJobCount());
+    }
     static final Map<String, Session> INTERACTIVE_SESSIONS = new ConcurrentHashMap<>();
     static final List<Task> GRID_QUEUE = Collections.synchronizedList(new ArrayList<>());
     static final List<Task> CLUES_QUEUE = Collections.synchronizedList(new ArrayList<>());
@@ -272,6 +299,8 @@ public final class App {
     // ================================================================== jobs & queues
 
     static String newJob() {
+        if (draining()) throw http(503, Json.obj("code", "server_restarting",
+                "message", "server restarting for an update, no new job accepted"));
         synchronized (JOBS) {
             if (JOBS.size() >= MAX_JOBS) {
                 String oldest = JOBS.keySet().iterator().next();
@@ -1928,6 +1957,19 @@ public final class App {
     static Web routes() {
         Web w = new Web();
         w.get("/api/health", r -> Json.obj("status", "ok"));
+        // Restart coordination for run_Falcon.sh/run_FalconJ.sh (no proxy route: launcher only).
+        w.get("/api/restart/status", r -> restartStatus());
+        w.post("/api/restart/drain", r -> {
+            Body b = new Body(r.json());
+            if (b.bool("cancel", false)) {
+                drainUntil = Long.MIN_VALUE;
+                Log.info("restart drain lifted");
+            } else {
+                if (!draining()) Log.info("restart drain started (%d running job(s))", runningJobCount());
+                drainUntil = System.nanoTime() + RESTART_DRAIN_TTL_NS;
+            }
+            return restartStatus();
+        });
         w.post("/api/presence", r -> {
             Body b = new Body(r.json());
             String sid = b.requiredMin1("session_id");
@@ -1940,7 +1982,7 @@ public final class App {
             List<String> pseudos = (List<String>) snap[1];
             if ((boolean) snap[2]) writeUsersLog((int) snap[0], pseudos);
             return Json.obj("count", snap[0], "resource_usage", LATEST_RESOURCE_USAGE, "queue_lengths",
-                    Json.obj("grid", GRID_QUEUE.size(), "clues", CLUES_QUEUE.size()));
+                    Json.obj("grid", GRID_QUEUE.size(), "clues", CLUES_QUEUE.size()), "version", SERVER_VERSION);
         });
         w.post("/api/pseudo/claim", r -> {
             Body b = new Body(r.json());

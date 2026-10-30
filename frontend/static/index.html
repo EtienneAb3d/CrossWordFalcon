@@ -32,7 +32,6 @@
            user's explicit request. Hidden until the first successful
            heartbeat. -->
       <span id="online-count" class="badge" hidden></span>
-      <span id="version-badge" class="badge" hidden></span>
       <span id="info-badge" class="info-badge" hidden tabindex="0" role="button" data-i18n-aria="infoBadgeLabel">
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
           <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"></circle>
@@ -69,6 +68,10 @@
           <path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path>
         </svg>
       </a>
+      <!-- Version badge: last item of the header (top right). Shows
+           VERSION.txt as read by GET /api/version at page load; light red
+           (.outdated) once the server runs another version. -->
+      <span id="version-badge" class="badge" hidden></span>
     </header>
 
     <form id="generate-form">
@@ -1606,6 +1609,22 @@
       <div id="solution-confirm-actions">
         <button type="button" id="solution-confirm-show-btn" data-i18n="solutionBtn">Solution</button>
         <button type="button" id="solution-confirm-continue-btn" data-i18n="solutionConfirmContinue">Continuer à jouer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- "Server updated" notice (script.js's checkServerVersion): shown once
+       per new version reported by the POST /api/presence heartbeat. The
+       page is never reloaded on its own: reloading stays the player's
+       choice. -->
+  <div id="version-update-overlay" role="alertdialog" aria-modal="true"
+       aria-labelledby="version-update-title" aria-describedby="version-update-text" hidden>
+    <div id="version-update-box">
+      <h2 id="version-update-title" data-i18n="versionUpdateTitle">Serveur mis à jour</h2>
+      <p id="version-update-text"></p>
+      <div id="version-update-actions">
+        <button type="button" id="version-update-reload-btn" data-i18n="versionUpdateReload">Recharger la page</button>
+        <button type="button" id="version-update-later-btn" data-i18n="versionUpdateLater">Plus tard</button>
       </div>
     </div>
   </div>

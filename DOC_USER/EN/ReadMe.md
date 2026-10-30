@@ -61,8 +61,18 @@ does not reappear).
   It refreshes every 2 seconds (`POST /api/presence`); tabs sharing the
   same pseudo count as one person, and someone is dropped from the count
   60 seconds after their last refresh.
-- A small pill next to it (`#version-badge`) shows the app's current
-  version (`GET /api/version`).
+- A pill at the far right of the header (`#version-badge`) shows the
+  app's version at page load (`GET /api/version`). It turns light red
+  once the server has been updated since, until the page is reloaded.
+- When the server is updated while the page is open, a message
+  (`#version-update-overlay`, `frontend/static/script.js`,
+  `checkServerVersion`) says so and invites the player to reload the page
+  to get the new features, after saving their work in progress. The
+  version comes with the same background heartbeat as `#online-count`
+  (`POST /api/presence`); the message shows once per new version — only a
+  further update shows it again. "Recharger la page" reloads the page,
+  "Plus tard" (or Escape, or a click outside) closes the message: the page
+  is never reloaded on its own.
 - An "i" icon next to it (`#info-badge`) reveals a tooltip on hover or
   keyboard focus (`frontend/static/script.js`, `renderSystemInfoTooltip`),
   showing which LLM model writes the clues, whether it runs on CPU or
@@ -537,6 +547,12 @@ running for a very long time on one of these two stages, with someone
 else waiting behind it, briefly steps aside for that next person before
 picking back up right where it left off — you may see your own queue
 position appear again partway through an otherwise-long generation.
+
+While the server is about to restart for an update, it waits for the
+grids already in progress to finish and refuses to start a new one: a
+generation (or an Interactive session) started in that window shows a
+message saying the server is restarting and to try again in a minute
+(`errorServerRestarting`).
 
 ## Dictionary
 

@@ -795,6 +795,37 @@ project's engineering language.
   to preserve by leaving its workers alive. Verified live: a real
   restart triggered mid-search (10 active workers confirmed via `ps`)
   left zero afterward.
+- **A restart never kills work in progress** — the user's rule: the
+  relaunch waits until the server says no running task risks crashing
+  before stopping the old version. `run_Falcon.sh`/`run_FalconJ.sh` put
+  the running back end in drain mode (`POST /api/restart/drain`, renewed
+  every 5 s, lapsing 60 s after the last renewal) and stop it only once
+  `GET /api/restart/status` reports no running job; both routes are
+  reached on the back end's own 127.0.0.1 port and have no proxy route.
+  Choices made with it, to revisit with the user: "running task" means a
+  `JOBS` entry still `running` (generation, grid choice, clue writing,
+  Interactive start/resume, recompute), not an in-flight synchronous
+  request (chat, "Définir", "Suivant"); while draining, every new job is
+  refused with 503 `server_restarting` (otherwise a busy server never
+  drains); the wait has no limit by default
+  (`CROSSWORDFALCON_RESTART_MAX_WAIT_S`), `--now` skips it, Ctrl-C lifts
+  the drain; an older back end without the routes is restarted at once.
+  Any new job type must go through `_new_job()`/`App.newJob` so the drain
+  covers it.
+- **An open page is told when the server was updated** — the user's
+  rules: the presence heartbeat returns the server's version
+  (`SERVER_VERSION`, read once at start-up, not live, so an edited
+  `VERSION.txt` is not announced before the restart); when it changes, a
+  popup says the server was updated and that reloading brings the new
+  features, after saving the work in progress; it shows again only for a
+  further version change; nothing ever reloads the page automatically,
+  reloading stays the user's choice. Choices made with it, to revisit
+  with the user: the reference is the first heartbeat's version; the
+  popup offers "Recharger la page" and "Plus tard"; the header's version
+  badge keeps showing the version read at page load (`GET /api/version`),
+  white while it matches the server, light red once the server runs
+  another version (the user's rule: a reloaded page is in the right
+  version, so white).
 - `run_Populate.sh` (project root) is the start/stop/restart wrapper for
   `Automation/Populate.py` (the bulk library populator). It is *not*
   managed by `run_Falcon.sh` — Populate is a plain background process,

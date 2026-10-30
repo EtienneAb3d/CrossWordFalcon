@@ -521,7 +521,9 @@ json`. Holds all server-side state in plain module dicts/lists:
 **Endpoints**, grouped:
 
 - *Health/presence*: `GET /api/health`, `POST /api/presence` (heartbeat →
-  online count + CPU/GPU occupancy + queue lengths), `POST /api/pseudo/
+  online count + CPU/GPU occupancy + queue lengths + `version`, the
+  `VERSION.txt` value read once when the back end started —
+  `SERVER_VERSION`, Java `App.SERVER_VERSION`), `POST /api/pseudo/
   claim` (claims/verifies a nickname's secret word via `backend/secret_
   store.py`), `GET /api/system_info`, `GET /api/rss`, `GET /api/scrapp`.
 - *Library*: `GET|POST /api/library` (paginated, filterable listing;
@@ -590,6 +592,19 @@ json`. Holds all server-side state in plain module dicts/lists:
   automatic-generation attempt-preview snapshot as an editable draft),
   `/finish` (hand the current grid to automatic generation, locking
   already-placed letters — see below).
+- *Restart coordination* (used by `run_Falcon.sh`/`run_FalconJ.sh` on the
+  back end's own port, bound to 127.0.0.1; no `frontend/server.py` proxy
+  route, so a browser never reaches them): `GET /api/restart/status`
+  (`{version, draining, running_jobs}`, `running_jobs` the `JOBS` entries
+  still `running` — `_running_job_count`, Java `App.runningJobCount`) and
+  `POST /api/restart/drain` (`RestartDrainRequest`: `{}` starts or renews
+  the drain, `{"cancel": true}` lifts it; same answer). While draining
+  (`_DRAIN_UNTIL` ahead, `RESTART_DRAIN_TTL_S` 60 s after the last renewal;
+  Java `App.drainUntil`), `_new_job()` (Java `App.newJob`) refuses every new
+  job with 503 `{"code": "server_restarting"}` — every route creating a job
+  (generation, "Continuer", recompute, every Interactive start/resume/
+  from-library/from-attempt/finish) — shown by the web UI as
+  `errorServerRestarting` (`describeErrorCode`).
 - *Chat*: `POST /api/chat` (streamed "David FALCON" reply), `POST
   /api/devchat` (streamed "DevBot" reply, see `chatbot.py`).
 - *Qdrant admin* (localhost-only, gated by `frontend/server.py`): `GET
@@ -3736,7 +3751,13 @@ and `_similar_words_impl` the LLM expansion's duration (Java `App`,
   `max-age` recomputed on every toggle down to local midnight, so a
   reload later the same day restores the last state but a new day always
   shows it open again); the RSS/SCRAPP panel; the presence counter and
-  CPU/GPU/queue-length meters; the virtual keyboard; the welcome overlay
+  CPU/GPU/queue-length meters; the server-update notice
+  (`#version-update-overlay`, `checkServerVersion`: the first heartbeat's
+  `version` is the page's own, a later different one is announced once —
+  `announcedServerVersion` — with a "Recharger la page" button and a
+  "Plus tard" one, and the `#version-badge` pill turns light red,
+  `.outdated`, while the server's version differs from the page's; the
+  page never reloads on its own); the virtual keyboard; the welcome overlay
   and cookie-based preference storage (`cwf-prefs`).
 - **`style.css`** — one flat stylesheet organized by component in source
   order, IDs/classes mirroring `script.js`'s DOM references 1:1.
@@ -3851,7 +3872,17 @@ section for the full variable list and the dual-GPU LLM routing scheme.
   then starts `java -jar backend_java/dist/crosswordfalcon-backend.jar
   --port $CROSSWORDFALCON_BACKEND_PORT` (extra JVM options from
   `CROSSWORDFALCON_JAVA_OPTS`) plus the same Python middleware. Both
-  launchers write to `logs/backend.log`.
+  launchers write to `logs/backend.log`. Before stopping anything (after
+  the jar build for `run_FalconJ.sh`), both wait for the running back end
+  on `$CROSSWORDFALCON_BACKEND_PORT` to be idle (`wait_for_backend_idle`):
+  `POST /api/restart/drain` puts it in drain mode (renewed every
+  `RESTART_POLL_S`, 5 s, so it lapses on its own if the launcher dies), and
+  the launcher polls until `running_jobs` is 0; Ctrl-C lifts the drain and
+  aborts the restart. `--now` (or `CROSSWORDFALCON_RESTART_NOW=1`) skips the
+  wait, `CROSSWORDFALCON_RESTART_MAX_WAIT_S` (default 0 = no limit) gives up
+  waiting after that many seconds, and a back end that does not know the
+  drain route (an older version, 404) or does not answer is restarted at
+  once.
 - **`run_llm.sh`** — launches the default local clue-generation LLM
   server (llama.cpp's `llama_cpp.server`), or dispatches to `run_sglang.
   sh` when `LLM_ENGINE=sglang` and to `run_vllm.sh` when
