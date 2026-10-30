@@ -401,7 +401,8 @@ own word lists — the **Scrabble dictionary** (shown in blue) and the
 untick a list, move it up or down with the arrows, delete one of yours
 with the bin icon, and click its coloured square to choose the colour its
 words are shown in on the grids (orange by default for your
-dictionaries). **Chargement** uploads a word file from your computer for
+dictionaries). Under **Ajouter une liste personnelle**, **Chargement**
+uploads a word file from your computer for
 the language chosen next to it (shown in brackets in the list; a
 dictionary is only used for words of its language, so on a bilingual grid
 only for the across or the down words) — a

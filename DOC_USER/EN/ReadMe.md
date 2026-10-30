@@ -136,7 +136,8 @@ colour picker to change it. A word belongs to the first checked line that
 holds it: a Scrabble word ranked after one of the player's dictionaries
 holding it takes that dictionary's colour.
 
-Below the list, **Chargement / Upload** sends a word file from the
+Below the list, under the heading **Ajouter une liste personnelle / Add a
+personal list**, **Chargement / Upload** sends a word file from the
 computer, with the language its words are for (the selector next to it,
 set to the form's language). The file may be a scored list — one
 `word;score` per line, as in the Crossfire `.dict` and Crossword Compiler

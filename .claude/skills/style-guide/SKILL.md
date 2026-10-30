@@ -5015,3 +5015,9 @@ end through the real running API (interactive start/step/save,
   keyboard. **Visually confirmed** with Playwright/Chromium: shown when
   the heartbeat's version changes, not again for the same version, again
   for a newer one, no page reload.
+
+- **"Ajouter une liste personnelle" heading in the settings panel**
+  (`glossaryUploadTitle`), at the user's explicit request: an `<h3>` right
+  above `#glossary-upload-row`, styled by the existing `#glossary-settings
+  h3` rule like "Dictionnaires et glossaires" (1rem, bold). No new CSS or
+  token. **Visually confirmed** with Playwright/Chromium at 1400×900.

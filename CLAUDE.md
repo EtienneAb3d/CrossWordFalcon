@@ -3701,7 +3701,8 @@ step` has its own `STEP_PROXY_TIMEOUT_S` (60 s), the page its
   language and process), `glossaryOthers` with the known
   sources of the other words) — each with
   a colour square (`<input type="color">`, saved through `POST /api/
-  profile/preferences`); `#glossary-upload-btn` ("Chargement") sends a
+  profile/preferences`); under the "Ajouter une liste personnelle" heading
+  (`glossaryUploadTitle`), `#glossary-upload-btn` ("Chargement") sends a
   file (`uploadGlossaryFile`, base64, `GLOSSARY_MAX_UPLOAD_BYTES`) with the
   language of `#glossary-upload-language`. `loadGlossaryPrefs` runs at
   page load and after the welcome panel; `applyGlossaryColors` sets
