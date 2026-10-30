@@ -484,8 +484,9 @@ def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_noun
 # A row reference is the byte offset of a word's wordlist row shifted left
 # by two bits, the low bits naming its wordlist — the index of its path in a
 # lexicon's `sources`: 0 the freq wordlist, 1 the Scrabble wordlist, 2 the
-# multi-word wordlist (`data/wordlist_<lang>_multi.tsv`).
-ROW_SOURCE_FREQ, ROW_SOURCE_SCRABBLE, ROW_SOURCE_MULTI = 0, 1, 2
+# multi-word wordlist (`data/wordlist_<lang>_multi.tsv`), 3 a user's merged
+# dictionary lexicon (`backend/user_profiles.py`'s `lexicon_spec`).
+ROW_SOURCE_FREQ, ROW_SOURCE_SCRABBLE, ROW_SOURCE_MULTI, ROW_SOURCE_USER = 0, 1, 2, 3
 
 
 def _freq_row_ref(offset):
@@ -501,6 +502,11 @@ def _scrabble_row_ref(offset):
 def _multi_row_ref(offset):
     """Row reference of a multi-word-wordlist row starting at byte `offset`."""
     return offset << 2 | ROW_SOURCE_MULTI
+
+
+def _user_row_ref(offset):
+    """Row reference of a user-lexicon row starting at byte `offset`."""
+    return offset << 2 | ROW_SOURCE_USER
 
 
 def _row_forms(line, word, scrabble):
@@ -3092,7 +3098,7 @@ def challenge_word_grid_form(word):
 # every lexicon loaded for a grid, whatever its difficulty
 # (`merge_scrabble_lexicon`); the third candidate family of a slot — after
 # "Mots Défi" and the theme glossary, before the rest of the general
-# dictionary (`Filler.scrabble_first`); its words are shown in dark cyan
+# dictionary (`Filler.scrabble_first`); its words are shown in blue
 # (`scrabble_word_cells`).
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
@@ -3270,6 +3276,40 @@ def scrabble_words_for_languages(language, bilingual_language=None, difficulty=N
     return across
 
 
+def glossary_word_cells(grid, index, names):
+    """{glossary name: [[row, col], ...]} of `grid`'s fully lettered runs (2
+    letters or more, across or down) spelling a lexicon word that carries a
+    glossary key (the length's `gloss` column of `index`, a `DualIndex`):
+    the name is `names.for_direction(direction)[key]` (`names` a `DualSet`
+    of the ranked glossary ids, `None` for a direction without user
+    glossaries — its runs are skipped). Each list sorted, deduplicated."""
+    found = {}
+    if not grid:
+        return found
+    rows, cols = len(grid), len(grid[0])
+    for direction in ("across", "down"):
+        ranked = names.for_direction(direction)
+        if not ranked:
+            continue
+        idx = index.for_direction(direction)
+        outer, inner = (rows, cols) if direction == "across" else (cols, rows)
+        for a in range(outer):
+            run = []
+            for b in range(inner + 1):
+                cell = (a, b) if direction == "across" else (b, a)
+                ch = grid[cell[0]][cell[1]] if b < inner else BLACK
+                if ch != BLACK:
+                    run.append((cell, ch))
+                    continue
+                if len(run) >= 2 and all(c != WHITE for _, c in run):
+                    word = "".join(c for _, c in run)
+                    gloss = idx.get(len(word), {}).get("gloss")
+                    if gloss is not None and word in gloss and 0 <= gloss[word] < len(ranked):
+                        found.setdefault(ranked[gloss[word]], set()).update(cell for cell, _ in run)
+                run = []
+    return {name: [[r, c] for r, c in sorted(cells)] for name, cells in found.items()}
+
+
 def scrabble_word_cells(grid, scrabble_words):
     """[row, col] of every cell of a fully lettered run (2 letters or more,
     across or down) of `grid` spelling a word of `scrabble_words` (that
@@ -3320,6 +3360,37 @@ _MULTI_BREAKS_LOCK = threading.Lock()
 
 def multi_wordlist_path(language):
     return os.path.join(DATA_DIR, f"wordlist_{language}_multi.tsv")
+
+
+_GLOSSARY_ENTRY_COUNTS = {}
+
+
+def glossary_entry_counts(language):
+    """{"scrabble": n, "others": n}, the entries of `language`'s two Falcon
+    glossaries, every difficulty included: the distinct grid words of its
+    Scrabble wordlist and of its freq + multi-word wordlists (a word of both
+    glossaries counts in both). Read once per language and process."""
+    counts = _GLOSSARY_ENTRY_COUNTS.get(language)
+    if counts is not None:
+        return counts
+
+    def _words(path):
+        words = set()
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    word = line.rstrip("\n").split("\t", 1)[0]
+                    if _is_grid_word(word):
+                        words.add(word)
+        return words
+
+    freq_path = os.path.join(DATA_DIR, f"wordlist_{language}_freq.tsv")
+    counts = {
+        "scrabble": len(_words(scrabble_wordlist_path(language))),
+        "others": len(_words(freq_path) | _words(multi_wordlist_path(language))),
+    }
+    _GLOSSARY_ENTRY_COUNTS[language] = counts
+    return counts
 
 
 def freq_multi_wordlist_path(language):
@@ -3543,13 +3614,13 @@ class _WordColumn:
 
 
 def build_index(by_length, frequencies=None, dictionary_frequencies=None, refs=None,
-                sources=None, usage_scores=None):
+                sources=None, usage_scores=None, glossary_keys=None):
     """One entry per length: `words` (the list of its words, a word's id
     being its position there), `ids` ({word: id}), `pos` (per position, a
     {letter: set of words} map), `freq`/`dict_freq` (float32 columns,
     `_WordColumn`), `refs` (each word's row reference, an `array('I')`
     indexed by id, `None` when `refs` is not given) and `sources` (the
-    `(freq, Scrabble, multi-word wordlist path)` triple these references
+    `(freq, Scrabble, multi-word wordlist, user lexicon path)` quadruple these references
     point into, read back by `word_forms`). A word is held only as its
     bare A-Z grid form: its accented form and lemmas stay on disk.
 
@@ -3568,7 +3639,12 @@ def build_index(by_length, frequencies=None, dictionary_frequencies=None, refs=N
     — each word's usage score, `USAGE_SCORE_UNKNOWN` for a word the file
     does not rate, as an `array('b')` column; `None` when the language has
     no usage-score file. Read by `Filler.ordered_candidates` and
-    `_content_score`."""
+    `_content_score`.
+
+    `glossary_keys` (`_glossary_keys`, `None` by default) feeds `gloss` —
+    each word's glossary key, an `array('b')` column; `None` when the
+    lexicon merges no user dictionary. Read by `Filler.scrabble_first` and
+    `IngridSolver._family_of`."""
     frequencies = frequencies or {}
     dictionary_frequencies = dictionary_frequencies or {}
     index = {}
@@ -3591,6 +3667,9 @@ def build_index(by_length, frequencies=None, dictionary_frequencies=None, refs=N
             "usage": _WordColumn(
                 ids, array("b", (usage_scores.get(w, USAGE_SCORE_UNKNOWN) for w in words))
             ) if usage_scores is not None else None,
+            "gloss": _WordColumn(
+                ids, array("b", (glossary_keys[w] for w in words))
+            ) if glossary_keys is not None else None,
         }
     return index
 
@@ -3668,10 +3747,11 @@ def _lexicon_params(wordlist_path, max_words, difficulty):
     return language, by_usage, mw, easy, (str(wordlist_path), mw, easy, difficulty if by_usage else None)
 
 
-def _select_lexicon(wordlist_path, max_words, difficulty):
+def _select_lexicon(wordlist_path, max_words, difficulty, user=None):
     """The words of `wordlist_path`'s lexicon for `difficulty`, before
     indexing: `(by_length, refs, frequencies, proper_nouns, non_gloss,
-    scrabble, usage_scores)`.
+    scrabble, usage_scores, glossary_keys)` (`glossary_keys` `None` when
+    `user` is `None`, see `_merge_user_lexicon`).
 
     With no explicit `max_words` and a language that has a usage-score
     file (`usage_lexicon_active`), the whole freq, Scrabble and multi-word
@@ -3688,8 +3768,22 @@ def _select_lexicon(wordlist_path, max_words, difficulty):
     word is dropped), the no-gloss one only at "medium"/"hard"
     (`non_gloss` empty at "easy"). Otherwise the lexicon is cut to `max_words`, else to
     `DIFFICULTY_PRESETS[difficulty]` (`load_wordlist`), "easy" filters on
-    at "easy"."""
+    at "easy".
+
+    `user` (`None` by default): the user's glossaries
+    (`backend/user_profiles.py`'s `lexicon_spec`), merged in by
+    `_merge_user_lexicon`; with both Falcon glossaries (Scrabble, others)
+    disabled, only the user's words are left."""
     language, by_usage, mw, easy, key = _lexicon_params(wordlist_path, max_words, difficulty)
+    if user is not None and user[1] is None and user[2] is None:
+        usage_scores = load_usage_scores(language)
+        by_length, refs, frequencies = {}, {}, {}
+        glossary_keys = _merge_user_lexicon(
+            user, difficulty if by_usage else None, by_length, refs, frequencies,
+            usage_scores, frozenset(),
+        )
+        return (by_length, refs, frequencies, frozenset(), frozenset(), frozenset(),
+                usage_scores, glossary_keys)
     by_length, refs, frequencies, proper_nouns, non_gloss = load_wordlist(
         wordlist_path, mw, require_gloss=easy, exclude_proper_nouns=easy,
     )
@@ -3735,25 +3829,101 @@ def _select_lexicon(wordlist_path, max_words, difficulty):
                 length: kept for length, words in by_length.items()
                 if (kept := [w for w in words if w not in proper_nouns or w in scrabble])
             }
-    return by_length, refs, frequencies, proper_nouns, non_gloss, scrabble, usage_scores
+    glossary_keys = None
+    if user is not None:
+        glossary_keys = _merge_user_lexicon(
+            user, difficulty if by_usage else None, by_length, refs, frequencies,
+            usage_scores, scrabble,
+        )
+    return (by_length, refs, frequencies, proper_nouns, non_gloss, scrabble, usage_scores,
+            glossary_keys)
 
 
-def load_lexicon(wordlist_path, max_words, difficulty):
+def _merge_user_lexicon(user, difficulty, by_length, refs, frequencies, usage_scores, scrabble):
+    """Merges a user's glossaries (`user`, `backend/user_profiles.py`'s
+    `lexicon_spec`: `(merged lexicon path, Scrabble rank, others rank,
+    ranked ids)`) into a selected lexicon, in place, and returns its
+    glossary keys ({MOT: key}).
+
+    The Falcon dictionary is split in two ranked glossaries: the Scrabble
+    dictionary (the words of `scrabble`) and the others (the words whose
+    row is in the freq or multi-word wordlist, `ROW_SOURCE_FREQ`/
+    `ROW_SOURCE_MULTI`); a word only in a disabled one (rank `None`) leaves
+    the lexicon. A word of the merged file absent from the lexicon is added
+    with its own row reference (`_user_row_ref`), a frequency of at least
+    `NOISE_FREQUENCY_THRESHOLD` and its usage score — dropped when
+    `difficulty` (`None` when the lexicon is not selected by usage score)
+    has a `USAGE_DIFFICULTY_MIN_SCORE` above it. A word already in the
+    lexicon keeps its row, and takes the user's usage score when its user
+    dictionary ranks above every Falcon glossary holding it.
+
+    A word's glossary key is the lowest rank of the glossaries holding it:
+    it orders the candidate families after "Mots Défi" and the theme
+    glossary (`Filler.scrabble_first`, `IngridSolver._family_of`)."""
+    path, scrabble_rank, others_rank = user[0], user[1], user[2]
+    min_score = USAGE_DIFFICULTY_MIN_SCORE.get(difficulty) if difficulty else None
+    falcon_ranks = {}
+    for length in list(by_length):
+        kept = []
+        for w in by_length[length]:
+            ranks = []
+            if scrabble_rank is not None and w in scrabble:
+                ranks.append(scrabble_rank)
+            if others_rank is not None and (refs.get(w, 0) & 3) in (ROW_SOURCE_FREQ, ROW_SOURCE_MULTI):
+                ranks.append(others_rank)
+            if ranks:
+                falcon_ranks[w] = min(ranks)
+                kept.append(w)
+        if kept:
+            by_length[length] = kept
+        else:
+            del by_length[length]
+    keys = dict(falcon_ranks)
+    if path and os.path.exists(path):
+        for offset, line in iter_lines_with_offsets(path):
+            parts = line.split("\t")
+            if len(parts) < 5 or not _is_grid_word(parts[0]) or not parts[3].isdigit():
+                continue
+            word, score, rank = parts[0], int(parts[3]), int(parts[4])
+            if word in keys and word not in falcon_ranks:
+                continue
+            if word in falcon_ranks:
+                if rank < falcon_ranks[word]:
+                    if usage_scores is not None:
+                        usage_scores[word] = score
+                keys[word] = min(keys[word], rank)
+                falcon_ranks.pop(word)
+                continue
+            if min_score is not None and score < min_score:
+                continue
+            keys[word] = rank
+            refs[word] = _user_row_ref(offset)
+            by_length.setdefault(len(word), []).append(word)
+            frequencies[word] = max(frequencies.get(word, 0.0), float(NOISE_FREQUENCY_THRESHOLD))
+            if usage_scores is not None:
+                usage_scores[word] = score
+    return keys
+
+
+def load_lexicon(wordlist_path, max_words, difficulty, user=None):
     """The `LoadedLexicon` of `wordlist_path` for `difficulty`
     (`_select_lexicon`), with the language's Scrabble wordlist merged in
-    (`merge_scrabble_lexicon`) — built once per (path, cut, easy,
-    usage-selected difficulty) key and process, shared read-only by every
-    generation and Interactive session (the cache is emptied once it holds
-    `LEXICON_CACHE_MAX` entries)."""
+    (`merge_scrabble_lexicon`) and, with `user`, the user's dictionaries
+    (`_merge_user_lexicon`) — built once per (path, cut, easy,
+    usage-selected difficulty, user) key and process, shared read-only by
+    every generation and Interactive session (the cache is emptied once it
+    holds `LEXICON_CACHE_MAX` entries)."""
     language, by_usage, mw, easy, key = _lexicon_params(wordlist_path, max_words, difficulty)
+    key = key + (tuple(user) if user is not None else None,)
     with _LEXICON_CACHE_LOCK:
         loaded = _LEXICON_CACHE.get(key)
         if loaded is not None:
             return loaded
         (by_length, refs, frequencies, proper_nouns, non_gloss, scrabble,
-         usage_scores) = _select_lexicon(wordlist_path, max_words, difficulty)
+         usage_scores, glossary_keys) = _select_lexicon(wordlist_path, max_words, difficulty, user)
         sources = (str(wordlist_path), scrabble_wordlist_path(language) if language else None,
-                   multi_wordlist_path(language) if language else None)
+                   multi_wordlist_path(language) if language else None,
+                   user[0] if user is not None else None)
         dictionary_frequencies = load_dictionary_frequencies(wordlist_path)
         freq_multi = freq_multi_wordlist_path(language) if language else None
         if freq_multi and os.path.exists(freq_multi):
@@ -3761,9 +3931,10 @@ def load_lexicon(wordlist_path, max_words, difficulty):
                 dictionary_frequencies.setdefault(word, freq)
         index = build_index(
             by_length, frequencies, dictionary_frequencies, refs, sources, usage_scores,
+            glossary_keys,
         )
         _attach_lemmas(index, refs, sources)
-        del refs, frequencies, usage_scores
+        del refs, frequencies, usage_scores, glossary_keys
         loaded = LoadedLexicon(
             index, frozenset(proper_nouns - scrabble), frozenset(non_gloss - scrabble), scrabble,
         )
@@ -3952,7 +4123,7 @@ def _lemma_key(lemma):
 def _attach_lemmas(index, refs, sources):
     """Adds to every length entry of `index` (`build_index`) the lemma ids
     of its words, read from each word's own wordlist row (`refs`, the
-    `(freq, Scrabble, multi-word)` wordlist paths `sources`): `lemma_off`/`lemma_ids`
+    `(freq, Scrabble, multi-word, user lexicon)` paths `sources`): `lemma_off`/`lemma_ids`
     (word id -> its lemma ids, `lemma_ids[lemma_off[i]:lemma_off[i + 1]]`)
     and `lemma_keys`/`lemma_key_off`/`lemma_words` (sorted lemma ids ->
     the ids of the words of that length carrying them), all `array('I')`.
@@ -5323,6 +5494,8 @@ class Filler:
         # no slot selectable at all. This is also exactly the set surfaced
         # as the yellow "écarté" overlay (`excluded_zone_cells`).
         self._impossible_this_attempt = _RecentSlots(MAX_EXCLUDED_SLOTS)
+        # `_word_breaks_open_slot`'s options caches, one per slot tried.
+        self._word_break_options = {}
         # Copy of the assignment at the moment the largest number of slots
         # were filled simultaneously across the whole search, regardless of
         # exactly where it eventually failed — unlike self.assignment
@@ -6327,8 +6500,17 @@ class Filler:
         the words of slot `i`'s own Scrabble dictionary first, then the
         rest — the Scrabble family of the candidate order, applied after
         `ordered_candidates` and before the theme block is pulled ahead of
-        it. Returns `cands` itself when all, or none, belong to it."""
-        words = _priority_words_for(self.scrabble_words, self.slots[i])
+        it. Returns `cands` itself when all, or none, belong to it.
+
+        When the lexicon merges user dictionaries (the length's `gloss`
+        column, `_merge_user_lexicon`), `cands` is instead stably sorted by
+        glossary key: each glossary's words in the user's priority order,
+        the Falcon dictionary's Scrabble words first within it."""
+        slot = self.slots[i]
+        gloss = self.index.for_cells(slot).get(len(slot), {}).get("gloss")
+        if gloss is not None:
+            return sorted(cands, key=lambda w: gloss.get(w, 0))
+        words = _priority_words_for(self.scrabble_words, slot)
         if not words:
             return cands
         head = [w for w in cands if w in words]
@@ -9818,11 +10000,16 @@ class IngridSolver:
 
     def _family_of(self, i):
         """Slot `i`'s candidate family of a word: 0 "Mots Défi", 1 theme
-        glossary, 2 Scrabble dictionary, 3 the rest."""
+        glossary, 2 Scrabble dictionary, 3 the rest — with user
+        dictionaries merged in (the length's `gloss` column), 2 + the
+        word's glossary key (`_merge_user_lexicon`) instead of 2/3."""
         f = self.f
         cells = f.slots[i]
         challenge = f.challenge_words
         theme = _priority_words_for(f.priority_words, cells)
+        gloss = f.index.for_cells(cells).get(len(cells), {}).get("gloss")
+        if gloss is not None:
+            return lambda w: 0 if w in challenge else 1 if w in theme else 2 + gloss.get(w, 0)
         scrabble = _priority_words_for(f.scrabble_words, cells)
         return lambda w: 0 if w in challenge else 1 if w in theme else 2 if w in scrabble else 3
 
@@ -9939,7 +10126,7 @@ class IngridSolver:
             return None
         family = self._family_of(i)
         first = family(found[0][1])
-        found = [kw for kw in found if family(kw[1]) == first] if first < 3 else found
+        found = [kw for kw in found if family(kw[1]) == first]
         pick = f.rng.choices(range(len(found)), weights=INGRID_RANDOM_WORD_WEIGHTS[:len(found)])[0]
         return found[0][0], found[pick][1]
 
@@ -11222,13 +11409,22 @@ def _word_breaks_open_slot(filler, i, w, active_challenge_words, baseline):
     filler.assignment[i] = w
     filler.used_words.add(w)
     broken = None
-    options_cache = {}
+    # Shared by every candidate tried on slot `i` (see `Filler.slot_is_blocked`).
+    options_cache = filler._word_break_options.setdefault(i, {})
 
     def _challenge_can_fill(j):
         return bool(active_challenge_words) and any(
             w2 not in filler.used_words and filler._challenge_word_fits(j, w2)
             for w2 in active_challenge_words
         )
+
+    # A crossed slot with no word left stays so whatever letter `w` gives it:
+    # the verdict is known before any crossing slot is examined.
+    if any(j in baseline and not baseline[j] and not _challenge_can_fill(j)
+           for j in filler._crossing_slots[i]):
+        filler.assignment[i] = None
+        filler.used_words.discard(w)
+        return "crossing_blocked"
 
     for j, before in baseline.items():
         crossing = j in filler._crossing_slots[i]
@@ -12133,7 +12329,7 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
             "from_theme": placed_from == "theme",
             "from_challenge": placed_from == "challenge",
             # A general-dictionary word belonging to the Scrabble
-            # dictionary of its direction — shown in dark cyan.
+            # dictionary of its direction — shown in blue.
             "from_scrabble": (
                 placed_from not in ("theme", "challenge")
                 and word in _priority_words_for(filler.scrabble_words, cells)
@@ -12146,6 +12342,29 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
 # (`interactive_place_word_ingrid`): past it, the strict search stops and the
 # last resort runs.
 INGRID_INTERACTIVE_BUDGET = 20000
+
+
+def interactive_ingrid_blocked_cells(grid, rows, cols, index, challenge_words=None):
+    """Sorted `(row, col)` cells of the slots `IngridSolver.settle` sets aside
+    on `grid`: the emplacements "Suivant" treats as blocked under the "ingrid"
+    fill method, even when each one's own domain, taken alone, is not empty."""
+    pattern = [["#" if ch == BLACK else "." for ch in row] for row in grid]
+    known = {
+        (r, c): grid[r][c]
+        for r in range(rows)
+        for c in range(cols)
+        if grid[r][c] not in (BLACK, WHITE)
+    }
+    filler, slots = _build_interactive_filler(
+        pattern, rows, cols, index, random.Random(0), known, None, challenge_words or frozenset(),
+    )
+    solver = IngridSolver(filler, INGRID_INTERACTIVE_BUDGET)
+    solver.settle()
+    return sorted({
+        cell for i, cells in enumerate(slots)
+        if not solver.active[i] and filler.assignment[i] is None
+        for cell in cells
+    })
 
 
 def interactive_place_word_ingrid(grid, rows, cols, index, rng, priority_words=None,
@@ -12347,6 +12566,10 @@ def interactive_place_word_ingrid(grid, rows, cols, index, rng, priority_words=N
     for (r, c), ch in zip(cells, word):
         new_grid[r][c] = ch
     imp, low, deadlock = _interactive_fill_diagnostics(new_grid, rows, cols, index, challenge_words)
+    imp = [list(cell) for cell in sorted(
+        {tuple(c) for c in imp}
+        | set(interactive_ingrid_blocked_cells(new_grid, rows, cols, index, challenge_words))
+    )]
     family = solver._family_of(i)(word)
     return {
         "impossible": False,
@@ -12362,7 +12585,7 @@ def interactive_place_word_ingrid(grid, rows, cols, index, rng, priority_words=N
             "direction": slot_direction(cells),
             "from_theme": family == 1,
             "from_challenge": family == 0,
-            "from_scrabble": family == 2,
+            "from_scrabble": family >= 2 and word in _priority_words_for(filler.scrabble_words, cells),
         },
     }
 
@@ -17979,8 +18202,15 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                    permanent_black_cells=None, required_cells=None, challenge_words=None,
                    on_live_preview=None, words_per_node=WORDS_PER_NODE, black_symmetry=None,
                    start_grid=None, pattern_style=None, multi_word_percent=MULTI_WORD_PERCENT,
-                   pattern_mix=None, fill_method=FILL_METHOD_DEFAULT):
-    """`fill_method` (`FILL_METHOD_DEFAULT`, "ingrid", by default): the
+                   pattern_mix=None, fill_method=FILL_METHOD_DEFAULT, user_lexicon=None,
+                   bilingual_user_lexicon=None):
+    """`user_lexicon`/`bilingual_user_lexicon` (`None` by default): the
+    user's dictionaries merged into the across/down language's lexicon
+    (`load_lexicon`'s `user`, `backend/user_profiles.py`'s `lexicon_spec`),
+    which then orders every slot's candidates by the user's glossary
+    priority (`Filler.scrabble_first`, `IngridSolver._family_of`).
+
+    `fill_method` (`FILL_METHOD_DEFAULT`, "ingrid", by default): the
     search every attempt fills its grid with (see FILL_METHODS), passed to
     the workers through the pool initializer (`_worker_fill_method`).
 
@@ -18326,7 +18556,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # excluding proper nouns from the lexicon entirely — "medium"/"hard"
     # tolerating them within a per-grid quota (MAX_PROPER_NOUNS/
     # proper_noun_words below).
-    lexicon_across = load_lexicon(wordlist_path, max_words, difficulty)
+    lexicon_across = load_lexicon(wordlist_path, max_words, difficulty, user_lexicon)
     language = _lang_from_path(wordlist_path) or "fr"
     scrabble_across = lexicon_across.scrabble_words
 
@@ -18337,7 +18567,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # generation (`lexicon_down` then aliases `lexicon_across`).
     bilingual_active = bool(bilingual_wordlist_path) and bilingual_wordlist_path != wordlist_path
     if bilingual_active:
-        lexicon_down = load_lexicon(bilingual_wordlist_path, max_words, difficulty)
+        lexicon_down = load_lexicon(
+            bilingual_wordlist_path, max_words, difficulty, bilingual_user_lexicon,
+        )
         bilingual_language = _lang_from_path(bilingual_wordlist_path) or bilingual_wordlist_path
         scrabble_down = lexicon_down.scrabble_words
     else:

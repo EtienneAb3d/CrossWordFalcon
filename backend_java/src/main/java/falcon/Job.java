@@ -28,6 +28,8 @@ public final class Job {
         data.put("success_count", 0);
         data.put("grid_choice_count", null);
         data.put("grid_choice", null);
+        data.put("grid_choice_timeout_s", null);
+        data.put("grid_choice_activity", 0);
         data.put("resume_state", null);
         data.put("request", null);
         data.put("interactive", null);

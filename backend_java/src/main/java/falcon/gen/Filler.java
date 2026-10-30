@@ -324,6 +324,8 @@ public final class Filler {
     public Set<String> usedWords;
     public long checks;
     public RecentSlots impossibleThisAttempt = new RecentSlots(MAX_EXCLUDED_SLOTS);
+    /** Interactive.wordBreaksOpenSlot's options caches, one per slot tried. */
+    final Map<Integer, Map<Object, OptionsEntry>> wordBreakOptions = new HashMap<>();
     public String[] bestAssignment;
     public int bestAssignedCount;
     /** "ingrid" fill method (IngridSolver.solve): on failure, the open slot of the record whose crossings caused the
@@ -918,8 +920,16 @@ public final class Filler {
     }
 
     /** {@code cands} (already ordered) stably split into the words of slot i's own Scrabble dictionary first,
-     * then the rest; {@code cands} itself when all, or none, belong to it (mirrors Filler.scrabble_first). */
+     * then the rest; {@code cands} itself when all, or none, belong to it — or, when the lexicon merges user
+     * dictionaries (LenIndex.gloss), stably sorted by glossary key (mirrors Filler.scrabble_first). */
     public List<String> scrabbleFirst(int i, List<String> cands) {
+        int[] slot = slots.get(i);
+        LenIndex li = index.forCells(slot).get(slot.length);
+        if (li != null && li.gloss != null) {
+            List<String> sorted = new ArrayList<>(cands);
+            sorted.sort(java.util.Comparator.comparingInt(li::glossOf));
+            return sorted;
+        }
         if (scrabbleWords.isEmpty()) return cands;
         Set<String> words = scrabbleWords.forCells(slots.get(i));
         if (words.isEmpty()) return cands;

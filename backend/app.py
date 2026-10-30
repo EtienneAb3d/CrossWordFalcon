@@ -19,6 +19,7 @@ Usage:
     uvicorn backend.app:app --port 3001
 """
 import asyncio
+import base64
 import concurrent.futures
 import datetime
 import json
@@ -50,6 +51,7 @@ from .embedder import Embedder, EmbedderError
 from .qdrant_store import QdrantStore, QdrantStoreError, multi_collection_name
 from .secret_store import is_valid_pseudo
 from .secret_store import verify_or_claim as verify_or_claim_pseudo_secret
+from . import user_profiles
 from .puz_export import PUZ_MEDIA_TYPE, render_puz
 from .ipuz_export import IPUZ_MEDIA_TYPE, render_ipuz
 from .jpz_export import JPZ_MEDIA_TYPE, render_jpz
@@ -57,11 +59,12 @@ from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, GenerationPaused,
     BLACK_SYMMETRIES, PATTERN_STYLES, FILL_METHODS, FILL_METHOD_DEFAULT, valid_pattern_mix, pattern_style_of_mix, PREFILL_MIN_WORD_COUNT, style_index, WORDS_PER_NODE, MULTI_WORD_PERCENT, DualIndex, DualSet, build_letters_grid,
     build_word_entries, challenge_word_grid_form, extract_slots, generate_grid, slot_direction,
+    glossary_word_cells,
     word_forms,
     _interactive_fill_diagnostics, _interactive_letter_stats,
     _serialize_resume_state, interactive_boundary_candidates, interactive_clean_impossible_zones,
     interactive_crossing_words, interactive_minimize_black_cells,
-    interactive_place_word, interactive_place_word_ingrid, interactive_slot_candidates, lexicon_length_counts, lexicon_words,
+    glossary_entry_counts, interactive_ingrid_blocked_cells, interactive_place_word, interactive_place_word_ingrid, interactive_slot_candidates, lexicon_length_counts, lexicon_words,
     multi_lexicon_length_counts, multi_only_mots,
     load_lexicon,
     make_pattern,
@@ -1210,10 +1213,15 @@ class InteractiveImpossibleRequest(BaseModel):
     from this check — a "Mots Défi" word is considered part of the
     dictionary for it, at the user's explicit request, so it never shows
     up red as an "impossible"/invented word here (or, by extension, via
-    "Vérifier", which is built directly on top of this endpoint)."""
+    "Vérifier", which is built directly on top of this endpoint).
+
+    `fill_method` (`None` by default): with "ingrid", the cells of the slots
+    that method treats as blocked are added to `impossible_cells`
+    (`interactive_ingrid_blocked_cells`)."""
     job_id: str
     grid: list[list[str]]
     challenge_words: list[str] = []
+    fill_method: Optional[str] = None
 
 
 class InteractiveStatsRequest(BaseModel):
@@ -1441,6 +1449,9 @@ class InteractiveFromLibraryRequest(BaseModel):
     as its own brand-new GRID_WORK "Créations" entry — the original
     library record is never touched."""
     grid_id: str
+    # The requesting player, whose own dictionaries (USER_PROFILES/) the
+    # session merges in.
+    pseudo: Optional[str] = None
 
 
 class InteractiveFromAttemptRequest(BaseModel):
@@ -1468,6 +1479,9 @@ class InteractiveFromAttemptRequest(BaseModel):
     challenge_words: list[str] = []
     # The form's "Style de motif" (GenerateRequest.pattern_style).
     pattern_style: str = "airy"
+    # The requesting player, whose own dictionaries (USER_PROFILES/) the
+    # session merges in.
+    pseudo: Optional[str] = None
     # Word breaks ([row, col, direction]: a thicker line between that cell
     # and the next one in `direction`), typed by the author or set by a
     # placed multi-word expression; cleaned by `_clean_breaks`.
@@ -1991,6 +2005,119 @@ def pseudo_claim(req: PseudoClaimRequest):
     return {"ok": False, "code": "pseudo_taken"}
 
 
+class ProfileRequest(BaseModel):
+    """Body of every POST /api/profile/* route: the player's pseudo and
+    secret word (checked like POST /api/pseudo/claim, `_profile_owner`),
+    since these routes change files of USER_PROFILES/<pseudo>/."""
+    pseudo: str = ""
+    secret: str = ""
+
+
+class ProfilePreferencesRequest(ProfileRequest):
+    """Body of POST /api/profile/preferences: the reorderable glossary
+    list in priority order (`[{"id", "enabled", "color"}, ...]`, user
+    dictionaries and "falcon") and the colours of the fixed glossaries
+    (`{"challenge"|"theme": "#rrggbb"}`), see `user_profiles.
+    save_preferences`."""
+    glossaries: list[dict] = []
+    colors: Optional[dict] = None
+
+
+class ProfileUploadRequest(ProfileRequest):
+    """Body of POST /api/profile/upload: one word file (`content`, base64),
+    its name and the language its words are for."""
+    filename: str = ""
+    language: str = "fr"
+    content: str = ""
+
+
+class ProfileDeleteRequest(ProfileRequest):
+    """Body of POST /api/profile/delete: the user dictionary to remove."""
+    id: str = ""
+
+
+def _profile_owner(req):
+    """`req`'s pseudo when its secret word matches (`secret_store.
+    verify_or_claim`), `None` otherwise."""
+    pseudo = (req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH]
+    secret = (req.secret or "").strip()[:MAX_SECRET_LENGTH]
+    if not pseudo or not secret or not is_valid_pseudo(pseudo):
+        return None
+    return pseudo if verify_or_claim_pseudo_secret(pseudo, secret) else None
+
+
+_PROFILE_FORBIDDEN = {"ok": False, "code": "profile_forbidden"}
+
+
+@app.post("/api/profile/get")
+async def profile_get(req: ProfileRequest):
+    """The player's glossary preferences (`user_profiles.
+    load_preferences`): `{"ok": true, "preferences": {"glossaries",
+    "colors"}}`, or `{"ok": false, "code": "profile_forbidden"}` when the
+    pseudo/secret word do not match."""
+    pseudo = await asyncio.to_thread(_profile_owner, req)
+    if pseudo is None:
+        return _PROFILE_FORBIDDEN
+    prefs = await asyncio.to_thread(user_profiles.load_preferences, pseudo)
+    return {"ok": True, "preferences": prefs}
+
+
+@app.post("/api/profile/preferences")
+async def profile_preferences(req: ProfilePreferencesRequest):
+    """Saves the order, on/off state and colours of the player's glossaries
+    (`user_profiles.save_preferences`); `{"ok": false, "code":
+    "glossary_none_enabled"}` when every one would be disabled."""
+    pseudo = await asyncio.to_thread(_profile_owner, req)
+    if pseudo is None:
+        return _PROFILE_FORBIDDEN
+    prefs = await asyncio.to_thread(user_profiles.save_preferences, pseudo, req.glossaries, req.colors)
+    if prefs is None:
+        return {"ok": False, "code": "glossary_none_enabled"}
+    return {"ok": True, "preferences": prefs}
+
+
+@app.post("/api/profile/upload")
+async def profile_upload(req: ProfileUploadRequest):
+    """Stores a word file in the player's folder and adds it as a user
+    dictionary (`user_profiles.add_dictionary`): `{"ok": true,
+    "preferences", "dictionary"}`, or `{"ok": false, "code":
+    "wordlist_unrecognised"|"upload_too_large"|"upload_invalid"}`."""
+    pseudo = await asyncio.to_thread(_profile_owner, req)
+    if pseudo is None:
+        return _PROFILE_FORBIDDEN
+    try:
+        data = base64.b64decode(req.content, validate=True)
+    except ValueError:
+        return {"ok": False, "code": "upload_invalid"}
+    if len(data) > user_profiles.MAX_UPLOAD_BYTES:
+        return {"ok": False, "code": "upload_too_large"}
+    start = time.monotonic()
+    try:
+        prefs, item = await asyncio.to_thread(
+            user_profiles.add_dictionary, pseudo, req.filename, data, req.language,
+        )
+    except user_profiles.WordlistUnrecognised as exc:
+        logger.info("profile upload %r by %s: not recognised (%s)", req.filename, pseudo, exc)
+        return {"ok": False, "code": "wordlist_unrecognised"}
+    logger.info("profile upload %r by %s: %d entries, scored=%s, %.1fs", req.filename, pseudo,
+                item["entries"], item["scored"], time.monotonic() - start)
+    return {"ok": True, "preferences": prefs, "dictionary": item}
+
+
+@app.post("/api/profile/delete")
+async def profile_delete(req: ProfileDeleteRequest):
+    """Removes one of the player's dictionaries (`user_profiles.
+    delete_dictionary`); `{"ok": false, "code": "glossary_unknown"}` when
+    it does not exist."""
+    pseudo = await asyncio.to_thread(_profile_owner, req)
+    if pseudo is None:
+        return _PROFILE_FORBIDDEN
+    prefs = await asyncio.to_thread(user_profiles.delete_dictionary, pseudo, req.id)
+    if prefs is None:
+        return {"ok": False, "code": "glossary_unknown"}
+    return {"ok": True, "preferences": prefs}
+
+
 async def _presence_sweep_scheduler():
     """Runs in the background for the whole life of the process: every
     PRESENCE_SWEEP_INTERVAL_S (10s), recomputes the presence headcount and
@@ -2294,6 +2421,15 @@ def _library_page(preferred_language, page, seen_filter, seen_ids,
         # "Voir les grilles archivées" mention.
         "has_archived": has_archived_grids(),
     }
+
+
+@app.get("/api/glossary/counts")
+async def glossary_counts(language: str = ""):
+    """The entries of `language`'s two Falcon glossaries, for the Settings
+    panel's list (`crossword_gen.glossary_entry_counts`)."""
+    if language not in WORDLISTS:
+        raise HTTPException(status_code=400, detail=f"langue inconnue : {language!r}")
+    return await asyncio.to_thread(glossary_entry_counts, language)
 
 
 @app.get("/api/usage_stats")
@@ -3762,6 +3898,13 @@ def _new_job():
         # The `choices` index the player clicked (POST /api/generate/
         # choose/{job_id}), `None` until then.
         "grid_choice": None,
+        # Seconds the player has to pick, restarted by each sign of activity
+        # (the web UI's countdown), `None` whenever no choice is pending.
+        "grid_choice_timeout_s": None,
+        # Signs of the player's activity received while the choice is pending
+        # (POST /api/generate/choose/{job_id}/activity): `_await_grid_choice`
+        # restarts its deadline whenever this number changes.
+        "grid_choice_activity": 0,
         # "Continuer" button (see POST /api/generate/continue/{job_id}
         # below), at the user's explicit request: set once generate_grid()
         # exhausts every one of its `attempts` without finding a fillable
@@ -4033,6 +4176,90 @@ async def _scrabble_words(language, bilingual_language=None, difficulty=None):
     )
 
 
+async def _user_lexicons(pseudo, language, bilingual_language=None):
+    """`(across, down)` user-dictionary specs of a grid made by `pseudo`
+    (`user_profiles.lexicon_specs`, `None` per language whose lexicon the
+    player's glossaries leave as by default), merged into its lexicon by
+    `load_lexicon`."""
+    pseudo = (pseudo or "").strip()[:MAX_PSEUDO_LENGTH]
+    if not pseudo:
+        return None, None
+    return await asyncio.to_thread(
+        user_profiles.lexicon_specs, pseudo, language,
+        bilingual_language if bilingual_language != language else None,
+    )
+
+
+async def _user_glossary(pseudo, language, difficulty, bilingual_language=None, index=None):
+    """`(index, names)` locating each word's glossary on a grid made by
+    `pseudo`, `None` when neither language has player glossaries
+    (`_user_lexicons`): `index` the grid's DualIndex (the session's own, or
+    the lexicons `load_lexicon` caches for `difficulty`), `names` a DualSet
+    of the ranked glossary ids per direction (`None` for a language without
+    player glossaries) — see crossword_gen.py's `glossary_word_cells`."""
+    across, down = await _user_lexicons(pseudo, language, bilingual_language)
+    if across is None and down is None:
+        return None
+    if index is None:
+        a = await asyncio.to_thread(
+            load_lexicon, str(WORDLISTS[language]), None, difficulty, across,
+        )
+        d = a
+        if bilingual_language and bilingual_language != language:
+            d = await asyncio.to_thread(
+                load_lexicon, str(WORDLISTS[bilingual_language]), None, difficulty, down,
+            )
+        index = DualIndex(a.index, d.index)
+    return index, DualSet(across[3] if across else None, down[3] if down else None)
+
+
+def _glossary_cells(grid, glossary, scrabble_words):
+    """`(scrabble cells, {user dictionary id: cells})` of `grid` with player
+    glossaries (`_user_glossary`): a run is coloured after its word's own
+    glossary (`glossary_word_cells`), the Scrabble dictionary's runs blue
+    and the others' left plain; a direction without player glossaries
+    keeps the plain Scrabble-set colouring (`scrabble_word_cells`)."""
+    index, names = glossary
+    cells = glossary_word_cells(grid, index, names)
+    plain = DualSet(
+        frozenset() if names.across else _for_direction(scrabble_words, "across"),
+        frozenset() if names.down else _for_direction(scrabble_words, "down"),
+    )
+    scrabble = {tuple(c) for c in cells.pop(user_profiles.SCRABBLE_ID, [])}
+    scrabble.update(tuple(c) for c in scrabble_word_cells(grid, plain))
+    cells.pop(user_profiles.OTHERS_ID, None)
+    return [list(c) for c in sorted(scrabble)], {gid: cells[gid] for gid in sorted(cells)}
+
+
+def _for_direction(words, direction):
+    if isinstance(words, DualSet):
+        return words.for_direction(direction) or frozenset()
+    return words or frozenset()
+
+
+def _placed_glossary(placed, glossary):
+    """Sets a placed word's (`interactive_place_word`'s `placed`)
+    `glossary` — the user dictionary id it is coloured with, `None` for a
+    "Mots Défi"/theme word or a Falcon word — and, with player glossaries
+    in its direction, `from_scrabble` (its glossary is the Scrabble
+    dictionary)."""
+    placed["glossary"] = None
+    if glossary is None or placed.get("from_theme") or placed.get("from_challenge"):
+        return
+    index, names = glossary
+    direction = placed.get("direction")
+    ranked = names.for_direction(direction)
+    word = placed.get("word") or ""
+    if not ranked:
+        return
+    gloss = index.for_direction(direction).get(len(word), {}).get("gloss")
+    key = gloss.get(word, -1) if gloss is not None else -1
+    gid = ranked[key] if 0 <= key < len(ranked) else None
+    placed["from_scrabble"] = gid == user_profiles.SCRABBLE_ID
+    if gid not in user_profiles.FALCON_IDS:
+        placed["glossary"] = gid
+
+
 async def _multi_breaks(language, bilingual_language=None):
     """The grid's expression word breaks (crossword_gen.py's
     `multi_breaks_for_languages`), read once per language and process."""
@@ -4042,18 +4269,23 @@ async def _multi_breaks(language, bilingual_language=None):
     )
 
 
-def _annotate_scrabble_cells(examples, scrabble_words, multi_breaks=None):
+def _annotate_scrabble_cells(examples, scrabble_words, multi_breaks=None, glossary=None):
     """Adds `scrabble_cells` to every preview example: the cells of each
     fully lettered run of its `example_grid` spelling a word of the grid's
     Scrabble dictionary (crossword_gen.py's `scrabble_word_cells`), shown
-    in dark cyan by the web UI; and `breaks`, the word breaks of the runs
-    spelling a multi-word expression (`word_break_edges`)."""
+    in blue by the web UI; `breaks`, the word breaks of the runs
+    spelling a multi-word expression (`word_break_edges`); and
+    with player glossaries (`glossary`, `_user_glossary`), `scrabble_cells`
+    and `user_cells` ({user dictionary id: cells}) follow each word's own
+    glossary (`_glossary_cells`), shown in that glossary's colour."""
     if not examples:
         return
     for ex in examples:
         eg = ex.get("example_grid")
         if eg:
-            if scrabble_words:
+            if glossary is not None:
+                ex["scrabble_cells"], ex["user_cells"] = _glossary_cells(eg, glossary, scrabble_words)
+            elif scrabble_words:
                 ex["scrabble_cells"] = scrabble_word_cells(eg, scrabble_words)
             if multi_breaks:
                 ex["breaks"] = word_break_edges(eg, multi_breaks)
@@ -4094,11 +4326,14 @@ async def _await_grid_choice(job, choices, progress, cancel_event, short_id,
     grid`'s `choices`, by decreasing content score) as the "choose_grid"
     step, then waits for the player's click (POST /api/generate/choose/
     {job_id}) and returns the chosen grid's result dict. Honors "Stop"
-    while waiting; after `GRID_CHOICE_TIMEOUT_S` with no click, keeps the
-    grid `generate_grid` picked itself (`recommended`)."""
+    while waiting; after `GRID_CHOICE_TIMEOUT_S` with neither a click nor a
+    sign of the player's activity (POST /api/generate/choose/{job_id}/
+    activity), keeps the grid `generate_grid` picked itself (`recommended`)."""
     theme_set = set(theme_priority_words or ())
     job["grid_choice"] = None
     job["grid_choice_count"] = len(choices)
+    job["grid_choice_timeout_s"] = GRID_CHOICE_TIMEOUT_S
+    job["grid_choice_activity"] = 0
     progress(
         "choose_grid", count=len(choices),
         examples=[
@@ -4118,13 +4353,18 @@ async def _await_grid_choice(job, choices, progress, cancel_event, short_id,
         ],
     )
     deadline = time.monotonic() + GRID_CHOICE_TIMEOUT_S
+    activity_seen = 0
     try:
         while job["grid_choice"] is None and time.monotonic() < deadline:
             if cancel_event.is_set():
                 raise GenerationCancelled()
             await asyncio.sleep(GRID_CHOICE_POLL_INTERVAL_S)
+            if job["grid_choice_activity"] != activity_seen:
+                activity_seen = job["grid_choice_activity"]
+                deadline = time.monotonic() + GRID_CHOICE_TIMEOUT_S
     finally:
         job["grid_choice_count"] = None
+        job["grid_choice_timeout_s"] = None
     index = job["grid_choice"]
     if index is None:
         index = next((i for i, c in enumerate(choices) if c["recommended"]), 0)
@@ -4303,11 +4543,19 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
     task = GenerationTask(job_id=job_id, req=req, resume_state=resume_state)
     # The grid's Scrabble word set (generate_grid merges the Scrabble
     # wordlist into its lexicon by itself): the source of every preview's
-    # dark-cyan `scrabble_cells` (`_annotate_scrabble_cells`).
+    # blue `scrabble_cells` (`_annotate_scrabble_cells`).
     scrabble_words = await _scrabble_words(req.language, req.bilingual_language, req.difficulty)
     # The expressions' word breaks: every preview's and the final grid's
     # `breaks` (`_annotate_scrabble_cells`, `word_break_edges`).
     multi_breaks = await _multi_breaks(req.language, req.bilingual_language)
+    # The grid author's own dictionaries (USER_PROFILES/): merged into the
+    # lexicon, and every preview's `user_cells`.
+    user_lexicon, bilingual_user_lexicon = await _user_lexicons(
+        req.pseudo, req.language, req.bilingual_language,
+    )
+    user_glossary = await _user_glossary(
+        req.pseudo, req.language, req.difficulty, req.bilingual_language,
+    )
 
     # Timestamps of generate_grid()'s two internal boundaries that
     # progress() below needs to split generation duration from
@@ -4375,7 +4623,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         # navigable, l'affichage temps réelle ne doit pas se faire, jusqu'à
         # ce que l'utilisateur revienne au dernier état de l'historique."
         _apply_zone_revert(examples)
-        _annotate_scrabble_cells(examples, scrabble_words, multi_breaks)
+        _annotate_scrabble_cells(examples, scrabble_words, multi_breaks, user_glossary)
         job["live_preview"] = examples
         if examples:
             last_live_preview["examples"] = examples
@@ -4409,7 +4657,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         # `example_grid` this job's own `examples_history` ever stores gets
         # the same cell-by-cell revert as the live-preview channel does.
         _apply_zone_revert(data.get("examples"))
-        _annotate_scrabble_cells(data.get("examples"), scrabble_words, multi_breaks)
+        _annotate_scrabble_cells(data.get("examples"), scrabble_words, multi_breaks, user_glossary)
         if step == "minimizing" and last_live_preview["examples"]:
             # See `last_live_preview` above. Each tile's `previous` field is
             # a STOP_DUMP-only diagnostic, never shown, so it is dropped.
@@ -4714,6 +4962,8 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                         pattern_mix=req.pattern_mix,
                         start_grid=start_grid,
                         fill_method=req.fill_method,
+                        user_lexicon=user_lexicon,
+                        bilingual_user_lexicon=bilingual_user_lexicon,
                     )
                     break
                 except GenerationPaused as p:
@@ -5207,7 +5457,8 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         logger.exception("[%s] unhandled error during generation", short_id)
 
 
-async def _load_interactive_index(language, difficulty, bilingual_language=None, pattern_style=None):
+async def _load_interactive_index(language, difficulty, bilingual_language=None, pattern_style=None,
+                                  pseudo=None):
     """Loads the wordlist/frequency index for one language/difficulty and
     wraps it as the DualIndex every interactive-mode helper
     (interactive_place_word, interactive_slot_candidates, _interactive_
@@ -5230,19 +5481,23 @@ async def _load_interactive_index(language, difficulty, bilingual_language=None,
     resume_job` (resume). Returns `(index, known_words)` — `known_words`
     is the union of every word actually in either lexicon loaded (just
     the one lexicon's own words for a monolingual session), used to
-    filter a theme/saved `priority_words` list down to real entries."""
+    filter a theme/saved `priority_words` list down to real entries.
+
+    `pseudo`'s own dictionaries (USER_PROFILES/, `_user_lexicons`) are
+    merged into each language's lexicon."""
+    user_across, user_down = await _user_lexicons(pseudo, language, bilingual_language)
     # The process-wide lexicon cache (crossword_gen.py's `load_lexicon`):
     # the words selected for `difficulty` and the Scrabble wordlist
     # already merged in, exactly as generate_grid uses it, and shared by
     # every session and generation.
     across = await asyncio.to_thread(
-        load_lexicon, str(WORDLISTS[language]), None, difficulty,
+        load_lexicon, str(WORDLISTS[language]), None, difficulty, user_across,
     )
     is_bilingual = bool(bilingual_language) and bilingual_language != language
     if not is_bilingual:
         return style_index(DualIndex(across.index, across.index), pattern_style), across
     down = await asyncio.to_thread(
-        load_lexicon, str(WORDLISTS[bilingual_language]), None, difficulty,
+        load_lexicon, str(WORDLISTS[bilingual_language]), None, difficulty, user_down,
     )
     return style_index(DualIndex(across.index, down.index), pattern_style), _KnownWords(across, down)
 
@@ -5302,7 +5557,7 @@ async def _run_interactive_job(job_id, req):
         bilingual_language = req.bilingual_language
         is_bilingual = bool(bilingual_language) and bilingual_language != req.language
         index, known = await _load_interactive_index(
-            req.language, req.difficulty, bilingual_language, req.pattern_style,
+            req.language, req.difficulty, bilingual_language, req.pattern_style, req.pseudo,
         )
 
         # Same MOT-form normalization generate_grid applies to its own
@@ -5355,6 +5610,10 @@ async def _run_interactive_job(job_id, req):
             # The expressions' word breaks, for each placed word's
             # `breaks` (`_add_placed_breaks`).
             "multi_breaks": multi_breaks,
+            # Each word's glossary (`placed.glossary`, `_placed_glossary`).
+            "glossary": await _user_glossary(
+                req.pseudo, req.language, req.difficulty, bilingual_language, index,
+            ),
             "rng": rng,
             # The original seed this session started from — kept around
             # purely so an autosave (POST /api/interactive/save_work) can
@@ -5864,6 +6123,8 @@ async def interactive_step(req: InteractiveStepRequest):
             req.multi_word_percent, req.selected_cells, req.zone_cells,
         )
     _add_placed_breaks(placed.get("placed"), sess.get("multi_breaks"))
+    if placed.get("placed"):
+        _placed_glossary(placed["placed"], sess.get("glossary"))
     if placed.get("zone_complete"):
         return {"width": cols, "height": rows, "grid": req.grid,
                 "placed": None, "impossible": False, "zone_complete": True,
@@ -6081,6 +6342,14 @@ async def interactive_impossible(req: InteractiveImpossibleRequest):
         _interactive_fill_diagnostics, [list(row) for row in req.grid], rows, cols, sess["index"],
         challenge_words,
     )
+    if req.fill_method is not None:
+        _validate_fill_method(req.fill_method)
+    if req.fill_method == "ingrid":
+        blocked = await asyncio.to_thread(
+            interactive_ingrid_blocked_cells, [list(row) for row in req.grid], rows, cols, sess["index"],
+            challenge_words,
+        )
+        imp = [list(cell) for cell in sorted({tuple(c) for c in imp} | set(blocked))]
     return {"impossible_cells": imp, "low_candidate_cells": low, "deadlock_cells": deadlock}
 
 
@@ -6443,7 +6712,7 @@ async def interactive_resume(req: InteractiveWorkIdRequest):
     return {"job_id": job_id}
 
 
-async def _run_interactive_resume_job(job_id, record):
+async def _run_interactive_resume_job(job_id, record, profile_pseudo=None):
     """Background job behind POST /api/interactive/resume. Unlike
     `_run_interactive_job` (fresh start: generates a brand-new pattern,
     places one first word), this rebuilds the session's own index/
@@ -6454,9 +6723,13 @@ async def _run_interactive_resume_job(job_id, record):
     freshly reloaded lexicon exactly like a fresh start already does.
     Fresh diagnostics (`_interactive_fill_diagnostics`) are recomputed on
     the resumed grid so the impossible/low-candidate highlights are
-    accurate immediately, not stale from whenever it was last saved."""
+    accurate immediately, not stale from whenever it was last saved.
+
+    `profile_pseudo` (the record's own `pseudo` when `None`): the player
+    whose dictionaries (USER_PROFILES/) are merged into the lexicon."""
     job = JOBS[job_id]
     short_id = job_id[:8]
+    profile_pseudo = profile_pseudo or record.get("pseudo")
 
     def progress(step, **data):
         job["step"] = {"code": step, **data}
@@ -6486,7 +6759,7 @@ async def _run_interactive_resume_job(job_id, record):
         # absent from an older record): "grouped" drops the 2-letter words.
         index, known = await _load_interactive_index(
             language, difficulty, bilingual_language,
-            (record.get("generation_params") or {}).get("pattern_style"),
+            (record.get("generation_params") or {}).get("pattern_style"), profile_pseudo,
         )
         priority_words = frozenset(
             u for w in (record.get("priority_words") or ())
@@ -6525,6 +6798,9 @@ async def _run_interactive_resume_job(job_id, record):
             "priority_words": priority_words,
             "scrabble_words": await _scrabble_words(language, bilingual_language, difficulty),
             "multi_breaks": await _multi_breaks(language, bilingual_language),
+            "glossary": await _user_glossary(
+                profile_pseudo, language, difficulty, bilingual_language, index,
+            ),
             "rng": rng,
             "seed": seed,
             # The GRID_WORK file this session started from — read once by
@@ -6738,7 +7014,7 @@ async def interactive_from_library(req: InteractiveFromLibraryRequest):
         raise HTTPException(status_code=404, detail="grille introuvable dans la bibliothèque")
     job_id = _new_job()
     synthetic = _library_record_to_interactive(record)
-    task = asyncio.create_task(_run_interactive_resume_job(job_id, synthetic))
+    task = asyncio.create_task(_run_interactive_resume_job(job_id, synthetic, req.pseudo))
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
     return {"job_id": job_id}
@@ -6779,7 +7055,7 @@ async def interactive_from_attempt(req: InteractiveFromAttemptRequest):
         "seed": 0,
         "origin": None,
     }
-    task = asyncio.create_task(_run_interactive_resume_job(job_id, synthetic))
+    task = asyncio.create_task(_run_interactive_resume_job(job_id, synthetic, req.pseudo))
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
     return {"job_id": job_id}
@@ -7200,6 +7476,20 @@ def generate_choose(job_id: str, req: GridChoiceRequest):
         raise HTTPException(status_code=422, detail="index de grille hors limites")
     job["grid_choice"] = req.index
     return {"status": "chosen", "index": req.index}
+
+
+@app.post("/api/generate/choose/{job_id}/activity")
+def generate_choose_activity(job_id: str):
+    """A sign that the player is still in front of the screen while a grid
+    choice is pending: restarts the wait of `_await_grid_choice`, like the
+    web UI's countdown. 409 when no choice is pending."""
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job inconnu (expiré ou jamais existé)")
+    if job.get("grid_choice_count") is None or job.get("grid_choice") is not None:
+        raise HTTPException(status_code=409, detail="aucun choix de grille en attente")
+    job["grid_choice_activity"] += 1
+    return {"status": "renewed"}
 
 
 @app.post("/api/generate/continue/{job_id}", status_code=202)

@@ -56,6 +56,9 @@ does not reappear).
   the title and the right-hand badges (`#user-pseudo`). While no pseudo
   is set it shows a "set a nickname" label instead. Clicking it reopens
   the welcome panel to change the pseudo or the language.
+- A gear icon right of the pseudo (`#settings-btn`, shown once a pseudo
+  and its secret word are set) opens the **Settings** panel — see
+  "Settings" below.
 - A small green pill on the right (`#online-count`) shows how many
   distinct people are using the app right now — "x en ligne / x online".
   It refreshes every 2 seconds (`POST /api/presence`); tabs sharing the
@@ -92,6 +95,64 @@ does not reappear).
   **GitHub Discussions** forum (`#discussions-link` — questions,
   suggestions, bug reports) and its **source code** on GitHub
   (`#github-link`).
+
+## Settings
+
+The **Paramètres / Settings** panel (`#settings-overlay`,
+`frontend/static/script.js`, `openSettingsOverlay`/`renderGlossaryList`)
+holds, for now, one tool: the player's **dictionaries and glossaries**,
+listed and numbered in their order of priority — the order in which the
+grid filler tries their words, each glossary's words being tried first as
+long as they remain possible:
+
+1. **Mots Défi (s'ils existent)** — always listed, used when the
+   generation form holds challenge words;
+2. **Glossaire thématique (s'il existe)** — always listed, used when
+   the form holds theme keywords (shown under it);
+3. then, in the order the player chooses, the player's own dictionaries,
+   the **Dictionnaire Scrabble** (the language's official Scrabble list)
+   and **Autres (Statistiques, Wiktionnaire)** — the app's other words:
+   the corpus-frequency list (checked by Hunspell) and the Wiktionary
+   expressions. By default the Scrabble dictionary comes before the
+   others and an uploaded dictionary goes right before them. Each
+   dictionary serving the language selected in the form, or its bilingual
+   language, shows its number of entries for that language
+   (`frontend/static/script.js`, `renderGlossaryList`).
+
+From that third group on, each line has a checkbox to switch the
+dictionary off (at least one of them stays checked: unchecking the last
+one shows a message instead), and up/down arrows to change its priority.
+A dictionary the player uploaded also has a trash-can button deleting it
+(after a confirmation); its name is followed by its language in
+parentheses, and below it come its number of words and "no scores" when
+the file had none. A dictionary only serves the words of its own
+language: on a bilingual grid, the across words draw on the dictionaries
+of the grid's first language, the down words on those of its second. Every line starts with a coloured
+square: the colour its words are shown in on the grids (green for "Mots
+Défi", magenta for the theme glossary, blue for the Scrabble dictionary,
+the plain text colour for "Autres" — every letter in no other colour —,
+orange for an uploaded dictionary); clicking the square opens the usual
+colour picker to change it. A word belongs to the first checked line that
+holds it: a Scrabble word ranked after one of the player's dictionaries
+holding it takes that dictionary's colour.
+
+Below the list, **Chargement / Upload** sends a word file from the
+computer, with the language its words are for (the selector next to it,
+set to the form's language). The file may be a scored list — one
+`word;score` per line, as in the Crossfire `.dict` and Crossword Compiler
+`.txt` lists of spreadthewordlist.com — whose scores become usage scores
+(50 and more give 5, 40-49 give 4, and so on), or a plain list of words
+separated by any punctuation, each word then rated 5. Expressions with
+spaces, hyphenated compounds and apostrophes are accepted; other
+characters are dropped. A file in which no words can be clearly
+identified is refused with a message. Everything — the order, the
+checkboxes, the colours and the uploaded files — is kept in the player's
+own folder on the server and applies to every grid they generate or
+build in Interactive mode in that dictionary's language (POST
+`/api/profile/*`). A dictionary unchecked or in another language is
+ignored; a word only in unchecked lines leaves the grid's vocabulary, so
+with both "Dictionnaire Scrabble" and "Autres" unchecked only the
+player's own dictionaries fill the grid.
 
 ## Generation form
 
@@ -433,11 +494,17 @@ main form (`#run-actions`); "Continuer" sits above the "Générer les mots crois
   finished grids, it pauses before writing any definition: the preview
   shows every finished grid, sorted by decreasing score (the score of each
   tile is shown on its stats line), the one the generator recommends
-  framed in green, and the status line asks you to pick one. Hovering a
+  framed in green, and a large centered title above the grids
+  (`#grid-choice-title`, `setPendingGridChoice`) asks you to pick one, with
+  a countdown to the automatic choice. Hovering a
   tile tints it; clicking it selects that grid (a blue frame marks it) and
   the definitions are then written for that grid only. Letters show as "✴"
-  unless **Voir les mots (spoiler)** is on, like every other preview. Without a click within
-  10 minutes, the recommended grid is kept; **Stop** still cancels while
+  unless **Voir les mots (spoiler)** is on, like every other preview. The
+  countdown starts at 10 minutes, moves down by steps of 15 seconds and goes back to 10 minutes whenever you
+  move the mouse, click, scroll or type anywhere on the page, so you can take
+  your time and look words up in the Dictionnaire
+  (`noteGridChoiceActivity`); when it reaches 0, the recommended grid is
+  kept. **Stop** still cancels while
   the choice is pending. A single finished grid is used directly, with no
   choice to make.
 - **Continuer / Continue** (`#continue-btn`, `frontend/static/script.js`,
@@ -967,9 +1034,13 @@ Défi (personnalisation)" list is shown in bold green letters instead —
 the same green already used for a challenge word on the Interactive
 mode grid (see "Mots Défi (personnalisation) / Challenge Words" below).
 Any other complete word that belongs to the language's official Scrabble
-word list is shown in bold dark-cyan letters; magenta and green win over
-dark cyan on a cell shared with a crossing theme or challenge word
-(`frontend/static/script.js`, `renderAttemptPreview`).
+word list is shown in bold blue letters, and a word coming from one
+of the player's own dictionaries in that dictionary's colour (orange by
+default) — a word takes the colour of the first checked list holding it
+in the Settings panel, the other words keeping the "Autres" colour;
+magenta and green win over them on a cell shared with a crossing theme or
+challenge word. Each of these colours can be changed in the Settings
+panel (`frontend/static/script.js`, `renderAttemptPreview`).
 A bold dashed frame marks the "attention
 zone", where the search may currently place its next word: a 21x21
 window, smaller along the right and bottom edges of the grid. It starts
@@ -1271,6 +1342,15 @@ to the left of **Mots / Words** to open it as an overlay panel.
   `scheduleInteractiveStatsRefresh`). A cell where the two directions
   share no letter shows none. Purely informational: it never places a
   letter itself. Click it again to hide the letters.
+- Blocked emplacements show in red on their own: the red is recomputed a
+  moment after every change to the grid or to the **Mots Défi** list, and it
+  stays visible across the selected word's green band
+  (`frontend/static/script.js`, `scheduleInteractiveDiagnosticsRefresh`). What
+  the grid's shape alone rules out turns red at once: in an American-style
+  grid, any run of 1 or 2 white cells; in any style, a white cell alone in
+  both directions (`interactiveElementaryImpossibleCells`). **Suivant** writes
+  no word through the empty cell of a red emplacement, even when that
+  emplacement is selected.
 - The **Impossibles / Impossible** button identifies zones where no word
   fits any more — including two still-open crossing words that could
   never agree on a single letter where they meet, even if each one still
@@ -1396,7 +1476,10 @@ real letter. Both update after every edit.
   without moving the cursor — typing ARC, Space, EN, Space, CIEL marks
   "arc-en-ciel" (`frontend/static/script.js`, `interactiveToggleBreak`).
   A word placed by **Suivant** that is a multi-word expression brings its
-  own breaks (`applyPlacedWordBreaks`); breaks are undone by **Précédent**
+  own breaks (`applyPlacedWordBreaks`). Removing a letter — **Backspace**,
+  **Delete**, a zone's **Delete**, turning it black, or **Nettoyer** — also
+  removes every break of the across and down words through that cell
+  (`interactiveClearBreaksAt`); breaks are undone by **Précédent**
   and saved with the draft and the published grid;
   press **Backspace** or **Delete** to clear it. The cursor advances in
   the current Across/Down direction after a letter. Clicking the cell
@@ -1559,8 +1642,9 @@ real letter. Both update after every edit.
   grid itself, a word that
   "Suivant" drew automatically from this list is shown in bold green
   letters, one drawn from the theme glossary instead in bold magenta
-  letters, and an ordinary dictionary word that belongs to the language's
-  Scrabble word list in bold dark-cyan letters — the same colors as the attempt-preview grids shown while an
+  letters, an ordinary dictionary word that belongs to the language's
+  Scrabble word list in bold blue letters, and a word from one of the
+  player's own dictionaries in that dictionary's colour — the same colors as the attempt-preview grids shown while an
   automatic generation runs (see "While a grid is generating" above); a
   word typed in by hand, or clicked directly from a word list, is never
   colored this way. The list is also saved with the
@@ -2041,7 +2125,10 @@ candidates instead of returning the same word every time. On top of that
 ranking, three families of words go first, in this order: the "Challenge
 Words", then the theme glossary, then the words found in the language's
 official Scrabble word list — only after all of them come the remaining
-dictionary words. The difficulty trims the everyday, corpus-based
+dictionary words. In the Settings panel the player can reorder, or switch
+off, the Scrabble list and the other words, and slot their own uploaded
+dictionaries among them: each checked line is then a family of its own,
+in that order. The difficulty trims the everyday, corpus-based
 vocabulary (keeping its most frequent words); the Scrabble list is kept
 whole at Medium and Hard, and limited to its words with a known
 inflection at Easy. When the language has its usage scores, the

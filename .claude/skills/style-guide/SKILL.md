@@ -2683,12 +2683,35 @@ English (see `project-best-practices`).
 
 - A `.scrabble` highlight (attempt previews) and `.interactive-scrabble`
   (Interactive grid) colour the letters of a word of the language's
-  Scrabble dictionary dark cyan (`--scrabble-fg`, `#008b8b`, weight 700 —
+  Scrabble dictionary blue (`--scrabble-fg`, `#1d4ed8`, the user's rule; weight 700 —
   a text colour like `.theme`/`.challenge`). Both rules are declared
   BEFORE their theme/challenge counterparts at equal specificity, so a
   cell shared with a theme (magenta) or "Mots Défi" (green) word keeps
   that stronger colour. Previews read `scrabble_cells`; Interactive mode
   marks the word "Suivant" placed with `placed.from_scrabble`.
+
+- A word of one of the player's own dictionaries is coloured by
+  `.user-glossary` (previews, `user_cells`) / `.interactive-user-glossary`
+  (Interactive, `placed.glossary`): `color: var(--glossary-fg,
+  var(--user-glossary-fg))`, weight 700, declared after the Scrabble rules
+  and before the theme/challenge ones. Orange (`--user-glossary-fg`,
+  `#ea580c`) is the default, the user's rule; each dictionary's colour is
+  `--glossary-<id>` on `:root`, and the settings panel also overrides
+  `--challenge-fg` (the "Mots Défi" green, `var(--best)` by default),
+  `--theme-fg` and `--scrabble-fg` (the Falcon dictionary's square) —
+  `script.js`'s `applyGlossaryColors`. The user's rule: every glossary
+  line of the settings panel starts with a square of its colour, clicked
+  to change it through a classic colour popup (a native `<input
+  type="color">`, `.glossary-color`).
+
+- The settings panel (`#settings-overlay`) reuses the modal look of
+  `#version-update-overlay`/`#solution-confirm-overlay` (dimmed backdrop,
+  white rounded box, wider: 34rem, scrolling when tall); its gear button
+  (`#settings-btn`) is a round accent-bordered pill like `#user-pseudo`,
+  right of it, taking over its `margin-right: auto` so the pair stays
+  centered. Each glossary is a bordered row: rank, colour square,
+  checkbox, name + grey detail line, then the blue up/down/trash icon
+  buttons; an unchecked dictionary's name is greyed and struck through.
 
 - A `.theme` highlight marks, in the attempt-preview grids, the cells of
   every word that comes from the themed-generation glossary (at the user's
@@ -4572,6 +4595,19 @@ end through the real running API (interactive start/step/save,
   `rgb(191, 219, 254)`, and one `.attempt-preview-chosen` tile left with
   no clickable tile after the click.
 
+- **Grid-choice title** (`#grid-choice-title`), at the user's explicit
+  request: while a grid choice is pending, a 1.5rem bold centered `<h2>` in
+  `--accent` right above the tiles replaces the discreet
+  `#attempt-preview-status`: "Choisissez la grille qui a votre préférence
+  (choix automatique dans 9:45)". The chrono is `m:ss`, moves down by steps
+  of 15 seconds (the user's rule: a countdown per second is stressful;
+  `GRID_CHOICE_DISPLAY_STEP_S`, rounded up) and goes back to its starting
+  time on any activity; tabular digits
+  keep the sentence from shaking. Scrolled into view once when it appears
+  off screen. Navigating back in the history keeps it above that entry's own
+  status. No new token. **Visually confirmed** with Playwright/Chromium at
+  1400×1000.
+
 - **Black cells are drawn as a centered half-size blue square**
   (`.cell.black`, `frontend/static/style.css`), at the user's explicit
   request: a white (`--white-cell`) background carrying a `--black-cell`
@@ -4961,6 +4997,14 @@ end through the real running API (interactive start/step/save,
   with `--incorrect-fg` text and border (no new token) once the heartbeat
   reports another server version — a reloaded page is white again. This
   supersedes the earlier placement before `#info-badge`.
+- **A blocked emplacement stays red across the selected word's band**
+  (`.cell.white.selected-word.interactive-impossible`/`.interactive-deadlock`):
+  these two rules follow `.selected-word`, whose green otherwise hid the red
+  on the emplacement being worked on; the selected cell itself stays blue.
+  Cells the geometry alone rules out use the same `.interactive-impossible`
+  class. No new token. **Visually confirmed** with Playwright/Chromium: a real
+  15×15 grid, computed `rgb(254, 202, 202)` on a red cell of the selected word.
+
 - **"Server updated" notice** (`#version-update-overlay`,
   `#version-update-box`), at the user's explicit request: the same scrim,
   white card and right-aligned button pair as `#solution-confirm-overlay`

@@ -522,7 +522,11 @@ project's engineering language.
   `choose_grid` step and waits for `POST /api/generate/choose/{job_id}`
   (matching proxy route per rule 15). A Populate job never waits: it keeps
   the engine's pick. Choices made with the change, to revisit with the
-  user: after `GRID_CHOICE_TIMEOUT_S` (10 min) without a click the
+  user: after `GRID_CHOICE_TIMEOUT_S` (10 min) without a click or any
+  activity on the page (the user's rule: a countdown shown to the player,
+  moving by steps of 15 seconds, goes back to its starting time on every mouse, click or keyboard action,
+  which proves the player is there; the back end restarts its own wait the
+  same way, `POST /api/generate/choose/{job_id}/activity`) the
   recommended grid is kept, and the waiting job holds no queue slot.
 
 ### Ports and environment variables
@@ -859,7 +863,8 @@ project's engineering language.
   it, to revisit with the user: a connection timeout counts as
   "unavailable", not as a timeout.
 - `frontend/server.py` proxies `/api/*` through one shared
-  `httpx.AsyncClient(timeout=PROXY_TIMEOUT_S)` (30s, one value for every
+  `httpx.AsyncClient(timeout=PROXY_TIMEOUT_S)` ("Suivant" excepted:
+  `STEP_PROXY_TIMEOUT_S` 60s, the user's request; 30s, one value for every
   proxied route, not a per-endpoint split) and sets
   `Cache-Control: no-store` (plus `Pragma`/`Expires`) on every response via
   a blanket middleware, since this app is edited and reloaded by hand
@@ -1995,7 +2000,7 @@ the current defaults/behavior to know before touching this code.
   candidate family of every slot ("Mots Défi", theme glossary, Scrabble
   dictionary, then the rest — `Filler.scrabble_first`), in both the
   automatic search and Interactive "Suivant", with no descent-cap
-  exemption nor content-score bonus. Its words are shown dark cyan in
+  exemption nor content-score bonus. Its words are shown blue in
   every preview (`scrabble_cells`, computed from each example's grid in
   `backend/app.py`) and for a "Suivant" word with `placed.from_scrabble`.
 - **Usage scores.** `data_builder/build_usage_scores.py` (`build_<lang>.sh`
@@ -2097,7 +2102,14 @@ the current defaults/behavior to know before touching this code.
   `[row, col, direction]` (after that cell), typed before the selected
   cell without moving it; a "Suivant" expression replaces the breaks of
   its slot; a Shift+drag letter move carries the breaks between two moved
-  letters and drops the other breaks touching a changed cell. Exports, the
+  letters and drops the other breaks touching a changed cell. The user's
+  rule: removing letters in Interactive mode also removes the word breaks
+  of their emplacement (`interactiveClearBreaksAt`). Choices made with it,
+  to revisit with the user: both emplacements through a removed letter
+  lose all their breaks, even on cells keeping their letters; it applies to
+  Backspace/Delete, a zone Delete, blackening a letter and "Nettoyer", not
+  to overwriting a letter, erasing an empty cell, or the Shift+drag move
+  above. Exports, the
   user's request: the .puz format cannot draw a break, so a word with
   breaks gets its enumeration appended to its clue ("(3-2-4)"), and the
   Library also offers ipuz and Crossword Compiler .jpz files, which draw
@@ -2157,6 +2169,65 @@ the current defaults/behavior to know before touching this code.
   slots flagged impossible for the cleanup (`_canonical_conflict_slot_
   indices`), the user's permanent letters exempt; the isolated-cell plug
   refuses a pattern repeating a word or a canonical form.
+- **Players can upload their own dictionaries, which order the
+  candidates** — the user's rules: a `USER_PROFILES/` folder holds one
+  sub-folder per player (`<pseudo slug>/`, gitignored); a gear button right
+  of the nickname opens a settings panel listing the glossaries by
+  priority, numbered: "Mots Défi" and the theme glossary, always listed
+  with the mention "(s'ils existent)" / "(s'il existe)", then the user
+  dictionaries, the "Dictionnaire Scrabble" and "Autres (<sources>)" (the
+  known sources of the Falcon lexicon's other words); from rank 3, a
+  checkbox (at least one stays checked) and up/down arrows, a bin for a
+  user dictionary; the preferences are saved in the player's folder; a
+  "Chargement" button sends a file there, with its language chosen at
+  upload and shown in the list, recognising the .dict/.txt forms of
+  spreadthewordlist.com (`word;score`), a file without scores being
+  tokenized on punctuation with forbidden characters filtered (spaces,
+  hyphens and apostrophes allowed), scores converted (>= 50 -> 5, >= 40
+  -> 4, ...), an unscored entry rated 5, an unrecognised format reported;
+  a user dictionary is only used for words of its language (on a bilingual
+  grid, the direction in that language); in the fill algorithms, at each
+  step, the glossaries' words are taken in priority order as long as they
+  remain possible; each glossary line has a colour square (the existing
+  colours for the existing categories, orange for user dictionaries, blue
+  for the Scrabble dictionary) that the player clicks to change through a
+  classic colour popup (`backend/user_profiles.py`, `_merge_user_lexicon`,
+  `glossary_word_cells`, `Filler.scrabble_first`,
+  `IngridSolver._family_of`; Java mirror). Choices made with them, to
+  revisit with the user: the sources listed are "Statistiques" (the
+  corpus-frequency list, Hunspell-checked — Hunspell itself feeds no grid
+  word) and "Wiktionnaire" (the multi-word expressions); "Autres" covers
+  every word whose row is in those lists (a Scrabble word that is also a
+  corpus word belongs to both, taking the first's rank), a word only in
+  unchecked lists leaves the lexicon, and its colour is the plain letter
+  colour of the previews and Interactive grid; the upload language
+  defaults to the form's; with no enabled item applying to the grid's
+  language, or the default order (Scrabble, others, no user dictionary),
+  the plain Falcon lexicon is used; both Falcon lists unchecked leave only
+  the user's words; user words join the lexicon with their converted score
+  as usage score, so the difficulty threshold (Easy 3, Medium 2) and the
+  60 % usage filter apply to them, and a word already in the Falcon
+  lexicon takes the user score only when its dictionary ranks above every
+  Falcon list holding it; user words are exempt from the
+  proper-noun/no-gloss quotas, are not multi-word expressions for the
+  "Multi-mots max" cap and get no word breaks; their lemma is their own
+  spelling; a word is coloured after the first checked list holding it;
+  the profile routes require the pseudo's secret word (an unclaimed
+  pseudo is claimed, as by the welcome panel); a format is recognised when
+  at least half its non-empty lines give a word, scored when at least half
+  are `entry<sep>number` (`;`, tab, `,`, `:`, `|`); uploads are capped at
+  20 MB; an Interactive session keeps the glossaries it was opened with (a
+  library/attempt reopening uses the requesting player's); a former
+  single "falcon" preference reads as both Falcon lists.
+- **The settings panel shows each dictionary's entries for the selected
+  language** — the user's rule (`renderGlossaryList`, `GET /api/glossary/
+  counts`, `glossary_entry_counts`). Choices made with it, to revisit with the
+  user: the selected language is the generation form's, plus its bilingual
+  one, each counted apart; a Falcon glossary counts the distinct words of its
+  wordlists, every difficulty included, a word of both glossaries counting in
+  both; "Mots Défi" and the theme glossary show no count; a user dictionary of
+  another language keeps its plain word count, with no language named.
+
 - **Usage scores steer word choice and grid scoring** — the user's rules:
   before the statistical ranking, keep only the 60 % (`USAGE_KEEP_PERCENT`)
   of a slot's candidates with the highest usage score, when it is known
@@ -2230,6 +2301,18 @@ the current defaults/behavior to know before touching this code.
   "péché" does not gain "pêche"); outside German a variant must keep the
   entry's case; the example-sentence index stays keyed by the exact
   ACCENTUE.
+- **Interactive mode always shows the impossible emplacements** — the
+  user's rule: when an impossible emplacement is detected, the information
+  reaches the interface; the interface itself determines the elementary
+  impossibilities, such as a 1- or 2-letter emplacement in the American
+  style (`scheduleInteractiveDiagnosticsRefresh`,
+  `interactiveElementaryImpossibleCells`, `interactive_ingrid_blocked_cells`,
+  Java `Interactive.ingridBlockedCells`). Choices made with it, to revisit
+  with the user: the red is refetched after every edit or "Mots Défi" change
+  (300 ms debounce, silent on failure); a white cell alone in both directions
+  is elementary in every style; a 1-cell run shows red in the American style
+  although the engine refuses no word across it, not being a slot.
+
 - **The Dictionnaire search reads every wordlist giving a grid form's
   possible accented spellings** — the user's rule: "consulter tous les
   wordlist permettant de retrouver les formes accentuées possibles". Its

@@ -196,6 +196,50 @@ de difficulté, puis partagé par toutes les générations et toutes les
 sessions Interactif (`load_lexicon`, appelé par `generate_grid` et par
 `backend/app.py`, `_load_interactive_index`).
 
+### Dictionnaires utilisateur
+
+Un joueur peut charger ses propres listes de mots (panneau Paramètres,
+`backend/user_profiles.py`), rangées dans `USER_PROFILES/<pseudo>/` :
+chaque fichier est converti en une liste `MOT<TAB>ACCENTUE<TAB>SCORE`
+(`parse_wordlist`). Un fichier dont la plupart des lignes sont de la forme
+`mot;score` (formats Crossfire `.dict` et Crossword Compiler `.txt`, le
+séparateur pouvant aussi être une tabulation, `,`, `:` ou `|`) est une
+liste notée : chaque score devient une note d'usage Falcon (≥ 50 → 5,
+≥ 40 → 4, …, < 10 → 0, `_usage_of`). Sinon, chaque ligne est découpée sur
+la ponctuation et chaque morceau est une entrée notée 5. Une entrée ne
+garde que lettres, espaces, traits d'union et apostrophes (expressions et
+mots composés admis) ; sa forme de grille (`grid_form`) doit faire 2 à 50
+lettres A-Z. Un fichier dont moins de la moitié des lignes donne une
+entrée est refusé (`WordlistUnrecognised`).
+
+Chaque dictionnaire utilisateur a une langue. Le lexique Falcon est
+découpé en deux glossaires : le **dictionnaire Scrabble** (les mots de la
+liste Scrabble) et les **autres** (les mots dont la ligne est dans le
+dictionnaire de fréquences ou dans celui des expressions — un mot des
+deux appartient aux deux). Avec les dictionnaires utilisateur, ils
+forment une liste ordonnée que le joueur coche et réordonne (au moins un
+élément coché), après les Mots Défi et le glossaire thématique ; par
+défaut le dictionnaire Scrabble précède les autres. Quand cette liste,
+pour la langue de la grille, n'est pas celle par défaut, les éléments
+cochés qui s'y appliquent sont rangés (rang = position) et les
+dictionnaires utilisateur fusionnés dans un fichier (`lexicon_spec`,
+chaque mot une fois, pris au premier dictionnaire qui le contient, avec
+son rang), puis dans le lexique (`_merge_user_lexicon`, appelé par
+`_select_lexicon`, `load_lexicon(..., user)`) : un mot qui n'appartient
+qu'à des glossaires Falcon décochés quitte le lexique ; un mot absent du
+lexique y entre avec la référence de sa ligne, sa note d'usage (et
+n'entre pas si la note est sous le seuil du niveau,
+`USAGE_DIFFICULTY_MIN_SCORE`) et une fréquence relevée au moins à
+`NOISE_FREQUENCY_THRESHOLD` ; un mot déjà présent garde sa ligne et prend
+la note du dictionnaire utilisateur quand celui-ci est classé avant tous
+les glossaires Falcon qui le contiennent. Les deux glossaires Falcon
+décochés, le lexique ne contient que les mots des dictionnaires
+utilisateur. Chaque mot reçoit une clé de glossaire (colonne `gloss`) :
+le plus petit rang des glossaires qui le contiennent ; cette clé ordonne
+les familles de candidats (chapitre 4) et désigne la couleur du mot
+(`glossary_word_cells`). Avec la liste par défaut, le lexique est celui
+de Falcon seul, sans clé.
+
 ### Mode Interactif (construction manuelle assistée)
 
 Même démarrage, en cliquant sur **Interactif** (ligne **Générer la
@@ -209,7 +253,8 @@ La session démarre sur le seul motif de cases noires, sans aucun mot posé
   supprime une séparation de mots (un trait plus épais) juste avant la case
   sélectionnée, dans le sens de saisie (`frontend/static/script.js`,
   `interactiveToggleBreak`) — un mot de plusieurs mots placé par « Suivant »
-  apporte les siennes.
+  apporte les siennes, et retirer une lettre retire toutes celles des deux
+  emplacements qui passent par sa case (`interactiveClearBreaksAt`).
 - **Suivant** pose automatiquement **un** mot de plus, en tenant compte
   d'abord de la liste **Mots Défi**, puis du glossaire thématique (« Le
   mode Interactif : poser un seul mot », chapitre 4). **Précédent** revient
@@ -218,6 +263,10 @@ La session démarre sur le seul motif de cases noires, sans aucun mot posé
   compatibles avec l'emplacement sélectionné).
 - Deux boutons nettoient la grille sur les zones impossibles, avec ou sans
   retrait des cases noires.
+- Les zones impossibles s'affichent en rouge d'elles-mêmes après chaque
+  modification de la grille (`frontend/static/script.js`,
+  `scheduleInteractiveDiagnosticsRefresh`,
+  `interactiveElementaryImpossibleCells`).
 - **Impossibles** identifie les zones où plus aucun mot n'est possible ;
   **Stats** (bistable, activé par défaut) affiche en gris clair, dans
   chaque case vide, la lettre statistiquement la plus probable ;
@@ -378,8 +427,9 @@ décroissant (puis moins de cases noires, puis la grille retenue), une par
 solution distincte, la retenue marquée « recommandée » (`generate_grid`,
 `_final_result`). Pour une génération lancée depuis l'interface (pas par
 Populate), le serveur attend alors, avant toute définition, que le joueur
-clique sa grille ; sans choix au bout de 10 minutes, la recommandée est
-gardée (`backend/app.py`, `_await_grid_choice`).
+clique sa grille ; après 10 minutes sans clic ni aucune activité du joueur
+à l'écran (chaque action relance ce délai), la recommandée est gardée
+(`backend/app.py`, `_await_grid_choice`).
 
 ### Le score de contenu
 
@@ -1506,9 +1556,18 @@ stables :
   `Filler.ordered_candidates` et avant le bloc thématique). Étape sautée
   si tous — ou aucun — des candidats sont dans la liste.
 
+Quand l'auteur de la grille a modifié l'ordre de ses glossaires (panneau
+Paramètres, voir « Dictionnaires utilisateur » au chapitre 1), la
+troisième famille est remplacée par l'ordre de priorité qu'il a choisi :
+chaque élément coché — dictionnaire utilisateur, dictionnaire Scrabble,
+« Autres » (les autres mots du lexique Falcon) — forme un bloc stable,
+dans l'ordre de la liste, et un mot appartient au bloc du premier élément
+qui le contient (`Filler.scrabble_first`, colonne `gloss` du lexique).
+
 L'ordre complet des options d'un emplacement est : Mots Défi, Mots Défi
 par réaménagement, mots thématiques, mots thématiques par réaménagement,
-mots Scrabble, autres mots.
+mots Scrabble, autres mots (ou blocs des glossaires dans l'ordre de
+l'utilisateur).
 
 ### Réaménager l'emplacement choisi pour un mot Défi ou thématique
 
@@ -2145,7 +2204,8 @@ sinon l'un des 3 meilleurs est tiré au hasard avec les poids 4, 2 et 1
 **Choisir le mot.** L'ordre des mots d'un emplacement est calculé une
 seule fois, à partir des domaines laissés par la cohérence d'arc initiale
 (`IngridSolver._order`) : les familles de candidats d'abord, dans l'ordre
-habituel, puis, dans chaque famille, le score décroissant 900 × score de
+habituel — avec des dictionnaires utilisateur, un bloc par dictionnaire
+dans l'ordre de l'utilisateur (`IngridSolver._family_of`) —, puis, dans chaque famille, le score décroissant 900 × score de
 remplissage + 60 × note d'usage + 20 × log10(1 + fréquence)
 (`INGRID_FILL_SCORE_WEIGHT`, `INGRID_USAGE_WEIGHT`, `INGRID_FREQ_WEIGHT`).
 Le **score de remplissage** est la moyenne, sur les lettres du mot, du
@@ -3011,7 +3071,7 @@ premier (`backend/crossword_gen.py`, `generate_grid`,
   bloquée) : voir « Qu'est-ce qu'un emplacement impossible ? », chapitre 4.
 - **Fond jaune** (emplacement écarté) : voir « Rouge, jaune : deux signaux
   distincts », chapitre 4.
-- **Lettres cyan sombre** (mot du dictionnaire Scrabble) : la case
+- **Lettres bleues** (mot du dictionnaire Scrabble) : la case
   appartient à une suite complète de lettres (horizontale ou verticale)
   qui forme un mot de la liste Scrabble de sa langue. Calculé sur la
   grille de chaque aperçu, quel que soit le chemin qui y a posé les

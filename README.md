@@ -327,7 +327,7 @@ On the page:
    theme words are placed) when no slot of the right size already exists,
    and undoes that change whenever the word doesn't work out. After those
    two lists, the generator prefers words found in the language's official
-   Scrabble word list (shipped in `data/scrabble/`), shown in dark cyan in
+   Scrabble word list (shipped in `data/scrabble/`), shown in blue in
    the preview grids and in Interactive mode. The Scrabble list is
    available in full at Medium and Hard, on top of the everyday vocabulary
    the chosen difficulty keeps; at Easy, only its words whose inflected
@@ -363,8 +363,10 @@ On the page:
    far. When several are finished, the search stops before writing any
    definition and shows them all, best score first (the one the generator
    recommends framed in green; click **"Show the words (spoiler)"** to see their letters):
-   click the one you prefer, and its definitions are written. Without a
-   choice within 10 minutes, the recommended grid is kept.
+   click the one you prefer, and its definitions are written. A countdown
+   in the title above the grids shows the time left: 10 minutes, starting
+   over each time you move the mouse, click or type. When it runs out, the
+   recommended grid is kept.
 4. An empty grid appears on the right, with row and column numbers along
    its edges and a small number in the cells where each word starts,
    ready to be filled in. While you play, the generation settings are
@@ -387,6 +389,28 @@ On the page:
    the same line are chained together, for example:
 
    **3** (1) Petit mammifère domestique. — (5) Boisson chaude au petit-déjeuner.
+
+### Your own dictionaries (Settings)
+
+Once you have a nickname, a **gear icon** next to it opens the
+**Settings** panel. It lists the word lists the grid filler draws from,
+numbered in their order of priority: your "Mots Défi" and theme words
+first (when the form has some), then your own dictionaries and the app's
+own word lists — the **Scrabble dictionary** (shown in blue) and the
+**other words** (corpus statistics and Wiktionary expressions). Tick or
+untick a list, move it up or down with the arrows, delete one of yours
+with the bin icon, and click its coloured square to choose the colour its
+words are shown in on the grids (orange by default for your
+dictionaries). **Chargement** uploads a word file from your computer for
+the language chosen next to it (shown in brackets in the list; a
+dictionary is only used for words of its language, so on a bilingual grid
+only for the across or the down words) — a
+scored list such as the `.dict`/`.txt` files of
+[spreadthewordlist.com](https://www.spreadthewordlist.com/) (one
+`word;score` per line), or any plain list of words. Your settings and
+files are kept on the server under your nickname, and every grid you
+generate or build in that language then tries your dictionaries' words in
+the order you chose.
 
 ### Filling in the grid
 

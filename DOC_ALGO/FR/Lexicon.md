@@ -28,6 +28,17 @@ plusieurs signaux) :
   auquel cas le(s) mot(s) responsable(s) sont signalés impossibles comme
   n'importe quel autre. Affiché en fond rouge dans les grilles
   (`frontend/static/style.css`, `.attempt-preview-grid .cell.white.impossible`).
+  En mode Interactif, l'affichage suit la grille : recalculé après chaque
+  modification (`frontend/static/script.js`,
+  `scheduleInteractiveDiagnosticsRefresh`), il comprend avec la méthode
+  Ingrid-like les emplacements que cette méthode écarte par cohérence d'arc
+  (`backend/crossword_gen.py`, `interactive_ingrid_blocked_cells`), et
+  l'interface marque d'elle-même, sans attendre le serveur, les impossibilités
+  de géométrie : en style Groupé/aligné, une suite de 1 ou 2 cases blanches ;
+  dans tous les styles, une case seule dans les deux sens
+  (`interactiveElementaryImpossibleCells`). Une case n'appartenant qu'à un seul
+  mot n'est pas un emplacement : elle s'affiche en rouge comme défaut du motif,
+  sans empêcher de poser le mot qui la traverse.
   **Aucun mot n'est jamais posé qui croise un emplacement bloqué**, c'est-à-
   dire qui laisserait bloqué, après la pose, un des emplacements qu'il
   croise (`backend/crossword_gen.py`, `Filler._backtrack`,
@@ -338,10 +349,25 @@ plusieurs signaux) :
   définition. C'est la troisième famille de l'ordre des candidats d'un
   emplacement : après les Mots Défi et le glossaire thématique, avant le
   reste du dictionnaire général. Les mots qui en sont issus s'affichent en
-  lettres cyan sombre dans les aperçus et en mode Interactif.
+  lettres bleues dans les aperçus et en mode Interactif.
   (`backend/crossword_gen.py`, `merge_scrabble_lexicon`,
   `Filler.scrabble_first`, `scrabble_word_cells` ; `backend/app.py`,
   `_annotate_scrabble_cells`.)
+
+- **Dictionnaire utilisateur** : une liste de mots chargée par un joueur
+  depuis le panneau Paramètres, rangée dans `USER_PROFILES/<pseudo>/` et
+  convertie en notes d'usage Falcon (0-5). Avec les deux glossaires du
+  lexique Falcon — le **dictionnaire Scrabble** et les **autres** mots
+  (« Autres (Statistiques, Wiktionnaire) » : dictionnaire de fréquences
+  du corpus, vérifié par Hunspell, et expressions du Wiktionnaire) —, il
+  forme la liste ordonnée des glossaires de ce joueur, après les Mots Défi
+  et le glossaire thématique : chaque élément coché est une famille de
+  candidats, dans cet ordre de priorité, ses mots tentés tant qu'ils
+  restent possibles. Chaque élément a sa couleur d'affichage (bleu pour le
+  dictionnaire Scrabble, couleur ordinaire du texte pour les autres,
+  orange par défaut pour un dictionnaire utilisateur). (`backend/user_profiles.py` ; `backend/crossword_gen.py`,
+  `_merge_user_lexicon`, `glossary_word_cells`, `Filler.scrabble_first`,
+  `IngridSolver._family_of` ; `backend/app.py`, `_glossary_cells`.)
 
 - **Forme canonique** : lemme d'un mot, tel que donné par la colonne
   CANONIQUE de sa ligne de dictionnaire (plusieurs lemmes possibles,
@@ -423,9 +449,11 @@ plusieurs signaux) :
   suivant ; elle vient de la graphie de l'expression posée, ou de l'auteur
   en mode Interactif (Espace, « - » ou « _ »), et est notée
   `[ligne, colonne, sens]` (la limite entre cette case et la suivante dans
-  ce sens). (`backend/crossword_gen.py`, `word_breaks`, `word_break_edges`;
+  ce sens). En mode Interactif, retirer une lettre (effacement, case
+  noire, **Nettoyer**) retire toutes les séparations des deux emplacements
+  qui passent par sa case. Le choix des mots ne les consulte pas. (`backend/crossword_gen.py`, `word_breaks`, `word_break_edges`;
   `frontend/static/script.js`, `appendWordBreaks`,
-  `interactiveToggleBreak`.)
+  `interactiveToggleBreak`, `interactiveClearBreaksAt`.)
 
 ## Retour en arrière
 

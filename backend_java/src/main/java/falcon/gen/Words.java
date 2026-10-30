@@ -72,8 +72,87 @@ public final class Words {
 
     /** A row reference is the byte offset of a word's wordlist row shifted left by two bits, the low bits naming its
      * wordlist — the index of its path in a lexicon's sources: the freq, Scrabble or multi-word wordlist (mirrors
-     * ROW_SOURCE_FREQ/ROW_SOURCE_SCRABBLE/ROW_SOURCE_MULTI). */
-    public static final int ROW_SOURCE_FREQ = 0, ROW_SOURCE_SCRABBLE = 1, ROW_SOURCE_MULTI = 2;
+     * ROW_SOURCE_FREQ/ROW_SOURCE_SCRABBLE/ROW_SOURCE_MULTI), or a user's merged dictionary lexicon
+     * (ROW_SOURCE_USER, UserProfiles.lexiconSpec). */
+    public static final int ROW_SOURCE_FREQ = 0, ROW_SOURCE_SCRABBLE = 1, ROW_SOURCE_MULTI = 2, ROW_SOURCE_USER = 3;
+
+    /** A user's glossaries merged into a lexicon (mirrors user_profiles.lexicon_spec): the merged lexicon file, the
+     * ranks of the two Falcon glossaries — the Scrabble dictionary and the others — (null when disabled) and the
+     * ranked glossary ids. */
+    public record UserLexicon(String path, Integer scrabbleRank, Integer othersRank, List<String> ids) {}
+
+    /** Row reference of a user-lexicon row starting at byte {@code offset} (mirrors _user_row_ref). */
+    static int userRowRef(long offset) {
+        return (int) (offset << 2 | ROW_SOURCE_USER);
+    }
+
+    /** Merges a user's glossaries ({@code user}) into a selected lexicon, in place, and returns its glossary keys
+     * (mirrors _merge_user_lexicon): a word only in a disabled Falcon glossary — the Scrabble dictionary
+     * ({@code scrabble}) or the others (a row of the freq or multi-word wordlist) — leaves the lexicon; a word of the
+     * merged file absent from it joins with its own row reference, a frequency of at least {@code noiseThreshold}
+     * and its usage score — dropped below USAGE_DIFFICULTY_MIN_SCORE of {@code difficulty} (null when the lexicon is
+     * not selected by usage score); a word already there keeps its row and takes the user's usage score when its
+     * dictionary ranks above every Falcon glossary holding it. Key: the lowest rank of the glossaries holding the
+     * word. */
+    public static Map<String, Integer> mergeUserLexicon(UserLexicon user, String difficulty,
+                                                         Map<Integer, List<String>> byLength, Map<String, Integer> refs,
+                                                         Map<String, Double> frequencies,
+                                                         Map<String, Integer> usageScores, Set<String> scrabble,
+                                                         double noiseThreshold) throws IOException {
+        Integer scrabbleRank = user.scrabbleRank(), othersRank = user.othersRank();
+        Integer minScore = difficulty == null ? null : USAGE_DIFFICULTY_MIN_SCORE.get(difficulty);
+        Map<String, Integer> falconRanks = new HashMap<>();
+        for (Integer length : new ArrayList<>(byLength.keySet())) {
+            List<String> kept = new ArrayList<>();
+            for (String w : byLength.get(length)) {
+                int best = Integer.MAX_VALUE;
+                if (scrabbleRank != null && scrabble.contains(w)) best = scrabbleRank;
+                Integer ref = refs.get(w);
+                int source = ref == null ? 0 : ref & 3;
+                if (othersRank != null && (source == ROW_SOURCE_FREQ || source == ROW_SOURCE_MULTI)) {
+                    best = Math.min(best, othersRank);
+                }
+                if (best != Integer.MAX_VALUE) {
+                    falconRanks.put(w, best);
+                    kept.add(w);
+                }
+            }
+            if (kept.isEmpty()) byLength.remove(length);
+            else byLength.put(length, kept);
+        }
+        Map<String, Integer> keys = new HashMap<>(falconRanks);
+        Path path = user.path() == null ? null : Path.of(user.path());
+        if (path != null && Files.exists(path)) {
+            falcon.TextLines.forEachLine(path, (offset, line) -> {
+                String[] parts = line.split("\t", -1);
+                if (parts.length < 5 || !isGridWord(parts[0]) || !isDigits(parts[3])) return;
+                String word = parts[0];
+                if (keys.containsKey(word) && !falconRanks.containsKey(word)) return;
+                int score = Integer.parseInt(parts[3]);
+                int rank = Integer.parseInt(parts[4]);
+                Integer falconRank = falconRanks.get(word);
+                if (falconRank != null) {
+                    if (rank < falconRank && usageScores != null) usageScores.put(word, score);
+                    keys.put(word, Math.min(keys.get(word), rank));
+                    falconRanks.remove(word);
+                    return;
+                }
+                if (minScore != null && score < minScore) return;
+                keys.put(word, rank);
+                refs.put(word, userRowRef(offset));
+                byLength.computeIfAbsent(word.length(), k -> new ArrayList<>()).add(word);
+                frequencies.put(word, Math.max(frequencies.getOrDefault(word, 0.0), noiseThreshold));
+                if (usageScores != null) usageScores.put(word, score);
+            });
+        }
+        return keys;
+    }
+
+    private static boolean isDigits(String s) {
+        if (s.isEmpty()) return false;
+        for (int i = 0; i < s.length(); i++) if (s.charAt(i) < '0' || s.charAt(i) > '9') return false;
+        return true;
+    }
 
     /** Row reference of a freq-wordlist row starting at byte {@code offset} (mirrors _freq_row_ref). */
     static int freqRowRef(long offset) {
@@ -321,9 +400,17 @@ public final class Words {
     public static Map<Integer, LenIndex> buildIndex(Map<Integer, List<String>> byLength, Map<String, Double> frequencies,
                                                     Map<String, Double> dictionaryFrequencies, Map<String, Integer> refs,
                                                     String[] sources, Map<String, Integer> usageScores) {
+        return buildIndex(byLength, frequencies, dictionaryFrequencies, refs, sources, usageScores, null);
+    }
+
+    public static Map<Integer, LenIndex> buildIndex(Map<Integer, List<String>> byLength, Map<String, Double> frequencies,
+                                                    Map<String, Double> dictionaryFrequencies, Map<String, Integer> refs,
+                                                    String[] sources, Map<String, Integer> usageScores,
+                                                    Map<String, Integer> glossaryKeys) {
         Map<Integer, LenIndex> index = new LinkedHashMap<>();
         byLength.forEach((len, words) -> index.put(len,
-                new LenIndex(len, words, frequencies, dictionaryFrequencies, refs, sources, usageScores)));
+                new LenIndex(len, words, frequencies, dictionaryFrequencies, refs, sources, usageScores,
+                        glossaryKeys)));
         return index;
     }
 
@@ -724,6 +811,57 @@ public final class Words {
     /** [row, col] of every cell of a fully lettered run (2 letters or more, across or down) of a JSON grid
      * (rows of "#", "." or a letter) spelling a word of that run's direction's Scrabble set. Sorted,
      * deduplicated (mirrors scrabble_word_cells). */
+    /** {glossary name: cells} of the grid's fully lettered runs spelling a lexicon word carrying a glossary key
+     * (LenIndex.gloss of {@code index}), the name being {@code names[direction][key]} (null for a direction
+     * without player glossaries, skipped); each list sorted (mirrors glossary_word_cells). */
+    public static Map<String, List<Object>> glossaryWordCells(Object grid, DualIndex index, List<String> acrossNames,
+                                                              List<String> downNames) {
+        Map<String, java.util.TreeSet<Integer>> found = new LinkedHashMap<>();
+        Map<String, List<Object>> out = new LinkedHashMap<>();
+        if (!(grid instanceof List<?> rowsList) || rowsList.isEmpty()) return out;
+        int rows = rowsList.size();
+        Object first = rowsList.get(0);
+        int cols = first instanceof String str ? str.length() : ((List<?>) first).size();
+        for (int dir = 0; dir < 2; dir++) {
+            List<String> ranked = dir == 0 ? acrossNames : downNames;
+            if (ranked == null || ranked.isEmpty()) continue;
+            Map<Integer, LenIndex> idx = dir == 0 ? index.across : index.down;
+            int outer = dir == 0 ? rows : cols, inner = dir == 0 ? cols : rows;
+            for (int a = 0; a < outer; a++) {
+                List<Integer> run = new ArrayList<>();
+                StringBuilder word = new StringBuilder();
+                boolean complete = true;
+                for (int b = 0; b <= inner; b++) {
+                    int r = dir == 0 ? a : b, c = dir == 0 ? b : a;
+                    Object row = b < inner ? rowsList.get(r) : null;
+                    String ch = row == null ? "#" : row instanceof String str
+                            ? String.valueOf(str.charAt(c)) : String.valueOf(((List<?>) row).get(c));
+                    if (!ch.equals("#")) {
+                        run.add(Cells.of(r, c));
+                        word.append(ch);
+                        if (ch.equals(".")) complete = false;
+                        continue;
+                    }
+                    if (run.size() >= 2 && complete) {
+                        String w = word.toString();
+                        LenIndex li = idx.get(w.length());
+                        if (li != null && li.gloss != null && li.contains(w)) {
+                            int key = li.glossOf(w);
+                            if (key >= 0 && key < ranked.size()) {
+                                found.computeIfAbsent(ranked.get(key), k -> new java.util.TreeSet<>()).addAll(run);
+                            }
+                        }
+                    }
+                    run.clear();
+                    word.setLength(0);
+                    complete = true;
+                }
+            }
+        }
+        found.forEach((name, cells) -> out.put(name, Cells.toJson(cells)));
+        return out;
+    }
+
     public static List<Object> scrabbleWordCells(Object grid, PW scrabble) {
         java.util.TreeSet<Integer> found = new java.util.TreeSet<>();
         if (scrabble == null || scrabble.isEmpty() || !(grid instanceof List<?> rowsList) || rowsList.isEmpty()) {
@@ -780,6 +918,33 @@ public final class Words {
 
     public static Path multiWordlistPath(String language) {
         return falcon.Env.ROOT.resolve("data").resolve("wordlist_" + language + "_multi.tsv");
+    }
+
+    private static final Map<String, int[]> GLOSSARY_ENTRY_COUNTS = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** {Scrabble glossary, others glossary} entries of {@code language}, once per language and process (mirrors
+     * glossary_entry_counts). */
+    public static int[] glossaryEntryCounts(String language) {
+        return GLOSSARY_ENTRY_COUNTS.computeIfAbsent(language, l -> {
+            Set<String> others = gridWordsOf(falcon.Env.ROOT.resolve("data").resolve("wordlist_" + l + "_freq.tsv"));
+            others.addAll(gridWordsOf(multiWordlistPath(l)));
+            return new int[]{gridWordsOf(scrabbleWordlistPath(l)).size(), others.size()};
+        });
+    }
+
+    private static Set<String> gridWordsOf(Path path) {
+        Set<String> words = new java.util.HashSet<>();
+        if (!java.nio.file.Files.exists(path)) return words;
+        try (java.io.BufferedReader in = java.nio.file.Files.newBufferedReader(path)) {
+            for (String line; (line = in.readLine()) != null; ) {
+                int tab = line.indexOf('\t');
+                String word = tab < 0 ? line : line.substring(0, tab);
+                if (isGridWord(word)) words.add(word);
+            }
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+        return words;
     }
 
     public static Path freqMultiWordlistPath(String language) {

@@ -148,9 +148,20 @@ public final class Interactive {
         f.assignment[i] = w;
         f.usedWords.add(w);
         String broken = null;
-        Map<Object, Filler.OptionsEntry> cache = new HashMap<>();
+        // Shared by every candidate tried on slot i (see Filler.slotIsBlocked).
+        Map<Object, Filler.OptionsEntry> cache = f.wordBreakOptions.computeIfAbsent(i, k -> new HashMap<>());
         Set<Integer> crossing = new HashSet<>();
         for (int j : f.crossingSlots[i]) crossing.add(j);
+        // A crossed slot with no word left stays so whatever letter w gives it: the verdict is known before any
+        // crossing slot is examined.
+        for (int j : crossing) {
+            Base before = baseline.get(j);
+            if (before != null && before.size == 0 && !challengeCanFill(f, j, active)) {
+                f.assignment[i] = null;
+                f.usedWords.remove(w);
+                return "crossing_blocked";
+            }
+        }
         for (Map.Entry<Integer, Base> e : baseline.entrySet()) {
             int j = e.getKey();
             Base before = e.getValue();
@@ -698,7 +709,7 @@ public final class Interactive {
         placed.put("direction", Words.slotDirection(cells));
         placed.put("from_theme", placedFrom.equals("theme"));
         placed.put("from_challenge", placedFrom.equals("challenge"));
-        // A general-dictionary word belonging to the Scrabble dictionary of its direction — shown in dark cyan.
+        // A general-dictionary word belonging to the Scrabble dictionary of its direction — shown in blue.
         placed.put("from_scrabble", !placedFrom.equals("theme") && !placedFrom.equals("challenge")
                 && f.scrabbleWords.forCells(cells).contains(placedWord));
         Map<String, Object> m = new LinkedHashMap<>();
@@ -733,6 +744,36 @@ public final class Interactive {
 
     /** Check budget of one "Suivant" click with the "ingrid" fill method (mirrors INGRID_INTERACTIVE_BUDGET). */
     public static final long INGRID_INTERACTIVE_BUDGET = 20000;
+
+    /** Cells of the slots IngridSolver.settle sets aside on {@code grid}, sorted (mirrors interactive_ingrid_blocked_cells). */
+    public static TreeSet<Integer> ingridBlockedCells(char[][] grid, int rows, int cols, DualIndex index, Set<String> challenge) {
+        char[][] pattern = Grids.patternOf(grid);
+        Map<Integer, Character> known = Grids.knownLetters(grid);
+        Object[] built = buildInteractiveFiller(pattern, rows, cols, index, new Rng(0), known, PW.EMPTY,
+                challenge == null ? Set.of() : challenge);
+        Filler f = (Filler) built[0];
+        @SuppressWarnings("unchecked")
+        List<int[]> slots = (List<int[]>) built[1];
+        IngridSolver solver = new IngridSolver(f, INGRID_INTERACTIVE_BUDGET);
+        solver.settle();
+        TreeSet<Integer> out = new TreeSet<>();
+        for (int i = 0; i < slots.size(); i++) {
+            if (!solver.isActive(i) && f.assignment[i] == null) for (int cell : slots.get(i)) out.add(cell);
+        }
+        return out;
+    }
+
+    /** {@code cellsJson} ([row, col] lists) plus {@code extra}, sorted, as [row, col] lists. */
+    public static List<Object> withCells(List<Object> cellsJson, Collection<Integer> extra) {
+        TreeSet<Integer> all = new TreeSet<>(extra);
+        for (Object o : cellsJson) {
+            List<?> rc = (List<?>) o;
+            all.add(Cells.of(((Number) rc.get(0)).intValue(), ((Number) rc.get(1)).intValue()));
+        }
+        List<Object> out = new ArrayList<>();
+        for (int cell : all) out.add(List.of(Cells.r(cell), Cells.c(cell)));
+        return out;
+    }
 
     /** "Suivant" with the "ingrid" fill method: places exactly one more word the way IngridSolver takes one decision,
      * everything recomputed from {@code grid}, {@code state} updated in place (mirrors interactive_place_word_ingrid). */
@@ -888,14 +929,9 @@ public final class Interactive {
         for (int j : windowSlots) windowCells.add(List.of(Cells.r(slots.get(j)[0]), Cells.c(slots.get(j)[0])));
         if (placedWord == null) {
             List<Object>[] d = fillDiagnostics(grid, rows, cols, index, challenge);
-            TreeSet<Integer> imp = new TreeSet<>();
-            for (Object o : d[0]) {
-                List<?> rc = (List<?>) o;
-                imp.add(Cells.of(((Number) rc.get(0)).intValue(), ((Number) rc.get(1)).intValue()));
-            }
-            for (int j : blocked) for (int cell : slots.get(j)) imp.add(cell);
-            List<Object> impCells = new ArrayList<>();
-            for (int cell : imp) impCells.add(List.of(Cells.r(cell), Cells.c(cell)));
+            Set<Integer> blockedCells = new HashSet<>();
+            for (int j : blocked) for (int cell : slots.get(j)) blockedCells.add(cell);
+            List<Object> impCells = withCells(d[0], blockedCells);
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("impossible", true);
             m.put("impossible_cells", impCells);
@@ -919,11 +955,11 @@ public final class Interactive {
         placed.put("direction", Words.slotDirection(cells));
         placed.put("from_theme", family == 1);
         placed.put("from_challenge", family == 0);
-        placed.put("from_scrabble", family == 2);
+        placed.put("from_scrabble", family >= 2 && f.scrabbleWords.forCells(cells).contains(placedWord));
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("impossible", false);
         m.put("grid", Grids.toJson(newGrid));
-        m.put("impossible_cells", d[0]);
+        m.put("impossible_cells", withCells(d[0], ingridBlockedCells(newGrid, rows, cols, index, challenge)));
         m.put("low_candidate_cells", d[1]);
         m.put("deadlock_cells", d[2]);
         m.put("excluded_cells", slotCellsOf(slots, setAside.toList()));

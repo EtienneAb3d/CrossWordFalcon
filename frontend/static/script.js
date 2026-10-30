@@ -171,6 +171,32 @@ const cluesEl = document.getElementById("clues");
 const downCluesSection = document.getElementById("down-clues-section");
 const versionBadge = document.getElementById("version-badge");
 const versionUpdateOverlay = document.getElementById("version-update-overlay");
+// Settings panel (#settings-btn, right of the nickname): the player's
+// dictionaries and glossaries (renderGlossaryList, POST /api/profile/*).
+const settingsBtn = document.getElementById("settings-btn");
+const settingsOverlay = document.getElementById("settings-overlay");
+const settingsCloseBtn = document.getElementById("settings-close-btn");
+const glossaryList = document.getElementById("glossary-list");
+const glossaryUploadBtn = document.getElementById("glossary-upload-btn");
+const glossaryUploadInput = document.getElementById("glossary-upload-input");
+const glossaryUploadLanguage = document.getElementById("glossary-upload-language");
+const glossaryStatus = document.getElementById("glossary-status");
+// Default display colour of each glossary: "Mots Défi" green, theme
+// magenta, the Scrabble dictionary blue, the other words the plain text
+// colour (the --best/--theme-fg/--scrabble-fg/--fg tokens), a user
+// dictionary orange (--user-glossary-fg).
+const GLOSSARY_DEFAULT_COLORS = {
+  challenge: "#16a34a", theme: "#ff00fb", scrabble: "#1d4ed8", others: "#1f2320", user: "#ea580c",
+};
+// The two glossaries of the Falcon lexicon (backend/user_profiles.py's
+// FALCON_IDS): the Scrabble dictionary and the other words.
+const FALCON_GLOSSARY_IDS = ["scrabble", "others"];
+// Largest word file the settings panel uploads (backend/user_profiles.py's
+// MAX_UPLOAD_BYTES).
+const GLOSSARY_MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+// The player's glossary preferences ({glossaries, colors}, POST
+// /api/profile/get), null until loaded.
+let glossaryPrefs = null;
 const versionUpdateText = document.getElementById("version-update-text");
 const versionUpdateReloadBtn = document.getElementById("version-update-reload-btn");
 const versionUpdateLaterBtn = document.getElementById("version-update-later-btn");
@@ -189,6 +215,7 @@ const attemptPreviewNextBtn = document.getElementById("attempt-preview-next-btn"
 const attemptPreviewLastBtn = document.getElementById("attempt-preview-last-btn");
 const attemptPreviewPosition = document.getElementById("attempt-preview-position");
 const attemptPreviewStatus = document.getElementById("attempt-preview-status");
+const gridChoiceTitle = document.getElementById("grid-choice-title");
 const wordVerificationWrap = document.getElementById("word-verification-wrap");
 const wordVerificationTbody = document.getElementById("word-verification-tbody");
 const liveCluesWrap = document.getElementById("live-clues-wrap");
@@ -999,11 +1026,15 @@ let interactiveThemeCells = new Set();
 let interactiveChallengeCells = new Set();
 // Same idea, for a general-dictionary word placed automatically that
 // belongs to the language's Scrabble dictionary (backend's
-// `placed.from_scrabble`) — shown in dark cyan letters in renderGrid().
+// `placed.from_scrabble`) — shown in blue letters in renderGrid().
 // Maintained the same way (pruned on every renderInteractive() to cells
 // still carrying a letter); a theme or "Mots Défi" colour wins a shared
 // cell (see the .interactive-scrabble rule's position in style.css).
 let interactiveScrabbleCells = new Set();
+// Same idea, for a word placed automatically from one of the player's own
+// dictionaries (backend's `placed.glossary`): "row,col" -> dictionary id,
+// shown in that dictionary's colour; pruned and moved like the sets above.
+let interactiveUserCells = new Map();
 // A click-dragged "zone" of the grid (Édition mode only), at the user's
 // explicit request: "add the ability to click-and-drag to select a zone
 // of the grid: select every emplacement that shares at least one letter
@@ -1053,9 +1084,15 @@ let finishLockedCells = null;
 // auto-placement (start / "Suivant") — impossible slots (no candidate word
 // left at all) and slots below the fill-option threshold — shown in
 // renderGrid() the same way the attempt previews do. Snapshots: cleared on
-// any manual edit (they only describe the state the backend last saw).
+// any manual edit (they only describe the state the backend last saw), then
+// fetched again for the new state (scheduleInteractiveDiagnosticsRefresh).
 let interactiveImpossibleCells = new Set();
 let interactiveLowCells = new Set();
+// The state the three sets of cells around this comment describe
+// (interactiveDiagnosticsStateKey), null once it no longer matches:
+// scheduleInteractiveDiagnosticsRefresh fetches them again for the state on screen.
+let interactiveDiagnosticsKey = null;
+let interactiveDiagnosticsTimer = null;
 // Always a subset of interactiveImpossibleCells: the exact crossing
 // cell(s) where two still-open slots' own remaining candidates share no
 // letter at all (backend's Filler._crossing_deadlock_slots), as opposed
@@ -1572,6 +1609,78 @@ let lastPreviewExamples = null;
 let pendingGridChoiceJobId = null;
 let chosenGridChoiceIndex = null;
 
+// The countdown of a pending grid choice (#grid-choice-title): back to its
+// full time on any sign that the player is in front of the screen, thinking
+// over the grids or looking something up in the Dictionnaire. The back end
+// waits on the same rule (`_await_grid_choice`), told at most every
+// GRID_CHOICE_ACTIVITY_PING_MS: the last sign is always sent, after the
+// fact, so the back end never decides before the countdown reaches 0.
+const GRID_CHOICE_ACTIVITY_PING_MS = 2000;
+// The time shown moves by steps, rounded up: a countdown changing every
+// second is stressful.
+const GRID_CHOICE_DISPLAY_STEP_S = 15;
+const GRID_CHOICE_ACTIVITY_EVENTS = [
+  "pointermove", "pointerdown", "keydown", "wheel", "touchstart", "input",
+];
+let gridChoiceTimeoutMs = 0;
+let gridChoiceDeadline = 0;
+let gridChoiceClock = null;
+let gridChoiceActivityUnsent = false;
+let gridChoiceLastPingAt = 0;
+
+function renderGridChoiceTitle() {
+  const pending = pendingGridChoiceJobId !== null;
+  gridChoiceTitle.hidden = !pending;
+  if (!pending) return;
+  const secondsLeft = Math.max(0, (gridChoiceDeadline - Date.now()) / 1000);
+  const seconds = Math.ceil(secondsLeft / GRID_CHOICE_DISPLAY_STEP_S) * GRID_CHOICE_DISPLAY_STEP_S;
+  const chrono = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  const text = I18N[uiLanguage].gridChoiceTitle(chrono);
+  if (gridChoiceTitle.textContent !== text) gridChoiceTitle.textContent = text;
+}
+
+function sendGridChoiceActivity() {
+  if (!gridChoiceActivityUnsent || Date.now() - gridChoiceLastPingAt < GRID_CHOICE_ACTIVITY_PING_MS) return;
+  gridChoiceActivityUnsent = false;
+  gridChoiceLastPingAt = Date.now();
+  // Best effort: a sign lost only leaves the back end's wait running.
+  fetchWithTimeout(
+    `/api/generate/choose/${pendingGridChoiceJobId}/activity`, { method: "POST" }, FETCH_TIMEOUT_MS,
+  ).catch(() => {});
+}
+
+function noteGridChoiceActivity() {
+  if (pendingGridChoiceJobId === null) return;
+  gridChoiceDeadline = Date.now() + gridChoiceTimeoutMs;
+  gridChoiceActivityUnsent = true;
+  renderGridChoiceTitle();
+  sendGridChoiceActivity();
+}
+
+for (const eventType of GRID_CHOICE_ACTIVITY_EVENTS) {
+  window.addEventListener(eventType, noteGridChoiceActivity, { capture: true, passive: true });
+}
+
+// Arms (`jobId`, `timeoutSeconds` from the polled job) or disarms (null) the
+// pending grid choice, with its title and countdown.
+function setPendingGridChoice(jobId, timeoutSeconds) {
+  pendingGridChoiceJobId = jobId;
+  clearInterval(gridChoiceClock);
+  gridChoiceClock = null;
+  if (jobId !== null) {
+    gridChoiceTimeoutMs = timeoutSeconds * 1000;
+    gridChoiceLastPingAt = 0;
+    gridChoiceClock = setInterval(() => {
+      renderGridChoiceTitle();
+      sendGridChoiceActivity();
+    }, 1000);
+    // The poll that saw the choice may be late: the back end's wait restarts
+    // with the countdown.
+    noteGridChoiceActivity();
+  }
+  renderPreviewStatus();
+}
+
 // Outline of incremental fill's attention zone (`attention_zone`, [top
 // row, left column, height, width]: the window, already clipped by the
 // grid) on a grid of `height` x
@@ -1631,6 +1740,7 @@ function renderAttemptPreview(examples) {
     theme_cells: themeCells,
     challenge_cells: challengeCells,
     scrabble_cells: scrabbleCells,
+    user_cells: userCells,
     breaks: previewBreaks,
     process_number: processNumber,
     is_best: isBest,
@@ -1830,13 +1940,23 @@ function renderAttemptPreview(examples) {
     // the overlays above. A text color, which composes cleanly with the
     // .impossible/.noise/.low-candidates backgrounds and the
     // .forced/.locked borders already in place.
-    // Dark-cyan letters for words of the language's Scrabble dictionary
+    // Blue letters for words of the language's Scrabble dictionary
     // (backend/app.py's `_annotate_scrabble_cells`). The theme/"Mots Défi"
     // colours below win a shared cell (see .scrabble's position in
     // style.css).
     for (const [r, c] of scrabbleCells || []) {
       const cell = cellElementsByCoord.get(`${r},${c}`);
       if (cell) cell.classList.add("scrabble");
+    }
+    // Words of the player's own dictionaries (backend/app.py's
+    // `user_cells`), each in its dictionary's colour (applyGlossaryColors).
+    for (const [glossaryId, cells] of Object.entries(userCells || {})) {
+      for (const [r, c] of cells) {
+        const cell = cellElementsByCoord.get(`${r},${c}`);
+        if (!cell) continue;
+        cell.classList.add("user-glossary");
+        cell.style.setProperty("--glossary-fg", userGlossaryCellColor(glossaryId));
+      }
     }
     for (const [r, c] of themeCells || []) {
       const cell = cellElementsByCoord.get(`${r},${c}`);
@@ -1971,7 +2091,7 @@ async function chooseGeneratedGrid(index) {
   const jobId = pendingGridChoiceJobId;
   if (!jobId) return;
   const t = I18N[uiLanguage];
-  pendingGridChoiceJobId = null;
+  setPendingGridChoice(null);
   chosenGridChoiceIndex = index;
   if (lastPreviewExamples) renderAttemptPreview(lastPreviewExamples);
   try {
@@ -2031,6 +2151,7 @@ async function openAttemptPreviewInteractive(exampleGrid, breaks) {
       challenge_words: generateChallengeWords.length ? generateChallengeWords : undefined,
       pattern_style: patternStyle(),
       breaks: breaks || [],
+      pseudo: userPseudo || undefined,
     },
     "/api/interactive/from-attempt"
   );
@@ -2177,6 +2298,11 @@ function renderPreviewPosition() {
 // screen.
 function renderPreviewStatus() {
   attemptPreviewStatus.textContent = lastPreviewStep ? describeStep(I18N[uiLanguage], lastPreviewStep) : "";
+  // The choice tiles get a real title instead (#grid-choice-title); the
+  // history's other entries keep their status under it.
+  attemptPreviewStatus.hidden = pendingGridChoiceJobId !== null
+    && !!lastPreviewStep && lastPreviewStep.code === "choose_grid";
+  renderGridChoiceTitle();
 }
 
 // Diagnostic table shown right below the final, already-minimized grid's
@@ -2473,7 +2599,7 @@ function hideAttemptPreview() {
   attemptPreviewStatus.textContent = "";
   lastPreviewExamples = null;
   lastPreviewStep = null;
-  pendingGridChoiceJobId = null;
+  setPendingGridChoice(null);
   chosenGridChoiceIndex = null;
   previewHistory = [];
   previewHistoryIndex = -1;
@@ -2853,6 +2979,7 @@ function renderGrid() {
   // The grid's word breaks: the Interactive grid's own, else the loaded
   // grid's (its record's `breaks`).
   const breaks = interactiveMode ? interactiveBreaks : wordBreakSet(puzzle.breaks);
+  const elementaryImpossible = interactiveMode ? interactiveElementaryImpossibleCells() : new Set();
   const numberByCell = new Map();
   for (const w of words) {
     numberByCell.set(`${w.row},${w.col}`, w.number);
@@ -2950,6 +3077,9 @@ function renderGrid() {
         }
       }
 
+      // "Interactif" mode: every letter takes the "Autres" colour unless a
+      // glossary class below gives it another one.
+      if (interactiveMode && letter) cell.classList.add("interactive-letter");
       // "Interactif" mode: magenta letter for a word placed automatically
       // from the theme glossary (see interactiveThemeCells).
       if (interactiveMode && letter && interactiveThemeCells.has(`${r},${c}`)) {
@@ -2961,10 +3091,17 @@ function renderGrid() {
       if (interactiveMode && letter && interactiveChallengeCells.has(`${r},${c}`)) {
         cell.classList.add("interactive-challenge");
       }
-      // "Interactif" mode: dark-cyan letter for a word placed automatically
+      // "Interactif" mode: blue letter for a word placed automatically
       // from the Scrabble dictionary (see interactiveScrabbleCells).
       if (interactiveMode && letter && interactiveScrabbleCells.has(`${r},${c}`)) {
         cell.classList.add("interactive-scrabble");
+      }
+      // "Interactif" mode: a word placed automatically from one of the
+      // player's dictionaries, in that dictionary's colour (see
+      // interactiveUserCells).
+      if (interactiveMode && letter && interactiveUserCells.has(`${r},${c}`)) {
+        cell.classList.add("interactive-user-glossary");
+        cell.style.setProperty("--glossary-fg", userGlossaryCellColor(interactiveUserCells.get(`${r},${c}`)));
       }
       // "Interactif" mode: red/orange background for a slot that's
       // impossible / below the fill-options threshold — same meaning as
@@ -2978,7 +3115,7 @@ function renderGrid() {
         // red (see their declaration order in style.css).
         if (interactiveExcludedCells.has(dk)) cell.classList.add("interactive-excluded");
         if (interactiveWindowCells.has(dk)) cell.classList.add("interactive-window");
-        if (interactiveImpossibleCells.has(dk)) cell.classList.add("interactive-impossible");
+        if (interactiveImpossibleCells.has(dk) || elementaryImpossible.has(dk)) cell.classList.add("interactive-impossible");
         else if (interactiveLowCells.has(dk)) cell.classList.add("interactive-low");
         // Always a subset of interactiveImpossibleCells above — the exact
         // crossing cell of a deadlock, shown in a more vivid red on top of
@@ -3732,7 +3869,361 @@ function renderUserPseudo() {
   userPseudoBtn.hidden = false;
   userPseudoBtn.textContent = userPseudo || t.userPseudoUnset;
   userPseudoBtn.classList.toggle("user-pseudo-unset", !userPseudo);
+  settingsBtn.hidden = !userPseudo || !userSecret;
 }
+
+// ---------- Settings: dictionaries and glossaries ----------
+//
+// The player's glossaries in priority order: "Mots Défi" and the theme
+// glossary first (when the form has some), then the reorderable list of
+// POST /api/profile/get — the player's dictionaries and the Falcon
+// dictionary, each with an on/off checkbox (at least one stays on) and
+// up/down arrows, a dictionary with a delete button. Every entry has a
+// colour square (a native colour input) setting the colour its words are
+// shown in (applyGlossaryColors).
+
+async function profileRequest(route, extra) {
+  const resp = await fetch(`/api/profile/${route}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pseudo: userPseudo, secret: userSecret, ...(extra || {}) }),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+// The display colour of glossary `id` ("challenge", "theme", "scrabble",
+// "others" or a user dictionary id).
+function glossaryColorOf(id) {
+  const prefs = glossaryPrefs || { glossaries: [], colors: {} };
+  if (id === "challenge" || id === "theme") {
+    return (prefs.colors && prefs.colors[id]) || GLOSSARY_DEFAULT_COLORS[id];
+  }
+  const item = prefs.glossaries.find((g) => g.id === id);
+  if (item && item.color) return item.color;
+  return GLOSSARY_DEFAULT_COLORS[id] || GLOSSARY_DEFAULT_COLORS.user;
+}
+
+// Sets the glossary colours on :root: --challenge-fg, --theme-fg,
+// --scrabble-fg, --others-fg (the letters of the preview and Interactive
+// grids in no other glossary's colour) and one --glossary-<id> per user
+// dictionary, read by the .user-glossary/.interactive-user-glossary cells.
+function applyGlossaryColors() {
+  const root = document.documentElement.style;
+  root.setProperty("--challenge-fg", glossaryColorOf("challenge"));
+  root.setProperty("--theme-fg", glossaryColorOf("theme"));
+  root.setProperty("--scrabble-fg", glossaryColorOf("scrabble"));
+  root.setProperty("--others-fg", glossaryColorOf("others"));
+  for (const item of (glossaryPrefs && glossaryPrefs.glossaries) || []) {
+    if (!FALCON_GLOSSARY_IDS.includes(item.id)) {
+      root.setProperty(`--glossary-${item.id}`, glossaryColorOf(item.id));
+    }
+  }
+}
+
+// The colour a cell of user dictionary `id` is drawn in (its --glossary-fg).
+function userGlossaryCellColor(id) {
+  return `var(--glossary-${id}, var(--user-glossary-fg))`;
+}
+
+async function loadGlossaryPrefs() {
+  if (!userPseudo || !userSecret) {
+    glossaryPrefs = null;
+    applyGlossaryColors();
+    return;
+  }
+  try {
+    const data = await profileRequest("get");
+    glossaryPrefs = data.ok ? data.preferences : null;
+  } catch (err) {
+    glossaryPrefs = null;
+  }
+  applyGlossaryColors();
+  if (!settingsOverlay.hidden) renderGlossaryList();
+}
+
+function setGlossaryStatus(text, isError) {
+  glossaryStatus.textContent = text || "";
+  glossaryStatus.classList.toggle("glossary-status-error", !!isError);
+}
+
+function profileErrorMessage(code) {
+  const t = I18N[uiLanguage];
+  switch (code) {
+    case "wordlist_unrecognised": return t.glossaryUnrecognised;
+    case "upload_too_large": return t.glossaryTooLarge;
+    case "glossary_none_enabled": return t.glossaryLastEnabled;
+    case "profile_forbidden": return t.glossaryForbidden;
+    default: return t.glossaryError;
+  }
+}
+
+// Saves the reorderable list `items` ([{id, enabled, color}]) and the
+// fixed glossaries' `colors`, then redraws the panel.
+async function saveGlossaryPrefs(items, colors) {
+  try {
+    const data = await profileRequest("preferences", {
+      glossaries: items.map((g) => ({ id: g.id, enabled: g.enabled, color: g.color })),
+      colors,
+    });
+    if (data.ok) {
+      glossaryPrefs = data.preferences;
+      setGlossaryStatus("");
+    } else {
+      setGlossaryStatus(profileErrorMessage(data.code), true);
+    }
+  } catch (err) {
+    setGlossaryStatus(I18N[uiLanguage].glossaryError, true);
+  }
+  applyGlossaryColors();
+  renderGlossaryList();
+}
+
+function glossaryIconButton(path, label, onClick, disabled) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.title = label;
+  btn.setAttribute("aria-label", label);
+  btn.disabled = !!disabled;
+  btn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">${path}</svg>`;
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+const GLOSSARY_ICON_UP = '<path d="M12 5l-7 8h14z" fill="currentColor"></path>';
+const GLOSSARY_ICON_DOWN = '<path d="M12 19l7-8H5z" fill="currentColor"></path>';
+const GLOSSARY_ICON_TRASH = '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+  + 'd="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"></path>';
+
+// {scrabble, others} per language (GET /api/glossary/counts), null after a
+// failure; the list is drawn again once a language's counts arrive.
+const glossaryEntryCounts = new Map();
+
+function glossaryCountsOf(language) {
+  if (glossaryEntryCounts.has(language)) return glossaryEntryCounts.get(language);
+  glossaryEntryCounts.set(language, null);
+  fetchWithTimeout(`/api/glossary/counts?language=${encodeURIComponent(language)}`, {}, FETCH_TIMEOUT_MS)
+    .then((resp) => (resp.ok ? resp.json() : null))
+    .then((counts) => {
+      if (!counts) return;
+      glossaryEntryCounts.set(language, counts);
+      if (!settingsOverlay.hidden) renderGlossaryList();
+    })
+    .catch(() => {});
+  return null;
+}
+
+function renderGlossaryList() {
+  const t = I18N[uiLanguage];
+  glossaryList.innerHTML = "";
+  const prefs = glossaryPrefs || {
+    glossaries: FALCON_GLOSSARY_IDS.map((id) => ({ id, enabled: true })), colors: {},
+  };
+  const items = prefs.glossaries.map((g) => ({ ...g }));
+  const colors = { ...(prefs.colors || {}) };
+  const languageNames = new Map(
+    [...languageSelect.options].map((o) => [o.value, o.textContent]),
+  );
+  // The languages of the grid being set up: the form's, plus its bilingual one.
+  const bilingual = document.getElementById("bilingual-language").value;
+  const selectedLanguages = [languageSelect.value];
+  if (languageNames.has(bilingual) && bilingual !== languageSelect.value) selectedLanguages.push(bilingual);
+  const entryCount = (count, language) => t.glossaryEntryCount(
+    count.toLocaleString(uiLanguage), languageNames.get(language) || language,
+  );
+  const falconCounts = (id) => selectedLanguages
+    .map((language) => {
+      const counts = glossaryCountsOf(language);
+      return counts ? entryCount(counts[id], language) : null;
+    })
+    .filter(Boolean)
+    .join(" · ") || null;
+  let rank = 0;
+  const addRow = (id, name, detail, extra) => {
+    rank += 1;
+    const li = document.createElement("li");
+    li.className = "glossary-item";
+    const rankSpan = document.createElement("span");
+    rankSpan.className = "glossary-rank";
+    rankSpan.textContent = `${rank}.`;
+    li.appendChild(rankSpan);
+    const color = document.createElement("input");
+    color.type = "color";
+    color.className = "glossary-color";
+    color.value = glossaryColorOf(id);
+    color.title = t.glossaryColor;
+    color.setAttribute("aria-label", t.glossaryColor);
+    color.addEventListener("change", () => {
+      if (id === "challenge" || id === "theme") {
+        colors[id] = color.value;
+      } else {
+        items.find((g) => g.id === id).color = color.value;
+      }
+      saveGlossaryPrefs(items, colors);
+    });
+    li.appendChild(color);
+    const check = document.createElement("span");
+    check.className = "glossary-check-slot";
+    if (extra && extra.checkbox) check.appendChild(extra.checkbox);
+    li.appendChild(check);
+    const label = document.createElement("span");
+    label.className = "glossary-label";
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "glossary-name";
+    nameSpan.textContent = name;
+    nameSpan.title = name;
+    label.appendChild(nameSpan);
+    if (detail) {
+      const detailSpan = document.createElement("span");
+      detailSpan.className = "glossary-detail";
+      detailSpan.textContent = detail;
+      label.appendChild(detailSpan);
+    }
+    li.appendChild(label);
+    const actions = document.createElement("span");
+    actions.className = "glossary-actions";
+    for (const node of (extra && extra.actions) || []) actions.appendChild(node);
+    li.appendChild(actions);
+    if (extra && extra.disabled) li.classList.add("glossary-disabled");
+    glossaryList.appendChild(li);
+  };
+  // Always listed, with an "(if any)" mention: they only apply when the
+  // form holds challenge words / theme keywords.
+  addRow("challenge", `${t.glossaryChallenge} ${t.glossaryIfAny}`, null, null);
+  addRow("theme", `${t.glossaryTheme} ${t.glossaryIfAnySingular}`, themeKeywords.join(" ") || null, null);
+  items.forEach((item, index) => {
+    const isFalcon = FALCON_GLOSSARY_IDS.includes(item.id);
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = !!item.enabled;
+    checkbox.title = t.glossaryEnable;
+    checkbox.setAttribute("aria-label", t.glossaryEnable);
+    checkbox.addEventListener("change", () => {
+      if (!checkbox.checked && items.filter((g) => g.enabled).length <= 1) {
+        checkbox.checked = true;
+        setGlossaryStatus(t.glossaryLastEnabled, true);
+        return;
+      }
+      item.enabled = checkbox.checked;
+      saveGlossaryPrefs(items, colors);
+    });
+    const move = (delta) => {
+      const target = index + delta;
+      [items[index], items[target]] = [items[target], items[index]];
+      saveGlossaryPrefs(items, colors);
+    };
+    const actions = [
+      glossaryIconButton(GLOSSARY_ICON_UP, t.glossaryMoveUp, () => move(-1), index === 0),
+      glossaryIconButton(GLOSSARY_ICON_DOWN, t.glossaryMoveDown, () => move(1), index === items.length - 1),
+    ];
+    if (isFalcon) {
+      const spacer = document.createElement("span");
+      spacer.className = "glossary-spacer";
+      actions.push(spacer);
+    } else {
+      actions.push(glossaryIconButton(GLOSSARY_ICON_TRASH, t.glossaryDelete, () => deleteGlossary(item)));
+    }
+    let name = item.name;
+    let detail = null;
+    if (item.id === "scrabble") {
+      name = t.glossaryScrabble;
+      detail = falconCounts("scrabble");
+    } else if (item.id === "others") {
+      // The known sources of the Falcon lexicon's other words.
+      name = t.glossaryOthers([t.glossarySourceStatistics, t.glossarySourceWiktionary].join(", "));
+      detail = [t.glossaryOthersDetail, falconCounts("others")].filter(Boolean).join(" · ");
+    } else {
+      // A user dictionary only serves the words of its own language.
+      name = t.glossaryUserName(item.name, languageNames.get(item.language) || item.language);
+      detail = selectedLanguages.includes(item.language)
+        ? entryCount(item.entries, item.language) + (item.scored ? "" : ` · ${t.glossaryNoScores}`)
+        : t.glossaryUserDetail(item.entries, item.scored);
+    }
+    addRow(item.id, name, detail, {
+      checkbox, actions, disabled: !item.enabled,
+    });
+  });
+}
+
+async function deleteGlossary(item) {
+  const t = I18N[uiLanguage];
+  if (!window.confirm(t.glossaryDeleteConfirm(item.name))) return;
+  try {
+    const data = await profileRequest("delete", { id: item.id });
+    if (data.ok) {
+      glossaryPrefs = data.preferences;
+      setGlossaryStatus("");
+    } else {
+      setGlossaryStatus(profileErrorMessage(data.code), true);
+    }
+  } catch (err) {
+    setGlossaryStatus(t.glossaryError, true);
+  }
+  applyGlossaryColors();
+  renderGlossaryList();
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
+}
+
+async function uploadGlossaryFile(file) {
+  const t = I18N[uiLanguage];
+  if (file.size > GLOSSARY_MAX_UPLOAD_BYTES) {
+    setGlossaryStatus(t.glossaryTooLarge, true);
+    return;
+  }
+  setGlossaryStatus(t.glossaryUploading);
+  glossaryUploadBtn.disabled = true;
+  try {
+    const content = arrayBufferToBase64(await file.arrayBuffer());
+    const data = await profileRequest("upload", {
+      filename: file.name, language: glossaryUploadLanguage.value, content,
+    });
+    if (data.ok) {
+      glossaryPrefs = data.preferences;
+      setGlossaryStatus(t.glossaryUploaded(data.dictionary.name, data.dictionary.entries));
+    } else {
+      setGlossaryStatus(profileErrorMessage(data.code), true);
+    }
+  } catch (err) {
+    setGlossaryStatus(t.glossaryError, true);
+  } finally {
+    glossaryUploadBtn.disabled = false;
+  }
+  applyGlossaryColors();
+  renderGlossaryList();
+}
+
+function openSettingsOverlay() {
+  glossaryUploadLanguage.innerHTML = languageSelect.innerHTML;
+  glossaryUploadLanguage.value = languageSelect.value;
+  setGlossaryStatus("");
+  renderGlossaryList();
+  settingsOverlay.hidden = false;
+  settingsCloseBtn.focus();
+  loadGlossaryPrefs();
+}
+
+settingsBtn.addEventListener("click", openSettingsOverlay);
+settingsCloseBtn.addEventListener("click", () => { settingsOverlay.hidden = true; });
+settingsOverlay.addEventListener("click", (e) => {
+  if (e.target === settingsOverlay) settingsOverlay.hidden = true;
+});
+settingsOverlay.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") settingsOverlay.hidden = true;
+});
+glossaryUploadBtn.addEventListener("click", () => glossaryUploadInput.click());
+glossaryUploadInput.addEventListener("change", () => {
+  const file = glossaryUploadInput.files && glossaryUploadInput.files[0];
+  glossaryUploadInput.value = "";
+  if (file) uploadGlossaryFile(file);
+});
 
 function openWelcomeOverlay() {
   welcomeLanguageSelect.value = uiLanguage;
@@ -3819,6 +4310,7 @@ welcomeForm.addEventListener("submit", async (event) => {
   userSecret = secret;
   savePrefs({ accepted: true, lang: uiLanguage, pseudo: userPseudo, secret: userSecret });
   renderUserPseudo();
+  loadGlossaryPrefs();
   welcomeOverlay.hidden = true;
   // The ranking's own "your rank" line depends on the pseudo.
   refreshLeaderboard();
@@ -3863,6 +4355,7 @@ userPseudoBtn.addEventListener("click", openWelcomeOverlay);
       : "";
     setUiLanguage(typeof prefs.lang === "string" ? prefs.lang : "fr");
     renderUserPseudo();
+    loadGlossaryPrefs();
     checkForSavedInteractiveWork();
     // A pseudo chosen before "Mot secret" was added (or a cookie that
     // got reset on the secret's side for some other reason) has no
@@ -4172,6 +4665,8 @@ const FETCH_TIMEOUT_MS = 35000;
 // TIMEOUT_S (150s), same "above the callee's own timeout" reasoning as
 // FETCH_TIMEOUT_MS itself vs. PROXY_TIMEOUT_S.
 const CHAT_FETCH_TIMEOUT_MS = 160000;
+// "Suivant": kept above frontend/server.py's STEP_PROXY_TIMEOUT_S (60s).
+const STEP_FETCH_TIMEOUT_MS = 70000;
 
 // "Définir" (GET /api/dictionary/define) makes one real LLM round-trip
 // asking for up to 10 definitions at once — measured live at ~40s on this
@@ -4806,11 +5301,16 @@ async function pollJob(jobId, t, { timed = false } = {}) {
       const choicePending = data.grid_choice_count != null && data.grid_choice == null;
       if (isCurrentJob() && choicePending && pendingGridChoiceJobId !== jobId
           && chosenGridChoiceIndex == null) {
-        pendingGridChoiceJobId = jobId;
+        setPendingGridChoice(jobId, data.grid_choice_timeout_s);
         catchUpPreviewToEnd();
         if (lastPreviewExamples) renderAttemptPreview(lastPreviewExamples);
+        // A panel open above the preview can push the title off screen.
+        const titleRect = gridChoiceTitle.getBoundingClientRect();
+        if (titleRect.top < 0 || titleRect.bottom > window.innerHeight) {
+          gridChoiceTitle.scrollIntoView({ block: "start", behavior: "smooth" });
+        }
       } else if (!choicePending && pendingGridChoiceJobId === jobId) {
-        pendingGridChoiceJobId = null;
+        setPendingGridChoice(null);
         if (isCurrentJob() && lastPreviewExamples) renderAttemptPreview(lastPreviewExamples);
       }
       // Decides what this poll actually shows — a not-yet-seen key step if
@@ -5602,7 +6102,7 @@ async function openLibraryGridInteractive(gridId) {
   // `libraryReopenArmPending`'s own declaration above for why this isn't
   // `libraryReopenOnInteractive` directly.
   libraryReopenArmPending = true;
-  await runInteractive({ grid_id: gridId }, "/api/interactive/from-library");
+  await runInteractive({ grid_id: gridId, pseudo: userPseudo || undefined }, "/api/interactive/from-library");
 }
 
 libraryBtn.addEventListener("click", () => {
@@ -7331,6 +7831,83 @@ function setInteractiveDiagnostics(data) {
   interactiveDeadlockCells = new Set((data.deadlock_cells || []).map(([r, c]) => `${r},${c}`));
   interactiveExcludedCells = new Set((data.excluded_cells || []).map(([r, c]) => `${r},${c}`));
   interactiveWindowCells = new Set((data.window_cells || []).map(([r, c]) => `${r},${c}`));
+  interactiveDiagnosticsKey = interactiveDiagnosticsStateKey();
+}
+
+// What the impossible/low/deadlock cells depend on: the grid, the "Mots Défi"
+// list and the fill method.
+function interactiveDiagnosticsStateKey() {
+  return JSON.stringify([
+    interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch))),
+    interactiveChallengeWords,
+    readFillMethod(),
+  ]);
+}
+
+// Called by renderInteractive(): once the state on screen is no longer the
+// one the impossible/low/deadlock cells describe, fetches them again. Debounced
+// like "Stats", silent, and dropped if the state changed in the meantime.
+function scheduleInteractiveDiagnosticsRefresh() {
+  if (!interactiveMode || !interactiveJobId) return;
+  const key = interactiveDiagnosticsStateKey();
+  if (key === interactiveDiagnosticsKey) return;
+  clearTimeout(interactiveDiagnosticsTimer);
+  interactiveDiagnosticsTimer = setTimeout(async () => {
+    const sent = interactiveDiagnosticsStateKey();
+    if (sent === interactiveDiagnosticsKey) return;
+    try {
+      const resp = await fetchWithTimeout("/api/interactive/impossible", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          job_id: interactiveJobId,
+          grid: interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch))),
+          challenge_words: interactiveChallengeWords,
+          fill_method: readFillMethod(),
+        }),
+      }, FETCH_TIMEOUT_MS);
+      if (!resp.ok || !interactiveMode || sent !== interactiveDiagnosticsStateKey()) return;
+      const data = await resp.json();
+      if (sent !== interactiveDiagnosticsStateKey()) return;
+      interactiveImpossibleCells = new Set((data.impossible_cells || []).map(([r, c]) => `${r},${c}`));
+      interactiveLowCells = new Set((data.low_candidate_cells || []).map(([r, c]) => `${r},${c}`));
+      interactiveDeadlockCells = new Set((data.deadlock_cells || []).map(([r, c]) => `${r},${c}`));
+      interactiveDiagnosticsKey = sent;
+      renderGrid();
+    } catch (err) {
+      /* silent: the next change or "Suivant" reports the cells again */
+    }
+  }, INTERACTIVE_STATS_DEBOUNCE_MS);
+}
+
+// Impossibilities the grid's geometry alone shows, known here without asking
+// the server: under the "grouped" style, every white run of 1 or 2 cells (no
+// word that short, a cell belonging to a single word); in any style, a white
+// cell alone in both directions.
+function interactiveElementaryImpossibleCells() {
+  const rows = interactiveGrid.length;
+  const cols = rows ? interactiveGrid[0].length : 0;
+  const grouped = interactivePatternStyle === "grouped";
+  const out = new Set();
+  const single = new Map();
+  const scan = (lineCount, cellCount, at) => {
+    for (let line = 0; line < lineCount; line++) {
+      let start = 0;
+      for (let i = 0; i <= cellCount; i++) {
+        const [r, c] = i < cellCount ? at(line, i) : [-1, -1];
+        if (i < cellCount && interactiveGrid[r][c] !== "#") continue;
+        const run = [];
+        for (let j = start; j < i; j++) run.push(`${at(line, j)[0]},${at(line, j)[1]}`);
+        if (grouped && run.length && run.length <= 2) for (const key of run) out.add(key);
+        if (run.length === 1) single.set(run[0], (single.get(run[0]) || 0) + 1);
+        start = i + 1;
+      }
+    }
+  };
+  scan(rows, cols, (line, i) => [line, i]);
+  scan(cols, rows, (line, i) => [i, line]);
+  for (const [key, count] of single) if (count === 2) out.add(key);
+  return out;
 }
 
 // The diagnostics describe the grid the backend last saw; drop them the
@@ -7339,6 +7916,7 @@ function clearInteractiveDiagnostics() {
   interactiveImpossibleCells = new Set();
   interactiveLowCells = new Set();
   interactiveDeadlockCells = new Set();
+  interactiveDiagnosticsKey = null;
   interactiveExcludedCells = new Set();
   interactiveWindowCells = new Set();
   interactiveInvalidCells = new Set();
@@ -7362,7 +7940,7 @@ function clearInteractiveDiagnostics() {
 function interactiveDiagnosticsPayload() {
   const cells = (set) => [...set].map((key) => key.split(",").map(Number));
   return {
-    impossible_cells: cells(interactiveImpossibleCells),
+    impossible_cells: cells(new Set([...interactiveImpossibleCells, ...interactiveElementaryImpossibleCells()])),
     deadlock_cells: cells(interactiveDeadlockCells),
     low_candidate_cells: cells(interactiveLowCells),
     excluded_cells: cells(interactiveExcludedCells),
@@ -7371,6 +7949,11 @@ function interactiveDiagnosticsPayload() {
     theme_cells: cells(interactiveThemeCells),
     challenge_cells: cells(interactiveChallengeCells),
     scrabble_cells: cells(interactiveScrabbleCells),
+    // {dictionary id: [[row, col], ...]}, like the previews' user_cells.
+    user_cells: [...interactiveUserCells].reduce((acc, [key, id]) => {
+      (acc[id] = acc[id] || []).push(key.split(",").map(Number));
+      return acc;
+    }, {}),
     // [row, col, letter] triples, the same shape POST /api/interactive/
     // stats itself returns.
     stat_letters: [...interactiveStatLetters].map(
@@ -7672,6 +8255,10 @@ function finishInteractiveMove() {
   interactiveThemeCells = moveSet(interactiveThemeCells);
   interactiveChallengeCells = moveSet(interactiveChallengeCells);
   interactiveScrabbleCells = moveSet(interactiveScrabbleCells);
+  const movedUserCells = new Map([...interactiveUserCells].filter(([key]) => (!plan.source.has(key)
+    || kept.has(key)) && !plan.target.has(key)));
+  for (const [key, id] of interactiveUserCells) if (plan.source.has(key)) movedUserCells.set(shiftKey(key), id);
+  interactiveUserCells = movedUserCells;
   if (interactiveZoneSelection) {
     const rows = interactiveGrid.length;
     const cols = interactiveGrid[0].length;
@@ -8058,10 +8645,18 @@ function renderInteractive() {
       interactiveScrabbleCells.delete(key);
     }
   }
+  // Same pruning for a user-dictionary cell — see interactiveUserCells.
+  for (const key of [...interactiveUserCells.keys()]) {
+    const [r, c] = key.split(",").map(Number);
+    if (!/[A-Z]/.test(interactiveGrid[r] && interactiveGrid[r][c])) {
+      interactiveUserCells.delete(key);
+    }
+  }
   syncPuzzleFromInteractive();
   renderGrid();
   renderInteractiveCellStats();
   scheduleInteractiveStatsRefresh();
+  scheduleInteractiveDiagnosticsRefresh();
   // "Mots Défi" list's own green/black coloring tracks the live grid — at
   // the user's explicit request (see gridContainsWord()'s own docstring).
   renderInteractiveChallengeList();
@@ -8161,6 +8756,16 @@ function interactiveClearDefsAt(row, col) {
     }
   }
 }
+// The letters at `cells` ([row, col] pairs) are about to be removed (erased,
+// or blackened): every emplacement through one of them, across and down,
+// loses its word breaks. Call it while the grid still has its old black cells.
+function interactiveClearBreaksAt(cells) {
+  const removed = new Set(cells.map(([r, c]) => `${r},${c}`));
+  for (const s of interactiveSlots()) {
+    if (!s.cells.some((p) => removed.has(`${p.row},${p.col}`))) continue;
+    for (const p of s.cells) interactiveBreaks.delete(wordBreakKey(p.row, p.col, s.direction));
+  }
+}
 
 // A "Suivant" word replaces the word breaks inside its own slot with its
 // own (`placed.breaks`: those of the multi-word expression it spells).
@@ -8193,7 +8798,10 @@ function interactiveToggleBlack() {
   if (!interactiveMode || !selected) return;
   interactivePushUndo();
   const cur = interactiveGrid[selected.row][selected.col];
-  if (cur !== "" && cur !== "#") interactiveClearDefsAt(selected.row, selected.col);
+  if (cur !== "" && cur !== "#") {
+    interactiveClearDefsAt(selected.row, selected.col);
+    interactiveClearBreaksAt([[selected.row, selected.col]]);
+  }
   const toBlack = cur !== "#";
   interactiveGrid[selected.row][selected.col] = toBlack ? "#" : "";
   // "Symétrie": the images of the cell follow it — an empty image turns
@@ -8236,7 +8844,10 @@ function interactiveErase() {
   if (!interactiveMode || !selected) return;
   interactivePushUndo();
   const cur = interactiveGrid[selected.row][selected.col];
-  if (cur !== "" && cur !== "#") interactiveClearDefsAt(selected.row, selected.col);
+  if (cur !== "" && cur !== "#") {
+    interactiveClearDefsAt(selected.row, selected.col);
+    interactiveClearBreaksAt([[selected.row, selected.col]]);
+  }
   interactiveGrid[selected.row][selected.col] = "";
   setInteractiveMessage("");
   renderInteractive();
@@ -8282,6 +8893,7 @@ function interactiveEraseZone() {
   const hasLetter = cells.some(([r, c]) => /[A-Z]/.test(interactiveGrid[r][c]));
   interactivePushUndo();
   if (hasLetter) {
+    interactiveClearBreaksAt(cells.filter(([r, c]) => /[A-Z]/.test(interactiveGrid[r][c])));
     for (const [r, c] of cells) {
       const ch = interactiveGrid[r][c];
       if (ch !== "#" && ch !== "") {
@@ -8635,6 +9247,7 @@ function syncChallengeWordLists(source) {
   interactiveChallengeWords = source.slice();
   renderGenerateChallengeList();
   renderInteractiveChallengeList();
+  scheduleInteractiveDiagnosticsRefresh();
 }
 
 generateChallengeAddBtn.addEventListener("click", addGenerateChallengeWord);
@@ -9561,6 +10174,10 @@ function enterInteractiveMode(state) {
   if (state.placed && state.placed.from_scrabble && state.placed.cells) {
     for (const [r, c] of state.placed.cells) interactiveScrabbleCells.add(`${r},${c}`);
   }
+  interactiveUserCells = new Map();
+  if (state.placed && state.placed.glossary && state.placed.cells) {
+    for (const [r, c] of state.placed.cells) interactiveUserCells.set(`${r},${c}`, state.placed.glossary);
+  }
   // "Mots Défi" list restore, at the user's explicit request — only ever
   // set on a resumed session's own result (backend/app.py's _run_
   // interactive_resume_job), same convention as `definitions`/`title`
@@ -9585,6 +10202,7 @@ function enterInteractiveMode(state) {
   applyPlacedWordBreaks(state.placed);
   interactivePushUndo();
   setInteractiveDiagnostics(state); // after pushUndo (which clears them)
+  interactiveDiagnosticsKey = null; // the first render asks with the fill method
   interactiveTitleProposed = false;
   interactiveTitleInput.value = state.title || "";
   interactiveSaveResult.textContent = "";
@@ -10333,7 +10951,7 @@ interactiveNextBtn.addEventListener("click", async () => {
         multi_word_percent: readMultiWordPercent(),
         fill_method: readFillMethod(),
       }),
-    }, FETCH_TIMEOUT_MS);
+    }, STEP_FETCH_TIMEOUT_MS);
     if (resp.status === 404) {
       interactiveUndoStack.pop();
       setInteractiveMessage(t.interactiveSessionLost, true);
@@ -10412,6 +11030,9 @@ interactiveNextBtn.addEventListener("click", async () => {
     if (data.placed.from_scrabble) {
       for (const [r, c] of data.placed.cells) interactiveScrabbleCells.add(`${r},${c}`);
     }
+    if (data.placed.glossary) {
+      for (const [r, c] of data.placed.cells) interactiveUserCells.set(`${r},${c}`, data.placed.glossary);
+    }
     setInteractiveDiagnostics(data);
     interactiveLastPlaced = data.placed;
     interactivePlacedHistory.push(data.placed.cells);
@@ -10476,7 +11097,13 @@ async function runInteractiveClean(deep) {
       setInteractiveMessage(t.interactiveNothingToClean, false);
       return;
     }
-    interactiveGrid = data.grid.map((row) => row.map((ch) => (ch === "." ? "" : ch)));
+    const cleaned = data.grid.map((row) => row.map((ch) => (ch === "." ? "" : ch)));
+    const removedLetters = [];
+    interactiveGrid.forEach((row, r) => row.forEach((ch, c) => {
+      if (/[A-Z]/.test(ch) && !/[A-Z]/.test(cleaned[r][c])) removedLetters.push([r, c]);
+    }));
+    interactiveClearBreaksAt(removedLetters);
+    interactiveGrid = cleaned;
     setInteractiveDiagnostics(data);
     setInteractiveMessage(
       deep ? t.interactiveDeepCleaned(data.cleared_count, data.removed_black_count || 0)
@@ -10789,6 +11416,7 @@ async function fetchInteractiveImpossible(t) {
       body: JSON.stringify({
         job_id: interactiveJobId, grid: wireGrid,
         challenge_words: interactiveChallengeWords,
+        fill_method: readFillMethod(),
       }),
     }, FETCH_TIMEOUT_MS);
     if (resp.status === 404) {
@@ -11454,6 +12082,11 @@ async function runGeneration(startJob) {
       continueBtn.hidden = false;
     }
   } finally {
+    // The poll gave up (connection lost) with a choice still pending.
+    if (pendingGridChoiceJobId !== null) {
+      setPendingGridChoice(null);
+      if (lastPreviewExamples) renderAttemptPreview(lastPreviewExamples);
+    }
     setGenerateButtonsDisabled(false);
     stopBtn.hidden = true;
     successMedal.hidden = true;

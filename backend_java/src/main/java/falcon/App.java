@@ -264,6 +264,8 @@ public final class App {
         final PW scrabbleWords;
         /** The expressions' word breaks, for each placed word's "breaks" (addPlacedBreaks). */
         Words.Breaks multiBreaks;
+        /** Each word's glossary (placed "glossary", placedGlossary), null without player glossaries. */
+        Glossary glossary;
         /** The "ingrid" fill method's state between "Suivant" clicks (Interactive.placeWordIngrid). */
         final Interactive.IngridState ingrid = new Interactive.IngridState();
 
@@ -901,19 +903,105 @@ public final class App {
     }
 
     /** Adds "scrabble_cells" to every preview example (mirrors _annotate_scrabble_cells): the cells of each fully
-     * lettered run of its example_grid spelling a word of the grid's Scrabble dictionary, shown in dark cyan; and
+     * lettered run of its example_grid spelling a word of the grid's Scrabble dictionary, shown in blue; and
      * "breaks", the word breaks of the runs spelling a multi-word expression (Words.wordBreakEdges). */
-    @SuppressWarnings("unchecked")
     static void annotateScrabbleCells(Object examples, PW scrabble, Words.Breaks multiBreaks) {
+        annotateScrabbleCells(examples, scrabble, multiBreaks, null);
+    }
+
+    /** {@link #annotateScrabbleCells(Object, PW, Words.Breaks)} where, with player glossaries ({@code glossary},
+     * userGlossary), "scrabble_cells" and "user_cells" ({user dictionary id: cells}) follow each word's own glossary
+     * (glossaryCells). */
+    @SuppressWarnings("unchecked")
+    static void annotateScrabbleCells(Object examples, PW scrabble, Words.Breaks multiBreaks, Glossary glossary) {
         if (!(examples instanceof List<?> l) || l.isEmpty()) return;
         for (Object o : l) {
             Map<String, Object> ex = (Map<String, Object>) o;
             Object eg = ex.get("example_grid");
             if (eg instanceof List<?> rows && !rows.isEmpty()) {
-                if (scrabble != null && !scrabble.isEmpty()) ex.put("scrabble_cells", Words.scrabbleWordCells(eg, scrabble));
+                if (glossary != null) {
+                    Object[] cells = glossaryCells(eg, glossary, scrabble);
+                    ex.put("scrabble_cells", cells[0]);
+                    ex.put("user_cells", cells[1]);
+                } else if (scrabble != null && !scrabble.isEmpty()) {
+                    ex.put("scrabble_cells", Words.scrabbleWordCells(eg, scrabble));
+                }
                 if (multiBreaks != null && !multiBreaks.isEmpty()) ex.put("breaks", Words.wordBreakEdges(eg, multiBreaks));
             }
         }
+    }
+
+    /** Where each word of a grid with player glossaries comes from (mirrors _user_glossary's pair): the grid's index
+     * and the ranked glossary ids per direction (null for a language without player glossaries). */
+    record Glossary(DualIndex index, List<String> across, List<String> down) {}
+
+    /** The grid's Glossary, null when neither language has player glossaries (mirrors _user_glossary): {@code index}
+     * the session's own, or the lexicons Generator.load caches for {@code difficulty}. */
+    static Glossary userGlossary(String pseudo, String language, String difficulty, String bilingual, DualIndex index)
+            throws IOException {
+        Words.UserLexicon[] specs = userLexicons(pseudo, language, bilingual);
+        if (specs[0] == null && specs[1] == null) return null;
+        if (index == null) {
+            Generator.Loaded a = Generator.load(WORDLISTS.get(language).toString(), null, difficulty, specs[0]);
+            Generator.Loaded d = a;
+            if (bilingual != null && !bilingual.isEmpty() && !bilingual.equals(language)) {
+                d = Generator.load(WORDLISTS.get(bilingual).toString(), null, difficulty, specs[1]);
+            }
+            index = new DualIndex(a.index(), d.index());
+        }
+        return new Glossary(index, specs[0] == null ? null : specs[0].ids(), specs[1] == null ? null : specs[1].ids());
+    }
+
+    /** {scrabble cells, {user dictionary id: cells}} of a grid with player glossaries (mirrors _glossary_cells): a run
+     * is coloured after its word's own glossary, a direction without player glossaries keeping the plain Scrabble-set
+     * colouring. */
+    static Object[] glossaryCells(Object grid, Glossary glossary, PW scrabble) {
+        Map<String, List<Object>> cells = Words.glossaryWordCells(grid, glossary.index(), glossary.across(), glossary.down());
+        Set<String> sa = glossary.across() != null || scrabble == null ? Set.of() : scrabble.across;
+        Set<String> sd = glossary.down() != null || scrabble == null ? Set.of() : (scrabble.dual ? scrabble.down : scrabble.across);
+        java.util.TreeSet<Integer> merged = new java.util.TreeSet<>();
+        List<Object> fromGlossary = cells.remove(UserProfiles.SCRABBLE_ID);
+        for (List<Object> list : java.util.Arrays.asList(fromGlossary == null ? List.<Object>of() : fromGlossary,
+                Words.scrabbleWordCells(grid, new PW(sa, sd, true)))) {
+            for (Object c : list) {
+                List<?> rc = (List<?>) c;
+                merged.add(Cells.of(((Number) rc.get(0)).intValue(), ((Number) rc.get(1)).intValue()));
+            }
+        }
+        cells.remove(UserProfiles.OTHERS_ID);
+        Map<String, Object> user = new LinkedHashMap<>();
+        for (String gid : new java.util.TreeSet<>(cells.keySet())) user.put(gid, cells.get(gid));
+        return new Object[]{Cells.toJson(merged), user};
+    }
+
+    /** Sets a placed word's "glossary" — the user dictionary id it is coloured with, null for a "Mots Défi"/theme
+     * word or a Falcon word — and, with player glossaries in its direction, "from_scrabble" (mirrors
+     * _placed_glossary). */
+    static void placedGlossary(Map<String, Object> placed, Glossary glossary) {
+        placed.put("glossary", null);
+        if (glossary == null || Boolean.TRUE.equals(placed.get("from_theme"))
+                || Boolean.TRUE.equals(placed.get("from_challenge"))) return;
+        String direction = (String) placed.get("direction");
+        List<String> ranked = "across".equals(direction) ? glossary.across() : glossary.down();
+        String word = placed.get("word") instanceof String w ? w : "";
+        if (ranked == null || ranked.isEmpty()) return;
+        LenIndex li = ("across".equals(direction) ? glossary.index().across : glossary.index().down).get(word.length());
+        int key = li != null && li.gloss != null && li.contains(word) ? li.glossOf(word) : -1;
+        String gid = key >= 0 && key < ranked.size() ? ranked.get(key) : null;
+        placed.put("from_scrabble", UserProfiles.SCRABBLE_ID.equals(gid));
+        if (!UserProfiles.FALCON_IDS.contains(gid)) placed.put("glossary", gid);
+    }
+
+    /** The (across, down) user-dictionary specs of a grid made by {@code pseudo} (mirrors _user_lexicons). */
+    static Words.UserLexicon[] userLexicons(String pseudo, String language, String bilingual) {
+        String p = pseudo == null ? "" : Py.strip(pseudo);
+        if (p.length() > MAX_PSEUDO_LENGTH) p = p.substring(0, MAX_PSEUDO_LENGTH);
+        if (p.isEmpty()) return new Words.UserLexicon[]{null, null};
+        Words.UserLexicon across = UserProfiles.lexiconSpec(p, language);
+        if (bilingual != null && !bilingual.isEmpty() && !bilingual.equals(language)) {
+            return new Words.UserLexicon[]{across, UserProfiles.lexiconSpec(p, bilingual)};
+        }
+        return new Words.UserLexicon[]{across, across};
     }
 
     /** The valid, distinct [row, col, direction] word breaks of {@code breaks} (a cell inside a rows x cols grid
@@ -939,6 +1027,17 @@ public final class App {
     /** Adds "breaks" to a placed-word object (Interactive.placeWord's "placed"): the word breaks of the expression it
      * spells, empty otherwise (mirrors _add_placed_breaks). */
     @SuppressWarnings("unchecked")
+    /** The request's pseudo when its secret word matches (SecretStore.verifyOrClaim), null otherwise (mirrors
+     * _profile_owner). */
+    static String profileOwner(Body b) {
+        String pseudo = Py.strip(b.str("pseudo", ""));
+        String secret = Py.strip(b.str("secret", ""));
+        if (pseudo.length() > MAX_PSEUDO_LENGTH) pseudo = pseudo.substring(0, MAX_PSEUDO_LENGTH);
+        if (secret.length() > MAX_SECRET_LENGTH) secret = secret.substring(0, MAX_SECRET_LENGTH);
+        if (pseudo.isEmpty() || secret.isEmpty() || !SecretStore.isValidPseudo(pseudo)) return null;
+        return SecretStore.verifyOrClaim(pseudo, secret) ? pseudo : null;
+    }
+
     static void addPlacedBreaks(Object placed, Words.Breaks multiBreaks) {
         if (!(placed instanceof Map<?, ?> pm)) return;
         List<Object> cellsJson = Json.listOrEmpty(pm.get("cells"));
@@ -959,12 +1058,15 @@ public final class App {
     /** Publishes the finished grids of an automatic generation (the engine's "choices", by decreasing content
      * score) as the "choose_grid" step, then waits for the player's click (POST /api/generate/choose/{job_id})
      * and returns the chosen grid's result map. Honors "Stop" while waiting; after GRID_CHOICE_TIMEOUT_S with
-     * no click, keeps the grid the engine picked itself ("recommended"). */
+     * neither a click nor a sign of the player's activity (POST /api/generate/choose/{job_id}/activity), keeps
+     * the grid the engine picked itself ("recommended"). */
     static Map<String, Object> awaitGridChoice(Job job, List<Object> choices, Generator.Progress progress,
                                                String shortId, Set<String> themeSet, Set<String> challengeWords) {
         job.update(d -> {
             d.put("grid_choice", null);
             d.put("grid_choice_count", choices.size());
+            d.put("grid_choice_timeout_s", (int) GRID_CHOICE_TIMEOUT_S);
+            d.put("grid_choice_activity", 0);
         });
         List<Object> examples = new ArrayList<>();
         for (int i = 0; i < choices.size(); i++) {
@@ -985,13 +1087,20 @@ public final class App {
         }
         progress.on("choose_grid", Json.obj("count", choices.size(), "examples", examples));
         long deadline = System.nanoTime() + (long) (GRID_CHOICE_TIMEOUT_S * 1e9);
+        int activitySeen = 0;
         try {
             while (job.get("grid_choice") == null && System.nanoTime() < deadline) {
                 if (job.cancel.get()) throw new GenerationCancelled();
                 sleepS(GRID_CHOICE_POLL_INTERVAL_S);
+                int activity = ((Number) job.get("grid_choice_activity")).intValue();
+                if (activity != activitySeen) {
+                    activitySeen = activity;
+                    deadline = System.nanoTime() + (long) (GRID_CHOICE_TIMEOUT_S * 1e9);
+                }
             }
         } finally {
             job.put("grid_choice_count", null);
+            job.put("grid_choice_timeout_s", null);
         }
         Object picked = job.get("grid_choice");
         int index;
@@ -1043,10 +1152,21 @@ public final class App {
         job.put("request", req.dump());
         Task task = new Task(jobId, req);
         // The grid's Scrabble dictionary: the third candidate family of every slot, and the source of every
-        // preview's dark-cyan "scrabble_cells" (annotateScrabbleCells).
+        // preview's blue "scrabble_cells" (annotateScrabbleCells).
         PW scrabble = scrabbleWords(req.language, req.bilingualLanguage, req.difficulty);
         // The expressions' word breaks: every preview's and the final grid's "breaks".
         Words.Breaks multi = multiBreaks(req.language, req.bilingualLanguage);
+        // The grid author's own dictionaries (USER_PROFILES/): merged into the lexicon, and every preview's
+        // "user_cells".
+        Words.UserLexicon[] userLexicons = userLexicons(req.pseudo, req.language, req.bilingualLanguage);
+        Glossary userGlossary;
+        try {
+            userGlossary = userGlossary(req.pseudo, req.language, req.difficulty, req.bilingualLanguage, null);
+        } catch (IOException e) {
+            Log.exception("user glossary: chargement impossible", e);
+            userGlossary = null;
+        }
+        Glossary glossary = userGlossary;
         Map<String, Long> phaseTimes = new ConcurrentHashMap<>();
         // Last non-empty live-preview snapshot, recorded as a "search_final" history entry right before
         // "minimizing" (live_preview itself is cleared when the search ends; see backend/app.py).
@@ -1066,7 +1186,7 @@ public final class App {
                 return;
             }
             applyZoneRevert(a.zoneRevert, data.get("examples"));
-            annotateScrabbleCells(data.get("examples"), scrabble, multi);
+            annotateScrabbleCells(data.get("examples"), scrabble, multi, glossary);
             Map<String, Object> newStep = new LinkedHashMap<>();
             newStep.put("code", step);
             newStep.putAll(data);
@@ -1169,7 +1289,7 @@ public final class App {
                         p.onProgress = progress;
                         p.onLivePreview = examples -> {
                             applyZoneRevert(a.zoneRevert, examples);
-                            annotateScrabbleCells(examples, scrabble, multi);
+                            annotateScrabbleCells(examples, scrabble, multi, glossary);
                             job.put("live_preview", examples);
                             if (examples != null && !examples.isEmpty()) lastLivePreview.set(examples);
                         };
@@ -1178,6 +1298,8 @@ public final class App {
                         p.wordsPerNode = req.wordsPerNode;
                         p.multiWordPercent = req.multiWordPercent;
                         p.fillMethod = req.fillMethod;
+                        p.userLexicon = userLexicons[0];
+                        p.bilingualUserLexicon = userLexicons[1];
                         p.blackSymmetry = req.symmetry;
                         p.patternStyle = req.patternStyle;
                         p.patternMix = req.patternMix;
@@ -1430,15 +1552,17 @@ public final class App {
 
     // ================================================================== interactive jobs
 
-    static Object[] loadInteractiveIndex(String language, String difficulty, String bilingual, String patternStyle)
-            throws IOException {
-        Generator.Loaded a = Generator.load(WORDLISTS.get(language).toString(), null, difficulty);
+    static Object[] loadInteractiveIndex(String language, String difficulty, String bilingual, String patternStyle,
+                                         String pseudo) throws IOException {
+        // The player's own dictionaries (USER_PROFILES/) merged into each language's lexicon.
+        Words.UserLexicon[] user = userLexicons(pseudo, language, bilingual);
+        Generator.Loaded a = Generator.load(WORDLISTS.get(language).toString(), null, difficulty, user[0]);
         boolean isBilingual = bilingual != null && !bilingual.isEmpty() && !bilingual.equals(language);
         if (!isBilingual) {
             return new Object[]{Words.styleIndex(new DualIndex(a.index(), a.index()), patternStyle),
                     (Predicate<String>) a::contains};
         }
-        Generator.Loaded d = Generator.load(WORDLISTS.get(bilingual).toString(), null, difficulty);
+        Generator.Loaded d = Generator.load(WORDLISTS.get(bilingual).toString(), null, difficulty, user[1]);
         Predicate<String> known = w -> a.contains(w) || d.contains(w);
         return new Object[]{Words.styleIndex(new DualIndex(a.index(), d.index()), patternStyle), known};
     }
@@ -1473,7 +1597,8 @@ public final class App {
             }
             job.put("step", Json.obj("code", "interactive_building"));
             boolean isBilingual = req.isBilingual();
-            Object[] loaded = loadInteractiveIndex(req.language, req.difficulty, req.bilingualLanguage, req.patternStyle);
+            Object[] loaded = loadInteractiveIndex(req.language, req.difficulty, req.bilingualLanguage, req.patternStyle,
+                    req.pseudo);
             DualIndex index = (DualIndex) loaded[0];
             @SuppressWarnings("unchecked")
             Predicate<String> known = (Predicate<String>) loaded[1];
@@ -1489,6 +1614,7 @@ public final class App {
             List<Object>[] diag = Interactive.fillDiagnostics(grid, rows, cols, index, challenge);
             Session session = new Session(index, priority, rng, req.seed, null, scrabble);
             session.multiBreaks = multi;
+            session.glossary = userGlossary(req.pseudo, req.language, req.difficulty, req.bilingualLanguage, index);
             INTERACTIVE_SESSIONS.put(jobId, session);
             Map<String, Object> meta = new LinkedHashMap<>();
             meta.put("language", req.language);
@@ -1543,6 +1669,14 @@ public final class App {
     }
 
     static void runInteractiveResumeJob(String jobId, Map<String, Object> record) {
+        runInteractiveResumeJob(jobId, record, null);
+    }
+
+    /** {@link #runInteractiveResumeJob(String, Map)} merging {@code profilePseudo}'s dictionaries (the record's own
+     * pseudo when null). */
+    static void runInteractiveResumeJob(String jobId, Map<String, Object> record, String profilePseudo) {
+        String profile = profilePseudo != null && !profilePseudo.isEmpty() ? profilePseudo
+                : record.get("pseudo") instanceof String rp ? rp : null;
         Job job = job(jobId);
         if (job == null) return;
         String shortId = jobId.substring(0, 8);
@@ -1564,7 +1698,7 @@ public final class App {
             Object gpRaw = record.get("generation_params");
             String recordStyle = gpRaw instanceof Map<?, ?> gpMap && gpMap.get("pattern_style") != null
                     ? gpMap.get("pattern_style").toString() : null;
-            Object[] loaded = loadInteractiveIndex(language, difficulty, bilingual, recordStyle);
+            Object[] loaded = loadInteractiveIndex(language, difficulty, bilingual, recordStyle, profile);
             DualIndex index = (DualIndex) loaded[0];
             @SuppressWarnings("unchecked")
             Predicate<String> known = (Predicate<String>) loaded[1];
@@ -1583,6 +1717,7 @@ public final class App {
             Session session = new Session(index, priority, rng, seed, (String) record.get("id"),
                     scrabbleWords(language, bilingual, difficulty));
             session.multiBreaks = multiBreaks(language, bilingual);
+            session.glossary = userGlossary(profile, language, difficulty, bilingual, index);
             INTERACTIVE_SESSIONS.put(jobId, session);
             Map<String, Object> meta = new LinkedHashMap<>();
             meta.put("language", language);
@@ -1984,6 +2119,57 @@ public final class App {
             return Json.obj("count", snap[0], "resource_usage", LATEST_RESOURCE_USAGE, "queue_lengths",
                     Json.obj("grid", GRID_QUEUE.size(), "clues", CLUES_QUEUE.size()), "version", SERVER_VERSION);
         });
+        // ---- USER_PROFILES/: the settings panel's user dictionaries and glossary preferences (mirrors the
+        // /api/profile/* routes of backend/app.py, backend/user_profiles.py)
+        w.post("/api/profile/get", r -> {
+            String pseudo = profileOwner(new Body(r.json()));
+            if (pseudo == null) return Json.obj("ok", false, "code", "profile_forbidden");
+            return Json.obj("ok", true, "preferences", UserProfiles.loadPreferences(pseudo));
+        });
+        w.post("/api/profile/preferences", r -> {
+            Body b = new Body(r.json());
+            String pseudo = profileOwner(b);
+            if (pseudo == null) return Json.obj("ok", false, "code", "profile_forbidden");
+            Object glossaries = b.raw("glossaries");
+            Map<String, Object> prefs = UserProfiles.savePreferences(pseudo,
+                    glossaries instanceof List<?> l ? new ArrayList<>(l) : List.of(), b.raw("colors"));
+            if (prefs == null) return Json.obj("ok", false, "code", "glossary_none_enabled");
+            return Json.obj("ok", true, "preferences", prefs);
+        });
+        w.post("/api/profile/upload", r -> {
+            Body b = new Body(r.json());
+            String pseudo = profileOwner(b);
+            if (pseudo == null) return Json.obj("ok", false, "code", "profile_forbidden");
+            byte[] data;
+            try {
+                data = java.util.Base64.getDecoder().decode(b.str("content", ""));
+            } catch (IllegalArgumentException e) {
+                return Json.obj("ok", false, "code", "upload_invalid");
+            }
+            if (data.length > UserProfiles.MAX_UPLOAD_BYTES) return Json.obj("ok", false, "code", "upload_too_large");
+            String filename = b.str("filename", "");
+            long start = System.nanoTime();
+            Object[] added;
+            try {
+                added = UserProfiles.addDictionary(pseudo, filename, data, b.str("language", "fr"));
+            } catch (UserProfiles.WordlistUnrecognised e) {
+                Log.info("profile upload '" + filename + "' by " + pseudo + ": not recognised (" + e.getMessage() + ")");
+                return Json.obj("ok", false, "code", "wordlist_unrecognised");
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> item = (Map<String, Object>) added[1];
+            Log.info("profile upload '" + filename + "' by " + pseudo + ": " + item.get("entries") + " entries, scored="
+                    + item.get("scored") + ", " + Py.fmt((System.nanoTime() - start) / 1e9, 1) + "s");
+            return Json.obj("ok", true, "preferences", added[0], "dictionary", item);
+        });
+        w.post("/api/profile/delete", r -> {
+            Body b = new Body(r.json());
+            String pseudo = profileOwner(b);
+            if (pseudo == null) return Json.obj("ok", false, "code", "profile_forbidden");
+            Map<String, Object> prefs = UserProfiles.deleteDictionary(pseudo, b.str("id", ""));
+            if (prefs == null) return Json.obj("ok", false, "code", "glossary_unknown");
+            return Json.obj("ok", true, "preferences", prefs);
+        });
         w.post("/api/pseudo/claim", r -> {
             Body b = new Body(r.json());
             String pseudo = Py.strip(b.requiredMin1("pseudo"));
@@ -2035,6 +2221,12 @@ public final class App {
         });
         // Localhost-only (gated by frontend/server.py): the "Statistiques" panel's usage-score counts.
         // With the number of words of each difficulty's lexicon (Generator.lexiconLengthCounts, once per process).
+        w.get("/api/glossary/counts", r -> {
+            String language = r.q("language", "");
+            if (!WORDLISTS.containsKey(language)) throw http(400, "langue inconnue : " + Log.repr(language));
+            int[] counts = falcon.gen.Words.glossaryEntryCounts(language);
+            return Json.obj("scrabble", counts[0], "others", counts[1]);
+        });
         w.get("/api/usage_stats", r -> {
             List<String> difficulties = List.of("easy", "medium", "hard");
             List<String[]> pairs = new ArrayList<>();
@@ -2456,6 +2648,21 @@ public final class App {
             if (verdict[0] != null) throw http(422, "index de grille hors limites");
             return Json.obj("status", "chosen", "index", index);
         });
+        w.post("/api/generate/choose/{job_id}/activity", r -> {
+            // A sign that the player is still in front of the screen while a grid choice is pending: restarts
+            // the wait of awaitGridChoice, like the web UI's countdown. 409 when no choice is pending.
+            Job job = job(r.pathParams.get("job_id"));
+            if (job == null) throw http(404, "job inconnu (expiré ou jamais existé)");
+            boolean[] renewed = new boolean[1];
+            job.update(d -> {
+                if (d.get("grid_choice_count") != null && d.get("grid_choice") == null) {
+                    d.put("grid_choice_activity", ((Number) d.get("grid_choice_activity")).intValue() + 1);
+                    renewed[0] = true;
+                }
+            });
+            if (!renewed[0]) throw http(409, "aucun choix de grille en attente");
+            return Json.obj("status", "renewed");
+        });
         w.post("/api/generate/continue/{job_id}", 202, r -> {
             Job job = job(r.pathParams.get("job_id"));
             if (job == null) throw http(404, "job inconnu (expiré ou jamais existé)");
@@ -2526,6 +2733,11 @@ public final class App {
                                 s.scrabbleWords, mwp, selectedCells, zoneCells);
             }
             addPlacedBreaks(placed.get("placed"), s.multiBreaks);
+            if (placed.get("placed") instanceof Map<?, ?> pm) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> pl = (Map<String, Object>) pm;
+                placedGlossary(pl, s.glossary);
+            }
             boolean impossible = Boolean.TRUE.equals(placed.get("impossible"));
             boolean zoneComplete = Boolean.TRUE.equals(placed.get("zone_complete"));
             Map<String, Object> out = new LinkedHashMap<>();
@@ -2624,8 +2836,13 @@ public final class App {
             Set<String> cw = challengeSet(b.strList("challenge_words"));
             Session s = session(jobId);
             int[] d = dims(gridJson);
+            String fillMethod = b.str("fill_method", null);
+            if (fillMethod != null) validateFillMethod(fillMethod);
             List<Object>[] diag = Interactive.fillDiagnostics(gridOf(gridJson), d[0], d[1], s.index, cw);
-            return Json.obj("impossible_cells", diag[0], "low_candidate_cells", diag[1], "deadlock_cells", diag[2]);
+            List<Object> impossible = "ingrid".equals(fillMethod)
+                    ? Interactive.withCells(diag[0], Interactive.ingridBlockedCells(gridOf(gridJson), d[0], d[1], s.index, cw))
+                    : diag[0];
+            return Json.obj("impossible_cells", impossible, "low_candidate_cells", diag[1], "deadlock_cells", diag[2]);
         });
         w.post("/api/interactive/stats", r -> {
             Body b = new Body(r.json());
@@ -2826,11 +3043,13 @@ public final class App {
             return Json.obj("job_id", id);
         });
         w.post("/api/interactive/from-library", 202, r -> {
-            Map<String, Object> record = GridStore.getGrid(new Body(r.json()).required("grid_id"));
+            Body fb = new Body(r.json());
+            Map<String, Object> record = GridStore.getGrid(fb.required("grid_id"));
             if (record == null) throw http(404, "grille introuvable dans la bibliothèque");
+            String profile = fb.str("pseudo", null);
             String id = newJob();
             Map<String, Object> synthetic = libraryRecordToInteractive(record);
-            runInBackground("resume-" + id.substring(0, 8), () -> runInteractiveResumeJob(id, synthetic));
+            runInBackground("resume-" + id.substring(0, 8), () -> runInteractiveResumeJob(id, synthetic, profile));
             return Json.obj("job_id", id);
         });
         w.post("/api/interactive/from-attempt", 202, r -> {
@@ -2865,7 +3084,8 @@ public final class App {
             synthetic.put("priority_words", new ArrayList<>());
             synthetic.put("seed", 0);
             synthetic.put("origin", null);
-            runInBackground("resume-" + id.substring(0, 8), () -> runInteractiveResumeJob(id, synthetic));
+            String profile = b.str("pseudo", null);
+            runInBackground("resume-" + id.substring(0, 8), () -> runInteractiveResumeJob(id, synthetic, profile));
             return Json.obj("job_id", id);
         });
         w.post("/api/interactive/finish", 202, r -> {

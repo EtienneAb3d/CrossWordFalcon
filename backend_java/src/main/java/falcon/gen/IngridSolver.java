@@ -468,11 +468,15 @@ public final class IngridSolver {
     }
 
     /** Slot {@code i}'s candidate family of a word: 0 "Mots Défi", 1 theme glossary, 2 Scrabble dictionary, 3 the
-     * rest. */
+     * rest — with user dictionaries merged in (LenIndex.gloss), 2 + the word's glossary key instead of 2/3. */
     ToIntFunction<String> familyOf(int i) {
         int[] cells = f.slots.get(i);
         Set<String> challenge = f.challengeWords;
         Set<String> theme = f.priorityWords.forCells(cells);
+        LenIndex li = f.index.forCells(cells).get(cells.length);
+        if (li != null && li.gloss != null) {
+            return w -> challenge.contains(w) ? 0 : theme.contains(w) ? 1 : 2 + li.glossOf(w);
+        }
         Set<String> scrabble = f.scrabbleWords.forCells(cells);
         return w -> challenge.contains(w) ? 0 : theme.contains(w) ? 1 : scrabble.contains(w) ? 2 : 3;
     }
@@ -617,7 +621,7 @@ public final class IngridSolver {
         if (found.isEmpty()) return null;
         ToIntFunction<String> family = familyOf(i);
         int first = family.applyAsInt(ord.get(found.get(0)));
-        if (first < 3) found.removeIf(k -> family.applyAsInt(ord.get(k)) != first);
+        found.removeIf(k -> family.applyAsInt(ord.get(k)) != first);
         int pick = weightedPick(RANDOM_WORD_WEIGHTS, found.size());
         return new Object[]{found.get(0), ord.get(found.get(pick))};
     }

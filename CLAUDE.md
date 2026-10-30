@@ -60,6 +60,7 @@ Engineering language is English (code, comments, this file, the SKILLs,
 | `GRID_SVG/`, `GRID_PNG/` | Generated SVG/PNG exports of every published grid, one file per page (`_GRID`, `_CLUES`, `_SOLUTION`), laid out like its PDF. Gitignored. `GRID_SAMPLES/` (committed) is a small, hand-curated set of examples — never written automatically. |
 | `LOG_LLM/`, `LOG_CHAT/`, `LOG_THEME/`, `LOG_USERS/` | Diagnostic/audit logs (LLM call traces, chat transcripts, theme pre-search traces, daily presence headcount). Gitignored. |
 | `RSS/`, `SCRAPP/` | Daily-refreshed scraper output caches. Gitignored. |
+| `USER_PROFILES/` | One folder per player (`<pseudo slug>/`): glossary preferences, uploaded word files and their converted/merged forms (see "`user_profiles.py`"). Gitignored. |
 | `CORPUS/`, `data/wiktionary/` | Raw downloaded source caches for the dictionary pipeline (OPUS corpora; Wiktionary/Kaikki dumps, kept for reuse). Gitignored. |
 | `env.sh` / `env_default.sh` | Runtime configuration (ports, LLM/embed/Qdrant endpoints, model choice). `env.sh` is gitignored (real machine config); `env_default.sh` is the checked-in template. |
 | `run_*.sh`, `Install*.sh` | Launch/setup scripts — see "Environment, ports, launch scripts" below. |
@@ -406,8 +407,11 @@ length (`build_index`, Java `LenIndex`): the words, their ids, the
 row reference per word (`refs`: the byte offset of the word's row in its
 wordlist shifted left two bits, the low bits naming the wordlist —
 `ROW_SOURCE_FREQ` 0, `ROW_SOURCE_SCRABBLE` 1, `ROW_SOURCE_MULTI` 2,
-`_freq_row_ref`/`_scrabble_row_ref`/`_multi_row_ref`; `array('I')`, Java
-`int[]`), the
+`ROW_SOURCE_USER` 3 (a user's merged dictionary lexicon),
+`_freq_row_ref`/`_scrabble_row_ref`/`_multi_row_ref`/`_user_row_ref`;
+`array('I')`, Java `int[]`), the glossary-key column (`gloss`,
+`array('b')`, Java `LenIndex.gloss` `byte[]`, `None`/null unless user
+dictionaries are merged in, see "User dictionaries" below), the
 usage-score column (`usage`, `array('b')` behind `_WordColumn`, Java
 `LenIndex.usage` `byte[]`; `USAGE_SCORE_UNKNOWN` -1 for an unrated word,
 `None`/null when the language has no usage-score file — `load_usage_
@@ -417,7 +421,8 @@ word and their inverse (`lemma_off`/`lemma_ids`, `lemma_keys`/
 `int[]`, set by `_attach_lemmas`/Java `Words.attachLemmas` from each
 word's own row: its CANONIQUE lemmas, lowercased, else its accented form,
 interned to ids unique per process so two languages never share one), plus
-the three wordlist paths (`sources`: freq, Scrabble, multi-word). The accented form and the lemmas are
+the four wordlist paths (`sources`: freq, Scrabble, multi-word, user
+lexicon or `None`). The accented form and the lemmas are
 read back from that row only when a grid's words get their `accented`/
 `canonical` fields (`word_forms`, Java `Words.wordForms`). Besides the
 index, a `LoadedLexicon` holds the proper-noun and no-gloss quota sets
@@ -462,9 +467,10 @@ json`. Holds all server-side state in plain module dicts/lists:
   (`_success_key`, Java `Generator.successKey`), emitted from the
   palier's harvest loop — without replacing `step`, like
   `"budget_progress"`; shown by the web UI's gold-medal badge
-  `#success-medal`), `grid_choice_count`/`grid_choice` (the grid choice:
-  number of grids offered while the player's pick is pending, `None`
-  otherwise, and the index picked), `resume_state` (set only on total failure, feeds the
+  `#success-medal`), `grid_choice_count`/`grid_choice`/`grid_choice_timeout_s`/
+  `grid_choice_activity` (the grid choice: number of grids offered and
+  seconds to pick while the player's pick is pending, `None` otherwise,
+  the index picked, and the signs of activity received), `resume_state` (set only on total failure, feeds the
   "Continuer" button), the original `request`, and `interactive` (JSON-
   safe session metadata, `None` for an ordinary generation). A companion
   `CANCEL_EVENTS[job_id]` (a real `multiprocessing.Event`, since worker
@@ -488,8 +494,10 @@ json`. Holds all server-side state in plain module dicts/lists:
   each with `choice_index`, `score` and `is_best` = `recommended`), then
   polls `job["grid_choice"]` (set by `POST /api/generate/choose/{job_id}`)
   every `GRID_CHOICE_POLL_INTERVAL_S` (0.5s), honoring "Stop". The chosen
-  grid becomes the result; after `GRID_CHOICE_TIMEOUT_S` (10 min) with no
-  pick, the recommended one does. Populate keeps the engine's pick.
+  grid becomes the result; after `GRID_CHOICE_TIMEOUT_S` (10 min) with
+  neither a pick nor a sign of activity (`POST /api/generate/choose/
+  {job_id}/activity` increments `grid_choice_activity`, which restarts the
+  wait), the recommended one does. Populate keeps the engine's pick.
 - **Scrabble dictionary**: `_run_generate_job` loads the grid's word set
   once (`_scrabble_words`, cached per language by `crossword_gen`;
   `generate_grid` merges the Scrabble lexicon itself);
@@ -505,6 +513,28 @@ json`. Holds all server-side state in plain module dicts/lists:
   final "clues" grid — carries it; `_run_recompute_job`'s example too.
   Interactive sessions keep the set in `INTERACTIVE_SESSIONS[job_id]
   ["scrabble_words"]`, passed to every `interactive_place_word` call.
+- **User glossaries**: `_run_generate_job` resolves the request pseudo's
+  glossaries per direction's language (`_user_lexicons` -> `user_profiles.
+  lexicon_specs`: across from `language`, down from `bilingual_language`,
+  so a user dictionary only serves the words of its own language; passed
+  as `generate_grid(user_lexicon=, bilingual_user_lexicon=)`) and
+  `_user_glossary` (the grid's DualIndex — `load_lexicon` with those specs
+  — and the ranked ids per direction); with it `_annotate_scrabble_cells`
+  colours every example by each word's own glossary key (`_glossary_cells`
+  over crossword_gen's `glossary_word_cells`: `scrabble_cells` the
+  Scrabble dictionary's runs plus, in a direction without player
+  glossaries, the plain Scrabble-set runs; `user_cells` {user dictionary
+  id: cells}, ids sorted; the "others" runs uncoloured);
+  `_load_interactive_index(..., pseudo)` merges them into an Interactive
+  session's lexicon (the start request's pseudo, a resumed record's, or
+  `InteractiveFromLibraryRequest`/`InteractiveFromAttemptRequest.pseudo` —
+  `_run_interactive_resume_job(..., profile_pseudo)`), the session keeps
+  `glossary`, and `POST /api/interactive/step` sets `placed.glossary` (the
+  user dictionary id the word is coloured with, null for a "Mots Défi"/
+  theme/Falcon word) and, with player glossaries, `from_scrabble` from the
+  word's key (`_placed_glossary`). Java `App.userLexicons`/`userGlossary`/
+  `glossaryCells`/`placedGlossary`, `App.Glossary`, `Session.glossary`,
+  `Words.glossaryWordCells`.
 - **Background tasks**, registered on `@app.on_event("startup")`: a daily
   RSS/SCRAPP refresh (`_rss_daily_scheduler`, `RSS_FETCH_HOUR=8` local
   time) plus a startup catch-up if today's refresh is missing; a presence
@@ -573,7 +603,9 @@ json`. Holds all server-side state in plain module dicts/lists:
   /api/generate/phase/{job_id}` (condensed phase code, used by Populate),
   `POST /api/generate/cancel/{job_id}`, `POST /api/generate/choose/
   {job_id}` (`{"index"}`: the player's pick among the finished grids,
-  409 when no choice is pending), `POST /api/generate/continue/
+  409 when no choice is pending), `POST /api/generate/choose/{job_id}/
+  activity` (the player is still there: restarts the choice's wait, 409
+  when no choice is pending), `POST /api/generate/continue/
   {job_id}` (resume from `resume_state`), `POST /api/recompute`
   (regenerate only a stored grid's clues, saved as a new "(Vn)" copy).
 - *Interactive mode* (word-by-word manual authoring): `POST /api/
@@ -584,7 +616,7 @@ json`. Holds all server-side state in plain module dicts/lists:
   `/boundary` (dictionary words that can start or end a slot, even
   shorter than its full length), `/stats` (read-only statistical letter
   preview for every still-empty cell), `/impossible` (read-only diagnostic
-  recompute), `/verify` (dictionary-
+  recompute; `fill_method` "ingrid" adds `interactive_ingrid_blocked_cells`), `/verify` (dictionary-
   membership check), `/title` (LLM proposals), `/save` (publish),
   `/save_work` (autosave draft), `GET /work` + `/work/delete` (drafts
   list/delete), `/resume` (relaunch a draft), `/from-library` (reopen a
@@ -605,6 +637,17 @@ json`. Holds all server-side state in plain module dicts/lists:
   (generation, "Continuer", recompute, every Interactive start/resume/
   from-library/from-attempt/finish) — shown by the web UI as
   `errorServerRestarting` (`describeErrorCode`).
+- *Profile* (the Settings panel, `user_profiles.py`): `POST /api/profile/
+  get`, `/preferences` (`{glossaries: [{id, enabled, color}], colors}`),
+  `/upload` (`{filename, language, content}`, base64, at most
+  `MAX_UPLOAD_BYTES` 20 MB) and `/delete` (`{id}`), each carrying
+  `pseudo` + `secret` (checked by `_profile_owner` with `secret_store.
+  verify_or_claim`, Java `App.profileOwner`); every answer is `{"ok":
+  true, "preferences": {glossaries, colors}}` (upload: plus `dictionary`)
+  or `{"ok": false, "code": "profile_forbidden"|"wordlist_unrecognised"|
+  "upload_too_large"|"upload_invalid"|"glossary_none_enabled"|
+  "glossary_unknown"}`. Proxied by `frontend/server.py`'s `_proxy_profile`
+  (upload: `PROFILE_UPLOAD_PROXY_TIMEOUT_S` 120 s).
 - *Chat*: `POST /api/chat` (streamed "David FALCON" reply), `POST
   /api/devchat` (streamed "DevBot" reply, see `chatbot.py`).
 - *Qdrant admin* (localhost-only, gated by `frontend/server.py`): `GET
@@ -683,7 +726,10 @@ the `Interactive*Request` family (`Step`, `Clean`, `Candidates`,
 — `Step` carries `fill_method` (400 when unknown) —
 — `Finish` additionally carries an optional `zone_cells` to scope
 automatic completion to a selected region instead of the whole grid,
-`WorkId`, `FromLibrary`, `FromAttempt`); `PresenceRequest`, `PseudoClaimRequest`,
+`WorkId`, `FromLibrary`, `FromAttempt` — the last two with an optional
+`pseudo`, the player whose dictionaries the session merges);
+`ProfileRequest`/`ProfilePreferencesRequest`/`ProfileUploadRequest`/
+`ProfileDeleteRequest`; `PresenceRequest`, `PseudoClaimRequest`,
 `GridGameSaveRequest`, `LibraryListRequest`, `QdrantTenantRequest`,
 `ChatRequest`/`ChatMessage`.
 
@@ -1111,7 +1157,11 @@ own rng drawn from the parent's in candidate order:
    `CANDIDATE_FREQ_WINDOW` (2 × `MAX_DESCENTS_PER_NODE` = 100) most frequent words, so two attempts on the
    same state still diverge; the slot's words of its
    direction's Scrabble dictionary (`Filler.scrabble_words`) are then
-   pulled ahead of the rest as a stable block (`Filler.scrabble_first`),
+   pulled ahead of the rest as a stable block (`Filler.scrabble_first`;
+   when the length's `gloss` column exists — user dictionaries merged in —
+   it instead stably sorts the candidates by glossary key, i.e. one block
+   per checked glossary — user dictionary, Scrabble dictionary, others — in
+   the player's order; Java `Filler.scrabbleFirst`),
    a themed grid's matching words are
    pulled to the front as a stable block next (ahead of the Scrabble block), then any still-unused
    "Mots Défi" word geometrically fitting the chosen slot is injected
@@ -2193,7 +2243,10 @@ crosses an "emplacement bloqué" (`"crossing_blocked"`, the counterpart of
 `"other"`; one already blocked before the call is never blamed on
 whatever candidate ends up tried — otherwise one pre-existing impossible
 zone anywhere in the grid would make every single candidate at every
-other slot look unsafe too. `_word_breaks_open_slot` returns
+other slot look unsafe too. `_word_breaks_open_slot` keeps one
+`options_cache` per slot tried for the whole click (`Filler._word_break_
+options`) and answers `"crossing_blocked"` before examining anything when a
+crossed slot has no word left and no "Mots Défi" word fits it. It returns
 `"crossing_blocked"`/`"crossing"`/`"other"`/`None`, and `_placement_
 accepted` maps each verdict onto the `PLACEMENT_LEVEL_*` at which it
 becomes acceptable (see "Staged acceptance levels in Interactive mode"
@@ -2650,15 +2703,15 @@ keeps the previous slot within `INGRID_ADAPTIVE_BRANCHING_THRESHOLD`
 (0.15) of the best, else draws among the best 3 with
 `INGRID_RANDOM_SLOT_WEIGHTS` (4, 2, 1); `_order` (once per slot, from the
 domains and counts after the initial propagation) sorts by family
-("Mots Défi" 0, theme 1, Scrabble 2, rest 3 — `_family_of`) then
+("Mots Défi" 0, theme 1, Scrabble 2, rest 3 — `_family_of`; with a
+`gloss` column, 2 + the word's glossary key instead of 2/3) then
 decreasing `INGRID_FILL_SCORE_WEIGHT` (900) x the mean log10 of the
 crossing slot's count of each letter (-1e9 for a zero count, 0 uncrossed)
 + `INGRID_USAGE_WEIGHT` (60) x usage score (unrated 0) +
 `INGRID_FREQ_WEIGHT` (20) x log10(1 + `dict_freq`), then the word;
 `_pick_word` takes, from the previous start index when on the same slot,
 the first 6 words still in the domain and not refused by the multi-word
-cap ("Mots Défi" exempt), keeps those of the first one's family (all for
-family 3) and draws with `INGRID_RANDOM_WORD_WEIGHTS` (32, 16, 8, 4, 2,
+cap ("Mots Défi" exempt), keeps those of the first one's family and draws with `INGRID_RANDOM_WORD_WEIGHTS` (32, 16, 8, 4, 2,
 1); `_run`
 starts, while the grid holds no word at all (`empty_root`: no locked
 letter, no preassigned word, and no choice made in the current run; Java
@@ -2709,10 +2762,14 @@ word left is set aside (`excluded_cells`, `_RecentSlots(MAX_EXCLUDED_
 SLOTS)`). Past the budget or with no slot left, the last resort places, on
 the best-priority slot, the first word of its order still in its domain
 (multi-word cap applied). Impossible: no candidate slot, its
-`impossible_cells` also holding every dropped slot's cells.
+`impossible_cells` also holding every dropped slot's cells; a word placed:
+`impossible_cells` also holds `interactive_ingrid_blocked_cells` of the new
+grid (the cells of the slots `settle` drops, Java `Interactive.
+ingridBlockedCells`), so a slot refused for being blocked always shows red.
 `window_cells`: the first cell of each slot of `IngridSolver.last_window`
-(the best 3 of the last choice). `from_challenge`/`from_theme`/
-`from_scrabble` follow the word's candidate family.
+(the best 3 of the last choice). `from_challenge`/`from_theme` follow the
+word's candidate family, `from_scrabble` a later family's word in its
+direction's Scrabble set.
 
 **Interactive-authoring module functions** (backing the web UI's
 "Interactif" word-by-word mode, all operating on a plain `grid`/`rows`/
@@ -2866,6 +2923,18 @@ on by default): while on, `renderInteractive()` calls
 differs from the one they were fetched for (`interactiveStatsGridKey`,
 reset by `clearInteractiveDiagnostics()`); a response arriving for a grid
 no longer on screen is dropped.
+
+The red/orange cells follow the grid the same way: every
+`renderInteractive()` whose state (grid, "Mots Défi" list, fill method,
+`interactiveDiagnosticsStateKey`) differs from the one they describe
+refetches them silently, debounced, through `POST /api/interactive/impossible`
+(`scheduleInteractiveDiagnosticsRefresh`), keeping the "Suivant" overlays
+(`excluded_cells`, `window_cells`) cleared by the edit. `renderGrid()` also
+paints red, with no request, what the geometry alone shows
+(`interactiveElementaryImpossibleCells`): under the "grouped" style every
+white run of 1 or 2 cells, in any style a white cell alone in both
+directions. A 1-cell run is not a slot, so the engine refuses no word across
+it: it shows red as a pattern fault, not as a blocked emplacement.
 
 The automatic-generation previews carry the same letters: `Filler.
 stat_letters(assignment)` returns the most likely letter of every white
@@ -3372,6 +3441,62 @@ Interactive "Publier" — so the footer carries its "play online" link.
 `rsvg-convert` binary (a real runtime dependency, installed by
 `Install.sh`).
 
+### `user_profiles.py` — per-player dictionaries
+
+`USER_PROFILES/<pseudo slug>/` (`grid_store._slugify_pseudo`) holds
+`preferences.json` (`{"glossaries": [...], "colors": {...}}`: the
+reorderable list — user dictionaries `{id, enabled, name, language,
+entries, scored, uploaded_at, color?}` and the two Falcon glossaries
+`{"id": "scrabble"|"others", "enabled", "color"?}` (`FALCON_IDS`) — in
+priority order, and the colours of the two fixed glossaries,
+"challenge"/"theme"; `_normalized` drops unknown or missing dictionaries,
+reads a former `{"id": "falcon"}` entry as both Falcon glossaries (its
+colour going to "scrabble"), appends the missing ones in that order and
+re-enables both when nothing is enabled), every upload as sent (`upload_<id><ext>`), its conversion
+(`dict_<id>.tsv`, `MOT<TAB>ACCENTUE<TAB>SCORE`, ACCENTUE `;`-separated
+spellings, the first seen first) and the merged lexicons
+(`lexicon_<lang>_<hash>.tsv`). `parse_wordlist` (Java `UserProfiles.
+parseWordlist`): NUL bytes refused; UTF-8 (BOM stripped), else Latin-1;
+when at least `MIN_RECOGNISED_PERCENT` (50) % of the non-empty lines match
+`_SCORED_RE` (`entry<sep>number`, sep `;` tab `,` `:` `|`) the file is
+scored, each score becoming `_usage_of` (floor(score / 10) within 0-5),
+otherwise each line is split on `_SPLIT_RE` punctuation and each piece is
+rated `UNSCORED_USAGE` (5); an entry keeps letters, spaces, hyphens and
+apostrophes (`_clean_entry`), its `grid_form` (ligatures folded, accents
+dropped, A-Z only, `None` when a letter has no A-Z form) must have 2 to
+`MAX_WORD_LENGTH` (50) letters, one entry per grid form (spellings
+merged, highest score); `WordlistUnrecognised` when fewer than 50 % of the
+non-empty lines give an entry. `add_dictionary` inserts the new dictionary,
+enabled, right before the first Falcon glossary; `save_preferences` reorders, toggles and
+recolours (colour `#rrggbb`; `None` when nothing would stay enabled);
+`delete_dictionary` removes its files. `lexicon_spec(pseudo, language)`:
+the ranked list (enabled items applying to `language`: its user
+dictionaries and the Falcon glossaries) gives `(merged file, Scrabble
+rank, others rank, ranked ids)` (a disabled Falcon glossary's rank
+`None`), `None` when that list is empty or is the default `("scrabble",
+"others")`; the merged file is named after a sha256 of the ranked ids and
+written once (`MOT<TAB>ACCENTUE<TAB>CANONIQUE<TAB>SCORE<TAB>RANK<TAB>ID`,
+each MOT from the first dictionary holding it, CANONIQUE its main
+spelling; older merged files of the language deleted). Java mirror `falcon.UserProfiles` (same files byte for byte, same
+JSON answers).
+
+**User dictionaries in the lexicon**: `load_lexicon(path, max_words,
+difficulty, user)` (cache key extended with `user`; Java `Generator.load(...,
+Words.UserLexicon)`) passes `user` to `_select_lexicon`, which calls
+`_merge_user_lexicon` (Java `Words.mergeUserLexicon`) after the Falcon
+selection — or on an empty lexicon when both Falcon ranks are `None` (no
+Falcon word, no Scrabble set, empty quota sets): a selected word belongs
+to the Scrabble glossary when it is in the Scrabble set, to "others" when
+its row is in the freq or multi-word wordlist (`ROW_SOURCE_FREQ`/
+`ROW_SOURCE_MULTI`), and leaves the lexicon when every glossary it
+belongs to is disabled; a merged-file word not selected joins with
+`_user_row_ref`, frequency at least `NOISE_FREQUENCY_THRESHOLD` and its
+score as usage, unless the lexicon is usage-selected and the score is
+below `USAGE_DIFFICULTY_MIN_SCORE`; a selected word keeps its row and
+takes the user score when its rank is below its Falcon glossaries' ranks.
+Glossary key: the lowest rank of the glossaries holding the word. A user word is no multi-word expression for the
+"Multi-mots max" cap and has no word breaks.
+
 ### `system_info.py`
 
 Best-effort hardware/model reporting for the info badge: GPU enumeration
@@ -3462,7 +3587,7 @@ its own lock); the theme-glossary/Qdrant part of `app.py` → `Themes.java`;
 `IpuzExport.java`/`JpzExport.java`;
 `embedder.py`/`qdrant_store.py`/`system_info.py`/`gloss_lookup.py`/
 `inflection_lookup.py`/`example_sentences.py`/`dictionary_lookup.py`/
-`secret_store.py`/`text_lines.py`/`usage_scores.py` → one class each; `crossword_gen.py` → package
+`secret_store.py`/`text_lines.py`/`usage_scores.py`/`user_profiles.py` → one class each; `crossword_gen.py` → package
 `falcon.gen` (`Words`: lexicon loading, `DualIndex`/`PW`, slot candidates;
 `Grids`: structure, slots, black-cell patterns; `Filler`: the CSP solver;
 `Fill`: seeding, `tryFill`, minimization, overlays, content score;
@@ -3545,7 +3670,9 @@ and `GET /api/synonyms` log their start, their end with duration and
 counts (keywords, words, expressions), or their failure with duration,
 and `_similar_words_impl` the LLM expansion's duration (Java `App`,
 `Themes.similarWordsImpl`), so a search outlasting the proxy's
-`SIMILAR_PROXY_TIMEOUT_S` (60 s) shows in both logs.
+`SIMILAR_PROXY_TIMEOUT_S` (60 s) shows in both logs. `POST /api/interactive/
+step` has its own `STEP_PROXY_TIMEOUT_S` (60 s), the page its
+`STEP_FETCH_TIMEOUT_MS` (70 s).
 
 ### `static/`
 
@@ -3553,7 +3680,43 @@ and `_similar_words_impl` the LLM expansion's duration (Java `App`,
   generation form, the playable board (grid + across/down clue
   sidebars), a collapsible virtual keyboard, and a set of togglable
   panels (library, dictionary, paraphraser, Qdrant admin, chatbot,
-  interactive-mode controls), plus the first-visit welcome overlay.
+  interactive-mode controls), plus the first-visit welcome overlay and
+  the settings overlay (`#settings-overlay`, opened by the header's gear
+  `#settings-btn`, right of `#user-pseudo`, shown while a pseudo and its
+  secret word are set — `renderUserPseudo`): `script.js`'s
+  `renderGlossaryList` numbers the glossaries in priority order — "Mots
+  Défi" and the theme glossary first, always listed with an "(if any)"
+  mention (`glossaryIfAny`/`glossaryIfAnySingular`; they apply when the
+  form holds `generateChallengeWords`/`themeKeywords`), then
+  `glossaryPrefs`' reorderable list (checkbox, up/down arrows, a trash
+  button for a user dictionary, the last enabled item kept checked
+  client-side; a user dictionary shown as "name (language)",
+  `glossaryUserName`, the Falcon glossaries as "Dictionnaire Scrabble" and
+  "Autres (Statistiques, Wiktionnaire)", each dictionary of the form's
+  language(s) showing its entries for that language (`glossaryEntryCount`;
+  the Falcon glossaries' from `GET /api/glossary/counts?language=`,
+  `{scrabble, others}`, `crossword_gen.glossary_entry_counts`, Java `Words.
+  glossaryEntryCounts`: distinct grid words of the Scrabble wordlist and of
+  the freq + multi-word wordlists, every difficulty included, once per
+  language and process), `glossaryOthers` with the known
+  sources of the other words) — each with
+  a colour square (`<input type="color">`, saved through `POST /api/
+  profile/preferences`); `#glossary-upload-btn` ("Chargement") sends a
+  file (`uploadGlossaryFile`, base64, `GLOSSARY_MAX_UPLOAD_BYTES`) with the
+  language of `#glossary-upload-language`. `loadGlossaryPrefs` runs at
+  page load and after the welcome panel; `applyGlossaryColors` sets
+  `--challenge-fg`, `--theme-fg`, `--scrabble-fg` (blue by default),
+  `--others-fg` (the plain colour of every preview letter,
+  `.attempt-preview-grid .cell.white`, and Interactive letter,
+  `.interactive-letter`, in no other glossary's colour) and one
+  `--glossary-<id>` per user dictionary on `:root` (defaults
+  `GLOSSARY_DEFAULT_COLORS`, a user dictionary `--user-glossary-fg`
+  orange); `renderAttemptPreview` gives each `user_cells` cell
+  `.user-glossary` with its `--glossary-fg`, and Interactive mode
+  `.interactive-user-glossary` from `interactiveUserCells` ("row,col" ->
+  dictionary id, from `placed.glossary`, moved/pruned like the Scrabble
+  set), both declared after the Scrabble classes and before the theme/
+  "Mots Défi" ones.
   Its first line, "Préconfigurations" (`#preset-select`), is a custom
   listbox (`script.js`'s `GRID_PRESETS`/`renderGridPresets`/
   `applyGridPreset`) filling `#width`/`#height`/`#black-enrichment` from
@@ -3625,10 +3788,18 @@ and `_similar_words_impl` the LLM expansion's duration (Java `App`,
   mode's `#interactive-cell-stats` card); the end-of-generation grid
   choice (`pollJob` arms `pendingGridChoiceJobId` while the job's
   `grid_choice_count` is set and jumps to the `choose_grid` entry,
-  `renderAttemptPreview` colours each example's `scrabble_cells` dark cyan
+  `renderAttemptPreview` colours each example's `scrabble_cells` blue
   (`.scrabble`, `--scrabble-fg`, declared before `.theme`/`.challenge` so
   those win a shared cell) and makes each tile carrying a `choice_index`
-  clickable, `chooseGeneratedGrid` posts the pick); the automatic
+  clickable, `chooseGeneratedGrid` posts the pick; `setPendingGridChoice`
+  shows `#grid-choice-title`, a countdown from `grid_choice_timeout_s`
+  moving by steps of `GRID_CHOICE_DISPLAY_STEP_S` (15 s, rounded up) in
+  place of `#attempt-preview-status`, scrolled into view when off screen;
+  `GRID_CHOICE_ACTIVITY_EVENTS` — pointer, keyboard, wheel, touch, input,
+  anywhere on the page — put it back to its full time and reach the back
+  end through `sendGridChoiceActivity`, at most every
+  `GRID_CHOICE_ACTIVITY_PING_MS` (2 s), the last sign always sent, so the
+  back end never decides before the countdown reaches 0); the automatic
   generation's status-line clocks (`pollJob(..., {timed: true})`, from
   `runGeneration` only: `statusElapsed` appends the time since the job was
   started and the time in its current step — the palier, `step.attempt`,
@@ -3644,8 +3815,11 @@ and `_similar_words_impl` the LLM expansion's duration (Java `App`,
   cell before the selection, in the fill direction, and the selected cell
   (`interactiveToggleBreak`; `interactiveBreaks`, "row,col,direction"
   keys, carried by every undo snapshot, replaced inside a "Suivant" word's
-  slot by its `placed.breaks`, `applyPlacedWordBreaks`, sent as `breaks`
-  with every save; every grid — play, Interactive, attempt previews —
+  slot by its `placed.breaks`, `applyPlacedWordBreaks`, cleared from both
+  emplacements through a letter removed by Backspace/Delete, a zone Delete,
+  blackening or "Nettoyer", `interactiveClearBreaksAt`, sent as `breaks`
+  with every save, never with a placement request, so they do not affect
+  "Suivant"; every grid — play, Interactive, attempt previews —
   draws them as `.word-break` bars, `appendWordBreaks`), and a click on the already-selected cell swaps the
   fill direction (`selectCell`, in play mode too), Shift+click-drag moves
   the letters of the selected zone, else of the focused word, by the
@@ -3667,7 +3841,7 @@ and `_similar_words_impl` the LLM expansion's duration (Java `App`,
   verify` then `GET /api/dictionary/define` per filled valid word —
   only those lacking a definition, or all of them, replacing the
   existing ones after a confirmation), candidate/
-  crossing-word panels, dark-cyan letters (`interactiveScrabbleCells`,
+  crossing-word panels, blue letters (`interactiveScrabbleCells`,
   `.interactive-scrabble`) for a "Suivant" word with `placed.from_
   scrabble`, like the theme/challenge sets; a "Mots Défi" challenge-word list — stored and
   shown exactly as the author typed it (accents/case kept), with a

@@ -149,7 +149,8 @@ public final class Generator {
 
     /** The words of a lexicon before indexing (mirrors _select_lexicon's result). */
     private record Selection(Map<Integer, List<String>> byLength, Words.Lexicon lex, Set<String> scrabble,
-                             Map<String, Integer> usageScores, Set<String> properNouns, Set<String> nonGloss) {}
+                             Map<String, Integer> usageScores, Set<String> properNouns, Set<String> nonGloss,
+                             Map<String, Integer> glossaryKeys) {}
 
     /** The cache key of a lexicon (mirrors _lexicon_params): selected by usage score, or cut to {@code maxWords},
      * else to DIFFICULTY_PRESETS, "easy" filters on at "easy". */
@@ -169,11 +170,21 @@ public final class Generator {
      * proper-noun quota at every difficulty ("easy", MAX_PROPER_NOUNS 0: every likely proper noun but a Scrabble word
      * dropped), the no-gloss one at "medium"/"hard" only. Otherwise cut to {@code maxWords}, else to DIFFICULTY_PRESETS, "easy" filters on at
      * "easy". */
-    private static Selection select(String path, Number maxWords, String difficulty) throws IOException {
+    private static Selection select(String path, Number maxWords, String difficulty, Words.UserLexicon user)
+            throws IOException {
         String lang = Words.langFromPath(path);
         boolean byUsage = maxWords == null && Words.usageLexiconActive(lang, difficulty);
         Number mw = byUsage ? null : (maxWords != null ? maxWords : Words.DIFFICULTY_PRESETS.get(difficulty));
         boolean easy = !byUsage && "easy".equals(difficulty);
+        if (user != null && user.scrabbleRank() == null && user.othersRank() == null) {
+            // The Falcon dictionary disabled: the user's words alone.
+            Map<String, Integer> usage = Words.loadUsageScores(lang);
+            Words.Lexicon only = new Words.Lexicon(new LinkedHashMap<>(), new HashMap<>(), new HashMap<>(),
+                    new HashSet<>(), new HashSet<>());
+            Map<String, Integer> keys = Words.mergeUserLexicon(user, byUsage ? difficulty : null, only.byLength(),
+                    only.refs(), only.frequencies(), usage, Set.of(), Grids.NOISE_FREQUENCY_THRESHOLD);
+            return new Selection(only.byLength(), only, Set.of(), usage, new HashSet<>(), new HashSet<>(), keys);
+        }
         Words.Lexicon lex = Words.loadWordlist(path, mw, easy, easy);
         // The Scrabble wordlist joins the lexicon (merge_scrabble_lexicon).
         Set<String> scrabble = Words.mergeScrabbleLexicon(lang, lex, Grids.NOISE_FREQUENCY_THRESHOLD, easy);
@@ -228,29 +239,42 @@ public final class Generator {
                 byLength = kept;
             }
         }
-        return new Selection(byLength, lex, scrabble, usageScores, proper, nonGloss);
+        Map<String, Integer> glossaryKeys = null;
+        if (user != null) {
+            glossaryKeys = Words.mergeUserLexicon(user, byUsage ? difficulty : null, byLength, lex.refs(),
+                    lex.frequencies(), usageScores, scrabble, Grids.NOISE_FREQUENCY_THRESHOLD);
+        }
+        return new Selection(byLength, lex, scrabble, usageScores, proper, nonGloss, glossaryKeys);
     }
 
     /** The Loaded lexicon of {@code path} for {@code difficulty} ({@link #select}), the Scrabble wordlist merged in,
      * cached per (path, cut, easy, usage-selected difficulty) key (mirrors load_lexicon). */
     public static Loaded load(String path, Number maxWords, String difficulty) throws IOException {
+        return load(path, maxWords, difficulty, null);
+    }
+
+    /** {@link #load(String, Number, String)} with the user's dictionaries {@code user} merged in
+     * (Words.mergeUserLexicon), cached under its own key (mirrors load_lexicon's {@code user}). */
+    public static Loaded load(String path, Number maxWords, String difficulty, Words.UserLexicon user)
+            throws IOException {
         String lang = Words.langFromPath(path);
-        String key = lexiconKey(path, maxWords, difficulty);
+        String key = lexiconKey(path, maxWords, difficulty)
+                + (user == null ? "" : "|" + user.path() + "|" + user.scrabbleRank() + "|" + user.othersRank());
         Loaded l = LOADED.get(key);
         if (l != null) return l;
         synchronized (LOADED) {
             l = LOADED.get(key);
             if (l != null) return l;
-            Selection sel = select(path, maxWords, difficulty);
+            Selection sel = select(path, maxWords, difficulty, user);
             String[] sources = {path, lang == null ? null : Words.scrabbleWordlistPath(lang).toString(),
-                    lang == null ? null : Words.multiWordlistPath(lang).toString()};
+                    lang == null ? null : Words.multiWordlistPath(lang).toString(), user == null ? null : user.path()};
             Map<String, Double> dictionaryFrequencies = Words.loadDictionaryFrequencies(path);
             if (lang != null && java.nio.file.Files.exists(Words.freqMultiWordlistPath(lang))) {
                 Words.loadDictionaryFrequencies(Words.freqMultiWordlistPath(lang).toString())
                         .forEach(dictionaryFrequencies::putIfAbsent);
             }
             Map<Integer, LenIndex> idx = Words.buildIndex(sel.byLength(), sel.lex().frequencies(),
-                    dictionaryFrequencies, sel.lex().refs(), sources, sel.usageScores());
+                    dictionaryFrequencies, sel.lex().refs(), sources, sel.usageScores(), sel.glossaryKeys());
             Words.attachLemmas(idx, sel.lex().refs(), sources);
             // A Scrabble word is valid at every difficulty: never counted against either quota.
             Set<String> proper = sel.properNouns();
@@ -349,7 +373,7 @@ public final class Generator {
                     for (String[] p : missing) {
                         futures.put(p[0] + "|" + p[1], pool.submit(() -> {
                             List<String> all = new ArrayList<>();
-                            for (List<String> ws : select(p[0], null, p[1]).byLength().values()) all.addAll(ws);
+                            for (List<String> ws : select(p[0], null, p[1], null).byLength().values()) all.addAll(ws);
                             return new LexiconWords(all);
                         }));
                     }
@@ -879,6 +903,9 @@ public final class Generator {
         /** The "Méthode" selector: the search every attempt fills its grid with (IngridSolver.FILL_METHODS, mirrors
          * generate_grid's fill_method). */
         public String fillMethod = IngridSolver.FILL_METHOD_DEFAULT;
+        /** The user's dictionaries merged into the across/down language's lexicon (mirrors generate_grid's
+         * user_lexicon/bilingual_user_lexicon), null for none. */
+        public Words.UserLexicon userLexicon, bilingualUserLexicon;
         /** The "Symétrie" selector (Grids.BLACK_SYMMETRIES, null = none), applied by every attempt's ratio draw. */
         public String blackSymmetry = null;
         /** The "Style de motif" selector (Grids.PATTERN_STYLES, null = airy), applied by every attempt's ratio draw. */
@@ -916,12 +943,13 @@ public final class Generator {
         java.util.function.Supplier<char[][]> freshSeedGrid = () -> startGrid == null ? null : Grids.copy(startGrid);
         Rng rng = Rng.of(p.seed);
         // Selected by usage score when the language has a usage-score file, else cut by DIFFICULTY_PRESETS (load).
-        Loaded across = load(p.wordlistPath, p.maxWords, p.difficulty);
+        Loaded across = load(p.wordlistPath, p.maxWords, p.difficulty, p.userLexicon);
         String language = Words.langFromPath(p.wordlistPath);
         if (language == null) language = "fr";
         boolean bilingual = p.bilingualWordlistPath != null && !p.bilingualWordlistPath.isEmpty()
                 && !p.bilingualWordlistPath.equals(p.wordlistPath);
-        Loaded down = bilingual ? load(p.bilingualWordlistPath, p.maxWords, p.difficulty) : across;
+        Loaded down = bilingual
+                ? load(p.bilingualWordlistPath, p.maxWords, p.difficulty, p.bilingualUserLexicon) : across;
         String bilingualLanguage = bilingual ? Objects.requireNonNullElse(Words.langFromPath(p.bilingualWordlistPath),
                 p.bilingualWordlistPath) : null;
         Integer maxProperNouns = Words.MAX_PROPER_NOUNS.getOrDefault(p.difficulty, Words.MAX_PROPER_NOUNS.get("hard"));

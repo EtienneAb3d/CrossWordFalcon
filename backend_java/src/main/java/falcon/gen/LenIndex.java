@@ -33,6 +33,9 @@ public final class LenIndex {
      * and the inverse: sorted lemma ids -> ids of the words carrying them, {@code lemmaWords[lemmaKeyOff[k]..
      * lemmaKeyOff[k + 1])} (["lemma_keys"]/["lemma_key_off"]/["lemma_words"]); null until {@link Words#attachLemmas}. */
     public int[] lemmaOff, lemmaIds, lemmaKeys, lemmaKeyOff, lemmaWords;
+    /** Each word's glossary key (Words.mergeUserLexicon), null when the lexicon merges no user dictionary
+     * (index[length]["gloss"]). */
+    public final byte[] gloss;
     /** Lazily computed per-position letter counts over the whole list. */
     private volatile int[][] blankCounts;
 
@@ -49,6 +52,12 @@ public final class LenIndex {
     public LenIndex(int length, List<String> words, Map<String, Double> frequencies,
                     Map<String, Double> dictionaryFrequencies, Map<String, Integer> wordRefs, String[] sources,
                     Map<String, Integer> usageScores) {
+        this(length, words, frequencies, dictionaryFrequencies, wordRefs, sources, usageScores, null);
+    }
+
+    public LenIndex(int length, List<String> words, Map<String, Double> frequencies,
+                    Map<String, Double> dictionaryFrequencies, Map<String, Integer> wordRefs, String[] sources,
+                    Map<String, Integer> usageScores, Map<String, Integer> glossaryKeys) {
         this.length = length;
         this.words = words.toArray(new String[0]);
         this.wordList = Collections.unmodifiableList(Arrays.asList(this.words));
@@ -58,6 +67,7 @@ public final class LenIndex {
         this.refs = wordRefs == null ? null : new int[this.words.length];
         this.sources = sources;
         this.usage = usageScores == null ? null : new byte[this.words.length];
+        this.gloss = glossaryKeys == null ? null : new byte[this.words.length];
         for (int i = 0; i < this.words.length; i++) {
             String w = this.words[i];
             ids.put(w, i);
@@ -67,6 +77,7 @@ public final class LenIndex {
             dictFreq[i] = d == null ? 0.0f : (float) (double) d;
             if (refs != null) refs[i] = wordRefs.get(w);
             if (usage != null) usage[i] = (byte) (int) usageScores.getOrDefault(w, Words.USAGE_SCORE_UNKNOWN);
+            if (gloss != null) gloss[i] = (byte) (int) glossaryKeys.getOrDefault(w, 0);
             for (int p = 0; p < length; p++) Alpha.id(w.charAt(p));
         }
         int alpha = Alpha.size();
@@ -134,6 +145,13 @@ public final class LenIndex {
         if (usage == null) return Words.USAGE_SCORE_UNKNOWN;
         Integer id = ids.get(w);
         return id == null ? Words.USAGE_SCORE_UNKNOWN : usage[id];
+    }
+
+    /** {@code w}'s glossary key, 0 when absent or {@link #gloss} is null. */
+    public int glossOf(String w) {
+        if (gloss == null) return 0;
+        Integer id = ids.get(w);
+        return id == null ? 0 : gloss[id];
     }
 
     public double freqOf(String w) {

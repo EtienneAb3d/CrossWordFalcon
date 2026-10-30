@@ -26,6 +26,17 @@
            nickname" label as long as no pseudo has been entered. -->
       <button type="button" id="user-pseudo" data-i18n-aria="userPseudoLabel"
               data-i18n-title="userPseudoLabel" hidden></button>
+      <!-- Settings (gear icon), right of the nickname, shown while a
+           nickname is set: opens #settings-overlay (the player's
+           dictionaries and glossaries, USER_PROFILES/). -->
+      <button type="button" id="settings-btn" data-i18n-aria="settingsButtonLabel"
+              data-i18n-title="settingsButtonLabel" hidden>
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
+          <path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"
+                d="M10.3 2.5h3.4l.5 2.6a7.5 7.5 0 0 1 1.9 1.1l2.5-.9 1.7 3-2 1.7a7.5 7.5 0 0 1 0 2.2l2 1.7-1.7 3-2.5-.9a7.5 7.5 0 0 1-1.9 1.1l-.5 2.6h-3.4l-.5-2.6a7.5 7.5 0 0 1-1.9-1.1l-2.5.9-1.7-3 2-1.7a7.5 7.5 0 0 1 0-2.2l-2-1.7 1.7-3 2.5.9a7.5 7.5 0 0 1 1.9-1.1z"></path>
+          <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"></circle>
+        </svg>
+      </button>
       <!-- "x online" counter — number of distinct active users
            (deduplicated by pseudo), refreshed every 2s via
            POST /api/presence. To the left of the version badge, at the
@@ -940,6 +951,7 @@
         <button type="button" id="attempt-preview-last-btn" class="nav-btn"
                 data-i18n-aria="attemptPreviewLastBtn" disabled>⏭</button>
       </div>
+      <h2 id="grid-choice-title" hidden></h2>
       <p id="attempt-preview-status"></p>
       <div id="attempt-preview-grids"></div>
       <div id="live-clues-wrap" hidden>
@@ -1626,6 +1638,34 @@
         <button type="button" id="version-update-reload-btn" data-i18n="versionUpdateReload">Recharger la page</button>
         <button type="button" id="version-update-later-btn" data-i18n="versionUpdateLater">Plus tard</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Settings panel (#settings-btn): the player's dictionaries and
+       glossaries in priority order (script.js's renderGlossaryList),
+       saved in USER_PROFILES/<pseudo>/ through POST /api/profile/*. -->
+  <div id="settings-overlay" role="dialog" aria-modal="true"
+       aria-labelledby="settings-title" hidden>
+    <div id="settings-box">
+      <div id="settings-header">
+        <h2 id="settings-title" data-i18n="settingsTitle">Paramètres</h2>
+        <button type="button" id="settings-close-btn" data-i18n-aria="settingsClose"
+                data-i18n-title="settingsClose">&times;</button>
+      </div>
+      <section id="glossary-settings">
+        <h3 data-i18n="glossarySettingsTitle">Dictionnaires et glossaires</h3>
+        <p class="settings-hint" data-i18n="glossarySettingsHint">Les mots sont choisis dans cet ordre de priorité, tant qu'ils restent possibles.</p>
+        <ol id="glossary-list"></ol>
+        <div id="glossary-upload-row">
+          <label for="glossary-upload-language">
+            <span data-i18n="glossaryUploadLanguage">Langue des mots</span>
+            <select id="glossary-upload-language"></select>
+          </label>
+          <button type="button" id="glossary-upload-btn" data-i18n="glossaryUploadButton">Chargement</button>
+          <input type="file" id="glossary-upload-input" accept=".dict,.txt,.dic,.tsv,.csv,text/plain" hidden>
+        </div>
+        <p id="glossary-status" role="status"></p>
+      </section>
     </div>
   </div>
 

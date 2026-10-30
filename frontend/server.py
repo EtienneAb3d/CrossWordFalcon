@@ -189,6 +189,46 @@ async def proxy_pseudo_claim(request: Request):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+# Upload of a user word file (POST /api/profile/upload): reading and
+# converting a few hundred thousand entries takes several seconds.
+PROFILE_UPLOAD_PROXY_TIMEOUT_S = 120.0
+
+
+async def _proxy_profile(request: Request, route: str, timeout: float = PROXY_TIMEOUT_S):
+    """Relays one POST /api/profile/* request (the settings panel's user
+    dictionaries and glossary preferences, backend/user_profiles.py)."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/profile/{route}", content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.post("/api/profile/get")
+async def proxy_profile_get(request: Request):
+    return await _proxy_profile(request, "get")
+
+
+@app.post("/api/profile/preferences")
+async def proxy_profile_preferences(request: Request):
+    return await _proxy_profile(request, "preferences")
+
+
+@app.post("/api/profile/upload")
+async def proxy_profile_upload(request: Request):
+    return await _proxy_profile(request, "upload", PROFILE_UPLOAD_PROXY_TIMEOUT_S)
+
+
+@app.post("/api/profile/delete")
+async def proxy_profile_delete(request: Request):
+    return await _proxy_profile(request, "delete")
+
+
 @app.get("/api/scrapp")
 async def proxy_scrapp():
     """Exact mirror of proxy_rss above, for the grid-link aggregation
@@ -246,6 +286,18 @@ async def proxy_generate_choose(job_id: str, request: Request):
                 content=body,
                 headers={"Content-Type": "application/json"},
             )
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.post("/api/generate/choose/{job_id}/activity")
+async def proxy_generate_choose_activity(job_id: str):
+    """Relays a sign of the player's activity while a grid choice is pending
+    (see script.js's `sendGridChoiceActivity`) to the back end."""
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(f"{BACKEND_URL}/api/generate/choose/{job_id}/activity")
     except httpx.RequestError as exc:
         raise _backend_failure(exc)
     return JSONResponse(status_code=resp.status_code, content=resp.json())
@@ -736,6 +788,17 @@ async def proxy_qdrant_admin_delete_tenant(request: Request):
 USAGE_STATS_PROXY_TIMEOUT_S = 150.0
 
 
+@app.get("/api/glossary/counts")
+async def proxy_glossary_counts(request: Request):
+    """Entries of a language's Falcon glossaries, for the Settings panel."""
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/glossary/counts", params=request.query_params)
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 @app.get("/api/usage_stats")
 async def proxy_usage_stats(request: Request):
     _require_localhost(request)
@@ -820,12 +883,17 @@ async def proxy_interactive_start(request: Request):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+# "Suivant" with the Falcon method can search for tens of seconds on a grid
+# holding a blocked emplacement. Kept below script.js's STEP_FETCH_TIMEOUT_MS.
+STEP_PROXY_TIMEOUT_S = 60.0
+
+
 @app.post("/api/interactive/step")
 async def proxy_interactive_step(request: Request):
     """"Suivant" button of the "Interactif" mode — places one more word."""
     body = await request.body()
     try:
-        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+        async with httpx.AsyncClient(timeout=STEP_PROXY_TIMEOUT_S) as client:
             resp = await client.post(
                 f"{BACKEND_URL}/api/interactive/step",
                 content=body,
