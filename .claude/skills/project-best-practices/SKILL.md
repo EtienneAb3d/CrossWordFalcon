@@ -2347,7 +2347,8 @@ the current defaults/behavior to know before touching this code.
   always valid, so it never counts against the proper-noun/no-gloss quotas,
   even when a Falcon wordlist holds it too (`_user_lexicon_words`; on a
   bilingual grid, an entry of either direction's dictionaries is exempt
-  everywhere, like a Scrabble word). User words are not multi-word expressions for the
+  everywhere, like a Scrabble word). The same holds for a "Mots Défi" word,
+  which is never required to be a dictionary entry. User words are not multi-word expressions for the
   "Multi-mots max" cap and get no word breaks; their lemma is their own
   spelling; a word is coloured after the first checked list holding it;
   the profile routes require the pseudo's secret word (an unclaimed

@@ -998,9 +998,10 @@ public final class Generator {
             nonGloss.removeAll(scrabbleAcross);
             nonGloss.removeAll(down.scrabbleWords());
         }
-        // An entry of the player's own dictionaries is never counted against either quota.
+        // An entry of the player's own dictionaries and a "Mots Défi" word are never counted against either quota.
         Set<String> quotaExempt = Words.userLexiconWords(p.userLexicon);
         if (bilingual) quotaExempt.addAll(Words.userLexiconWords(p.bilingualUserLexicon));
+        quotaExempt.addAll(Words.challengeSet(p.challengeWords));
         properNouns.removeAll(quotaExempt);
         nonGloss.removeAll(quotaExempt);
         Set<String> challenge = new LinkedHashSet<>(Words.challengeSet(p.challengeWords));

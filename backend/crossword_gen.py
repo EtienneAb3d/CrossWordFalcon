@@ -19153,11 +19153,12 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # whose lexicon holds no proper noun at all. On a bilingual grid, the
     # union of both languages' own proper nouns — a single quota shared
     # across the whole grid, not one per direction. A Scrabble word is
-    # valid at every difficulty, and so is an entry of the player's own
-    # dictionaries: never counted against either quota.
+    # valid at every difficulty, and so are an entry of the player's own
+    # dictionaries and a "Mots Défi" word: never counted against either quota.
     quota_exempt_words = _user_lexicon_words(user_lexicon)
     if bilingual_active:
         quota_exempt_words |= _user_lexicon_words(bilingual_user_lexicon)
+    quota_exempt_words |= set(challenge_words or ())
     max_proper_nouns = MAX_PROPER_NOUNS.get(difficulty, MAX_PROPER_NOUNS["hard"])
     proper_noun_words = set(lexicon_across.proper_nouns)
     if bilingual_active:

@@ -236,7 +236,7 @@ n'entre pas si la note est sous le seuil du niveau,
 la note du dictionnaire utilisateur quand celui-ci est classé avant tous
 les glossaires Falcon qui le contiennent. Une entrée d'un dictionnaire
 utilisateur est toujours valide : présente ou non dans les listes Falcon,
-elle ne compte jamais dans les quotas de noms propres et de mots sans
+elle ne compte jamais, pas plus qu'un Mot Défi, dans les quotas de noms propres et de mots sans
 définition (`generate_grid`, `_user_lexicon_words`). Les deux glossaires Falcon
 décochés, le lexique ne contient que les mots des dictionnaires
 utilisateur. Chaque mot reçoit une clé de glossaire (colonne `gloss`) :

@@ -3602,9 +3602,10 @@ score as usage, unless the lexicon is usage-selected and the score is
 below `USAGE_DIFFICULTY_MIN_SCORE`; a selected word keeps its row and
 takes the user score when its rank is below its Falcon glossaries' ranks.
 Glossary key: the lowest rank of the glossaries holding the word. An entry of
-the merged file, in the Falcon wordlists too or not, never counts against the
-proper-noun and no-gloss quotas (`generate_grid` removes `_user_lexicon_words`,
-Java `Words.userLexiconWords`, of both directions from the quota sets). A user word is no multi-word expression for the
+the merged file, in the Falcon wordlists too or not, like a "Mots Défi" word,
+never counts against the proper-noun and no-gloss quotas (`generate_grid` removes
+`_user_lexicon_words`, Java `Words.userLexiconWords`, of both directions and
+`challenge_words` from the quota sets). A user word is no multi-word expression for the
 "Multi-mots max" cap and has no word breaks.
 
 ### `system_info.py`

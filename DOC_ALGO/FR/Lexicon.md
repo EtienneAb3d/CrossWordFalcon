@@ -21,7 +21,7 @@ plusieurs signaux) :
   soit pendant la recherche de mots elle-même (domaine vide constaté par le
   solveur), par une analyse complémentaire spécifique (recherche de case
   croisée bloquée, voir ci-dessous), ou parce que le mot qui s'y trouve
-  fait dépasser un quota de qualité de contenu (trop de noms propres ou de
+  fait dépasser un quota de qualité de contenu, dont un Mot Défi est exempté (trop de noms propres ou de
   mots sans définition dans la grille terminée, `MAX_PROPER_NOUNS`/
   `MAX_NON_GLOSS_WORDS`) — une grille par ailleurs entièrement et
   validement remplie peut donc quand même échouer pour ce dernier motif,
