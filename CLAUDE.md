@@ -60,7 +60,7 @@ Engineering language is English (code, comments, this file, the SKILLs,
 | `GRID_SVG/`, `GRID_PNG/` | Generated SVG/PNG exports of every published grid, one file per page (`_GRID`, `_CLUES`, `_SOLUTION`), laid out like its PDF. Gitignored. `GRID_SAMPLES/` (committed) is a small, hand-curated set of examples — never written automatically. |
 | `LOG_LLM/`, `LOG_CHAT/`, `LOG_THEME/`, `LOG_USERS/` | Diagnostic/audit logs (LLM call traces, chat transcripts, theme pre-search traces, daily presence headcount). Gitignored. |
 | `RSS/`, `SCRAPP/` | Daily-refreshed scraper output caches. Gitignored. |
-| `USER_PROFILES/` | One folder per player (`<pseudo slug>/`): glossary preferences, uploaded word files and their converted/merged forms (see "`user_profiles.py`"). Gitignored. |
+| `USER_PROFILES/` | One folder per player (`<pseudo slug>/`): glossary preferences, uploaded word files and their converted forms (see "`user_profiles.py`"). Gitignored. |
 | `CORPUS/`, `data/wiktionary/` | Raw downloaded source caches for the dictionary pipeline (OPUS corpora; Wiktionary/Kaikki dumps, kept for reuse). Gitignored. |
 | `env.sh` / `env_default.sh` | Runtime configuration (ports, LLM/embed/Qdrant endpoints, model choice). `env.sh` is gitignored (real machine config); `env_default.sh` is the checked-in template. |
 | `run_*.sh`, `Install*.sh` | Launch/setup scripts — see "Environment, ports, launch scripts" below. |
@@ -404,12 +404,14 @@ bare A-Z form of a word, so a loaded lexicon (`load_lexicon` ->
 length (`build_index`, Java `LenIndex`): the words, their ids, the
 (position, letter) index, two float32 frequency columns (`freq`,
 `dict_freq` — `array('f')` behind `_WordColumn`, Java `float[]`) and one
-row reference per word (`refs`: the byte offset of the word's row in its
-wordlist shifted left two bits, the low bits naming the wordlist —
-`ROW_SOURCE_FREQ` 0, `ROW_SOURCE_SCRABBLE` 1, `ROW_SOURCE_MULTI` 2,
-`ROW_SOURCE_USER` 3 (a user's merged dictionary lexicon),
-`_freq_row_ref`/`_scrabble_row_ref`/`_multi_row_ref`/`_user_row_ref`;
-`array('I')`, Java `int[]`), the glossary-key column (`gloss`,
+row reference per word: the byte offset of the word's row in its wordlist
+(`refs`, `array('I')`, Java unsigned `int[]`) and that wordlist's index in
+`sources` (`ref_sources`, `array('B')`, Java `LenIndex.refSources` unsigned
+`byte[]`) — `ROW_SOURCE_FREQ` 0, `ROW_SOURCE_SCRABBLE` 1, `ROW_SOURCE_MULTI`
+2, from `ROW_SOURCE_USER` 3 one per user dictionary of the lexicon, in rank
+order; while loading, both are packed in one integer (`ROW_SOURCE_BITS` 8,
+`_freq_row_ref`/`_scrabble_row_ref`/`_multi_row_ref`/`_user_row_ref`, Java
+`long`) —, the glossary-key column (`gloss`,
 `array('b')`, Java `LenIndex.gloss` `byte[]`, `None`/null unless user
 dictionaries are merged in, see "User dictionaries" below), the
 usage-score column (`usage`, `array('b')` behind `_WordColumn`, Java
@@ -421,8 +423,8 @@ word and their inverse (`lemma_off`/`lemma_ids`, `lemma_keys`/
 `int[]`, set by `_attach_lemmas`/Java `Words.attachLemmas` from each
 word's own row: its CANONIQUE lemmas, lowercased, else its accented form,
 interned to ids unique per process so two languages never share one), plus
-the four wordlist paths (`sources`: freq, Scrabble, multi-word, user
-lexicon or `None`). The accented form and the lemmas are
+the wordlist paths (`sources`: freq, Scrabble, multi-word, then each user
+dictionary's `dict_<id>.tsv`). The accented form and the lemmas are
 read back from that row only when a grid's words get their `accented`/
 `canonical` fields (`word_forms`, Java `Words.wordForms`). Besides the
 index, a `LoadedLexicon` holds the proper-noun and no-gloss quota sets
@@ -3593,8 +3595,7 @@ reads a former `{"id": "falcon"}` entry as both Falcon glossaries (its
 colour going to "scrabble"), appends the missing ones in that order and
 re-enables both when nothing is enabled), every upload as sent (`upload_<id><ext>`), its conversion
 (`dict_<id>.tsv`, `MOT<TAB>ACCENTUE<TAB>SCORE`, ACCENTUE `;`-separated
-spellings, the first seen first) and the merged lexicons
-(`lexicon_<lang>_<hash>.tsv`). `parse_wordlist` (Java `UserProfiles.
+spellings, the first seen first). `parse_wordlist` (Java `UserProfiles.
 parseWordlist`): NUL bytes refused; UTF-8 (BOM stripped), else Latin-1;
 when at least `MIN_RECOGNISED_PERCENT` (50) % of the non-empty lines match
 `_SCORED_RE` (`entry<sep>number`, sep `;` tab `,` `:` `|`) the file is
@@ -3610,13 +3611,11 @@ enabled, right before the first Falcon glossary; `save_preferences` reorders, to
 recolours (colour `#rrggbb`; `None` when nothing would stay enabled);
 `delete_dictionary` removes its files. `lexicon_spec(pseudo, language)`:
 the ranked list (enabled items applying to `language`: its user
-dictionaries and the Falcon glossaries) gives `(merged file, Scrabble
-rank, others rank, ranked ids)` (a disabled Falcon glossary's rank
-`None`), `None` when that list is empty or is the default `("scrabble",
-"others")`; the merged file is named after a sha256 of the ranked ids and
-written once (`MOT<TAB>ACCENTUE<TAB>CANONIQUE<TAB>SCORE<TAB>RANK<TAB>ID`,
-each MOT from the first dictionary holding it, CANONIQUE its main
-spelling; older merged files of the language deleted). Java mirror `falcon.UserProfiles` (same files byte for byte, same
+dictionaries and the Falcon glossaries) gives `(((dict_<id>.tsv path,
+rank), ...), Scrabble rank, others rank, ranked ids)` (the user
+dictionaries in rank order, a disabled Falcon glossary's rank `None`),
+`None` when that list is empty or is the default `("scrabble", "others")`.
+Java mirror `falcon.UserProfiles` (same files byte for byte, same
 JSON answers).
 
 **User dictionaries in the lexicon**: `load_lexicon(path, max_words,
@@ -3628,13 +3627,15 @@ Falcon word, no Scrabble set, empty quota sets): a selected word belongs
 to the Scrabble glossary when it is in the Scrabble set, to "others" when
 its row is in the freq or multi-word wordlist (`ROW_SOURCE_FREQ`/
 `ROW_SOURCE_MULTI`), and leaves the lexicon when every glossary it
-belongs to is disabled; a merged-file word not selected joins with
-`_user_row_ref`, frequency at least `NOISE_FREQUENCY_THRESHOLD` and its
+belongs to is disabled; the user dictionaries are read in rank order, a MOT
+counting only in the first holding it; such a word not selected joins with
+`_user_row_ref`, its lemma being its main spelling (`_row_forms`, Java
+`Words.rowForms`), frequency at least `NOISE_FREQUENCY_THRESHOLD` and its
 score as usage, unless the lexicon is usage-selected and the score is
 below `USAGE_DIFFICULTY_MIN_SCORE`; a selected word keeps its row and
 takes the user score when its rank is below its Falcon glossaries' ranks.
 Glossary key: the lowest rank of the glossaries holding the word. An entry of
-the merged file, in the Falcon wordlists too or not, like a "Mots Défi" word,
+a user dictionary, in the Falcon wordlists too or not, like a "Mots Défi" word,
 never counts against the proper-noun and no-gloss quotas (`generate_grid` removes
 `_user_lexicon_words`, Java `Words.userLexiconWords`, of both directions and
 `challenge_words` from the quota sets). A user word is no multi-word expression for the

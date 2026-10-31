@@ -2279,8 +2279,7 @@ the current defaults/behavior to know before touching this code.
   revisit with the user: the separator is "-" where the word's spelling
   has a hyphen, "," otherwise; a word with no break gets no enumeration;
   the .jpz is uncompressed XML; the ipuz clue lists are "Across"/"Down",
-  the .jpz headings in the grid's language. Row references take two low bits (freq/Scrabble/multi)
-  in both back ends. The user's filters for the multi wordlists (all
+  the .jpz headings in the grid's language. The user's filters for the multi wordlists (all
   applied, fr and en): stopwords-only phrases, conjugated or infinitive
   verbal phrases, incomplete verbal phrases, determiner + one content word,
   an ending preposition/conjunction, and an entry with no definition of
@@ -2331,6 +2330,14 @@ the current defaults/behavior to know before touching this code.
   slots flagged impossible for the cleanup (`_canonical_conflict_slot_
   indices`), the user's permanent letters exempt; the isolated-cell plug
   refuses a pattern repeating a word or a canonical form.
+- **The grid engine reads each user dictionary from its own
+  `dict_<id>.tsv`** — the user's rule: the re-evaluated dictionary is found
+  from its id, with no merged file nor hash (`lexicon_spec`,
+  `_merge_user_lexicon`; Java mirror). A word's row reference names its file:
+  one byte of source per word (`ref_sources`, 256 sources, the user's request
+  to keep the RAM low) next to its 4-byte offset (a source packed in the
+  32-bit reference would cap the offsets at 16 MB, below the German freq
+  wordlist).
 - **Players can upload their own dictionaries, which order the
   candidates** — the user's rules: a `USER_PROFILES/` folder holds one
   sub-folder per player (`<pseudo slug>/`, gitignored); a gear button right

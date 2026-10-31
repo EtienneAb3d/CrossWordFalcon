@@ -214,8 +214,8 @@ public final class Generator {
                     for (List<String> ws : Words.loadWordlist(freqMulti.toString(),
                             Words.DIFFICULTY_PRESETS.get(difficulty), freqEasy, freqEasy, lang).byLength().values()) {
                         for (String w : ws) {
-                            Integer ref = lex.refs().get(w);
-                            if (ref != null && (ref & 3) == Words.ROW_SOURCE_MULTI) freqCut.add(w);
+                            Long ref = lex.refs().get(w);
+                            if (ref != null && (ref & Words.ROW_SOURCE_MASK) == Words.ROW_SOURCE_MULTI) freqCut.add(w);
                         }
                     }
                 }
@@ -265,15 +265,18 @@ public final class Generator {
             throws IOException {
         String lang = Words.langFromPath(path);
         String key = lexiconKey(path, maxWords, difficulty)
-                + (user == null ? "" : "|" + user.path() + "|" + user.scrabbleRank() + "|" + user.othersRank());
+                + (user == null ? "" : "|" + user.dictionaries() + "|" + user.scrabbleRank() + "|" + user.othersRank());
         Loaded l = LOADED.get(key);
         if (l != null) return l;
         synchronized (LOADED) {
             l = LOADED.get(key);
             if (l != null) return l;
             Selection sel = select(path, maxWords, difficulty, user);
-            String[] sources = {path, lang == null ? null : Words.scrabbleWordlistPath(lang).toString(),
-                    lang == null ? null : Words.multiWordlistPath(lang).toString(), user == null ? null : user.path()};
+            List<String> sourceList = new ArrayList<>(java.util.Arrays.asList(path,
+                    lang == null ? null : Words.scrabbleWordlistPath(lang).toString(),
+                    lang == null ? null : Words.multiWordlistPath(lang).toString()));
+            if (user != null) for (Words.UserDictionary dictionary : user.dictionaries()) sourceList.add(dictionary.path());
+            String[] sources = sourceList.toArray(new String[0]);
             Map<String, Double> dictionaryFrequencies = Words.loadDictionaryFrequencies(path);
             if (lang != null && java.nio.file.Files.exists(Words.freqMultiWordlistPath(lang))) {
                 Words.loadDictionaryFrequencies(Words.freqMultiWordlistPath(lang).toString())

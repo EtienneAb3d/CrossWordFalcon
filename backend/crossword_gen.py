@@ -482,43 +482,54 @@ def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_noun
     return dict(result), refs, frequencies, proper_nouns, non_gloss
 
 
-# A row reference is the byte offset of a word's wordlist row shifted left
-# by two bits, the low bits naming its wordlist — the index of its path in a
-# lexicon's `sources`: 0 the freq wordlist, 1 the Scrabble wordlist, 2 the
-# multi-word wordlist (`data/wordlist_<lang>_multi.tsv`), 3 a user's merged
-# dictionary lexicon (`backend/user_profiles.py`'s `lexicon_spec`).
+# While a lexicon is loaded, a row reference is the byte offset of a word's
+# wordlist row shifted left by `ROW_SOURCE_BITS` bits, the low bits naming its
+# wordlist — the index of its path in a lexicon's `sources`: 0 the freq
+# wordlist, 1 the Scrabble wordlist, 2 the multi-word wordlist
+# (`data/wordlist_<lang>_multi.tsv`), then from `ROW_SOURCE_USER` one per user
+# dictionary of the lexicon, in rank order (`dict_<id>.tsv`,
+# `backend/user_profiles.py`'s `lexicon_spec`). An index keeps the two apart,
+# 4 bytes of offset (`refs`) and 1 byte of source (`ref_sources`) per word.
 ROW_SOURCE_FREQ, ROW_SOURCE_SCRABBLE, ROW_SOURCE_MULTI, ROW_SOURCE_USER = 0, 1, 2, 3
+ROW_SOURCE_BITS = 8
+ROW_SOURCE_MASK = (1 << ROW_SOURCE_BITS) - 1
 
 
 def _freq_row_ref(offset):
     """Row reference of a freq-wordlist row starting at byte `offset`."""
-    return offset << 2 | ROW_SOURCE_FREQ
+    return offset << ROW_SOURCE_BITS | ROW_SOURCE_FREQ
 
 
 def _scrabble_row_ref(offset):
     """Row reference of a Scrabble-wordlist row starting at byte `offset`."""
-    return offset << 2 | ROW_SOURCE_SCRABBLE
+    return offset << ROW_SOURCE_BITS | ROW_SOURCE_SCRABBLE
 
 
 def _multi_row_ref(offset):
     """Row reference of a multi-word-wordlist row starting at byte `offset`."""
-    return offset << 2 | ROW_SOURCE_MULTI
+    return offset << ROW_SOURCE_BITS | ROW_SOURCE_MULTI
 
 
-def _user_row_ref(offset):
-    """Row reference of a user-lexicon row starting at byte `offset`."""
-    return offset << 2 | ROW_SOURCE_USER
+def _user_row_ref(offset, position):
+    """Row reference of a row starting at byte `offset` of the user
+    dictionary at `position` in the lexicon's user dictionaries."""
+    return offset << ROW_SOURCE_BITS | (ROW_SOURCE_USER + position)
 
 
-def _row_forms(line, word, scrabble):
-    """(accented, [canonical, ...]) of `word` read from its wordlist row
-    `line` — the same parsing as `load_wordlist` (freq wordlist) or
-    `merge_scrabble_lexicon` (Scrabble wordlist, `scrabble` true, whose
-    ACCENTUE column lists every possible spelling, `;`-separated, the
-    main one first: `accented` is that one; the multi-word wordlist has
-    the same format)."""
+def _row_forms(line, word, source):
+    """(accented, [canonical, ...]) of `word` read from its row `line` of
+    the wordlist `source` (`ROW_SOURCE_*`) — the same parsing as
+    `load_wordlist` (freq wordlist) or `merge_scrabble_lexicon` (Scrabble
+    wordlist, whose ACCENTUE column lists every possible spelling,
+    `;`-separated, the main one first: `accented` is that one; the
+    multi-word wordlist has the same format). A user dictionary's row
+    (`MOT<TAB>ACCENTUE<TAB>SCORE`) has no lemma: the main spelling is its
+    own."""
     parts = line.split("\t")
-    if scrabble:
+    if source >= ROW_SOURCE_USER:
+        accented = (parts[1].split(";")[0] if len(parts) > 1 else "") or word
+        return accented, [accented]
+    if source != ROW_SOURCE_FREQ:
         if len(parts) < 3:
             return word, [word]
         accented = parts[1].split(";")[0] or word
@@ -3707,10 +3718,11 @@ def build_index(by_length, frequencies=None, dictionary_frequencies=None, refs=N
     """One entry per length: `words` (the list of its words, a word's id
     being its position there), `ids` ({word: id}), `pos` (per position, a
     {letter: set of words} map), `freq`/`dict_freq` (float32 columns,
-    `_WordColumn`), `refs` (each word's row reference, an `array('I')`
-    indexed by id, `None` when `refs` is not given) and `sources` (the
-    `(freq, Scrabble, multi-word wordlist, user lexicon path)` quadruple these references
-    point into, read back by `word_forms`). A word is held only as its
+    `_WordColumn`), `refs`/`ref_sources` (each word's row offset, an
+    `array('I')`, and source, an `array('B')`, indexed by id, `None` when
+    `refs` is not given) and `sources` (the
+    freq, Scrabble and multi-word wordlist paths, then the user dictionaries',
+    these references point into, read back by `word_forms`). A word is held only as its
     bare A-Z grid form: its accented form and lemmas stay on disk.
 
     `dictionary_frequencies` (`load_dictionary_frequencies`, `None` by
@@ -3751,7 +3763,8 @@ def build_index(by_length, frequencies=None, dictionary_frequencies=None, refs=N
             "dict_freq": _WordColumn(
                 ids, array("f", (dictionary_frequencies.get(w, 0.0) for w in words))
             ),
-            "refs": array("I", (refs[w] for w in words)) if refs is not None else None,
+            "refs": array("I", (refs[w] >> ROW_SOURCE_BITS for w in words)) if refs is not None else None,
+            "ref_sources": array("B", (refs[w] & ROW_SOURCE_MASK for w in words)) if refs is not None else None,
             "sources": sources,
             "usage": _WordColumn(
                 ids, array("b", (usage_scores.get(w, USAGE_SCORE_UNKNOWN) for w in words))
@@ -3899,7 +3912,7 @@ def _select_lexicon(wordlist_path, max_words, difficulty, user=None):
                         freq_multi, DIFFICULTY_PRESETS[difficulty], require_gloss=freq_easy,
                         exclude_proper_nouns=freq_easy, language=language,
                     )[0].values()
-                    for w in words if (refs.get(w, 0) & 3) == ROW_SOURCE_MULTI
+                    for w in words if (refs.get(w, 0) & ROW_SOURCE_MASK) == ROW_SOURCE_MULTI
                 )
             by_length = {
                 length: kept for length, words in by_length.items()
@@ -3930,15 +3943,16 @@ def _select_lexicon(wordlist_path, max_words, difficulty, user=None):
 
 def _merge_user_lexicon(user, difficulty, by_length, refs, frequencies, usage_scores, scrabble):
     """Merges a user's glossaries (`user`, `backend/user_profiles.py`'s
-    `lexicon_spec`: `(merged lexicon path, Scrabble rank, others rank,
-    ranked ids)`) into a selected lexicon, in place, and returns its
+    `lexicon_spec`: `(((dictionary path, rank), ...), Scrabble rank, others
+    rank, ranked ids)`) into a selected lexicon, in place, and returns its
     glossary keys ({MOT: key}).
 
     The Falcon dictionary is split in two ranked glossaries: the Scrabble
     dictionary (the words of `scrabble`) and the others (the words whose
     row is in the freq or multi-word wordlist, `ROW_SOURCE_FREQ`/
     `ROW_SOURCE_MULTI`); a word only in a disabled one (rank `None`) leaves
-    the lexicon. A word of the merged file absent from the lexicon is added
+    the lexicon. A word of the user dictionaries, read in rank order and
+    counting only in the first holding it, absent from the lexicon is added
     with its own row reference (`_user_row_ref`), a frequency of at least
     `NOISE_FREQUENCY_THRESHOLD` and its usage score — dropped when
     `difficulty` (`None` when the lexicon is not selected by usage score)
@@ -3949,7 +3963,7 @@ def _merge_user_lexicon(user, difficulty, by_length, refs, frequencies, usage_sc
     A word's glossary key is the lowest rank of the glossaries holding it:
     it orders the candidate families after "Mots Défi" and the theme
     glossary (`Filler.scrabble_first`, `IngridSolver._family_of`)."""
-    path, scrabble_rank, others_rank = user[0], user[1], user[2]
+    dictionaries, scrabble_rank, others_rank = user[0], user[1], user[2]
     min_score = USAGE_DIFFICULTY_MIN_SCORE.get(difficulty) if difficulty else None
     falcon_ranks = {}
     for length in list(by_length):
@@ -3958,7 +3972,7 @@ def _merge_user_lexicon(user, difficulty, by_length, refs, frequencies, usage_sc
             ranks = []
             if scrabble_rank is not None and w in scrabble:
                 ranks.append(scrabble_rank)
-            if others_rank is not None and (refs.get(w, 0) & 3) in (ROW_SOURCE_FREQ, ROW_SOURCE_MULTI):
+            if others_rank is not None and (refs.get(w, 0) & ROW_SOURCE_MASK) in (ROW_SOURCE_FREQ, ROW_SOURCE_MULTI):
                 ranks.append(others_rank)
             if ranks:
                 falcon_ranks[w] = min(ranks)
@@ -3968,25 +3982,28 @@ def _merge_user_lexicon(user, difficulty, by_length, refs, frequencies, usage_sc
         else:
             del by_length[length]
     keys = dict(falcon_ranks)
-    if path and os.path.exists(path):
+    seen = set()
+    for position, (path, rank) in enumerate(dictionaries):
+        if not os.path.exists(path):
+            continue
         for offset, line in iter_lines_with_offsets(path):
             parts = line.split("\t")
-            if len(parts) < 5 or not _is_grid_word(parts[0]) or not parts[3].isdigit():
+            if len(parts) < 3 or not _is_grid_word(parts[0]) or not parts[2].isdigit():
                 continue
-            word, score, rank = parts[0], int(parts[3]), int(parts[4])
-            if word in keys and word not in falcon_ranks:
+            word, score = parts[0], int(parts[2])
+            if word in seen:
                 continue
+            seen.add(word)
             if word in falcon_ranks:
                 if rank < falcon_ranks[word]:
                     if usage_scores is not None:
                         usage_scores[word] = score
                 keys[word] = min(keys[word], rank)
-                falcon_ranks.pop(word)
                 continue
             if min_score is not None and score < min_score:
                 continue
             keys[word] = rank
-            refs[word] = _user_row_ref(offset)
+            refs[word] = _user_row_ref(offset, position)
             by_length.setdefault(len(word), []).append(word)
             frequencies[word] = max(frequencies.get(word, 0.0), float(NOISE_FREQUENCY_THRESHOLD))
             if usage_scores is not None:
@@ -3995,16 +4012,17 @@ def _merge_user_lexicon(user, difficulty, by_length, refs, frequencies, usage_sc
 
 
 def _user_lexicon_words(user):
-    """The words of a user's merged lexicon (`user`: `lexicon_spec`, `None`
+    """The words of a user's dictionaries (`user`: `lexicon_spec`, `None`
     gives none): entries the player chose, never counted against the
     proper-noun and no-gloss quotas."""
-    if user is None or not user[0] or not os.path.exists(user[0]):
-        return set()
     words = set()
-    for _offset, line in iter_lines_with_offsets(user[0]):
-        word = line.split("\t", 1)[0]
-        if _is_grid_word(word):
-            words.add(word)
+    for path, _rank in (user[0] if user is not None else ()):
+        if not os.path.exists(path):
+            continue
+        for _offset, line in iter_lines_with_offsets(path):
+            word = line.split("\t", 1)[0]
+            if _is_grid_word(word):
+                words.add(word)
     return words
 
 
@@ -4026,7 +4044,7 @@ def load_lexicon(wordlist_path, max_words, difficulty, user=None):
          usage_scores, glossary_keys) = _select_lexicon(wordlist_path, max_words, difficulty, user)
         sources = (str(wordlist_path), scrabble_wordlist_path(language) if language else None,
                    multi_wordlist_path(language) if language else None,
-                   user[0] if user is not None else None)
+                   *(path for path, _rank in (user[0] if user is not None else ())))
         dictionary_frequencies = load_dictionary_frequencies(wordlist_path)
         freq_multi = freq_multi_wordlist_path(language) if language else None
         if freq_multi and os.path.exists(freq_multi):
@@ -4191,16 +4209,15 @@ def word_forms(length_index, word):
     sources = length_index.get("sources")
     if i is None or refs is None or not sources:
         return word, [word]
-    ref = refs[i]
-    source = ref & 3
+    source = length_index["ref_sources"][i]
     path = sources[source] if source < len(sources) else None
     if not path:
         return word, [word]
     try:
-        line = read_line_at(path, ref >> 2)
+        line = read_line_at(path, refs[i])
     except OSError:
         return word, [word]
-    return _row_forms(line, word, source != ROW_SOURCE_FREQ)
+    return _row_forms(line, word, source)
 
 
 # ---------- Canonical forms ----------
@@ -4226,7 +4243,7 @@ def _lemma_key(lemma):
 def _attach_lemmas(index, refs, sources):
     """Adds to every length entry of `index` (`build_index`) the lemma ids
     of its words, read from each word's own wordlist row (`refs`, the
-    `(freq, Scrabble, multi-word, user lexicon)` paths `sources`): `lemma_off`/`lemma_ids`
+    freq, Scrabble, multi-word and user dictionary paths `sources`): `lemma_off`/`lemma_ids`
     (word id -> its lemma ids, `lemma_ids[lemma_off[i]:lemma_off[i + 1]]`)
     and `lemma_keys`/`lemma_key_off`/`lemma_words` (sorted lemma ids ->
     the ids of the words of that length carrying them), all `array('I')`.
@@ -4255,12 +4272,12 @@ def _attach_lemma_arrays(index, refs, sources):
             if tab <= 0:
                 continue
             word = line[:tab]
-            if refs.get(word) != (offset << 2 | flag) or word in per_word:
+            if refs.get(word) != (offset << ROW_SOURCE_BITS | flag) or word in per_word:
                 continue
             entry = index.get(len(word))
             if entry is None or word not in entry["ids"]:
                 continue
-            _, lemmas = _row_forms(line, word, bool(flag))
+            _, lemmas = _row_forms(line, word, flag)
             ids = []
             for lemma in lemmas:
                 local = interned.setdefault(_lemma_key(lemma), len(interned))
@@ -9668,7 +9685,7 @@ def _is_multi_word_in(index, cells, word):
     if entry is None or entry.get("refs") is None:
         return False
     k = entry["ids"].get(word)
-    return k is not None and (entry["refs"][k] & 3) == ROW_SOURCE_MULTI
+    return k is not None and entry["ref_sources"][k] == ROW_SOURCE_MULTI
 
 
 def _multi_words_blocked_in(slots, index, assignment, cap):

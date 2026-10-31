@@ -21,10 +21,14 @@ public final class LenIndex {
     /** Each word's frequency in the freq wordlist itself, 0.0 for a word absent from it, as float32
      * (index[length]["dict_freq"]). */
     public final float[] dictFreq;
-    /** Each word's row reference (byte offset of its wordlist row << 1 | 1 for the Scrabble wordlist), or null
+    /** Each word's row offset (unsigned byte offset of its wordlist row), or null
      * (index[length]["refs"]). The accented form and lemmas stay on disk: see {@link Words#wordForms}. */
     public final int[] refs;
-    /** The (freq wordlist, Scrabble wordlist) paths {@link #refs} point into, or null (index[length]["sources"]). */
+    /** Each word's source (unsigned index of its wordlist in {@link #sources}, Words.ROW_SOURCE_*), or null
+     * (index[length]["ref_sources"]). */
+    public final byte[] refSources;
+    /** The freq, Scrabble, multi-word wordlist and user dictionary paths {@link #refs} point into, or null
+     * (index[length]["sources"]). */
     public final String[] sources;
     /** Each word's usage score (0-5), {@link Words#USAGE_SCORE_UNKNOWN} for a word the usage-score file does not
      * rate; null when the language has none (index[length]["usage"]). */
@@ -45,18 +49,18 @@ public final class LenIndex {
     }
 
     public LenIndex(int length, List<String> words, Map<String, Double> frequencies,
-                    Map<String, Double> dictionaryFrequencies, Map<String, Integer> wordRefs, String[] sources) {
+                    Map<String, Double> dictionaryFrequencies, Map<String, Long> wordRefs, String[] sources) {
         this(length, words, frequencies, dictionaryFrequencies, wordRefs, sources, null);
     }
 
     public LenIndex(int length, List<String> words, Map<String, Double> frequencies,
-                    Map<String, Double> dictionaryFrequencies, Map<String, Integer> wordRefs, String[] sources,
+                    Map<String, Double> dictionaryFrequencies, Map<String, Long> wordRefs, String[] sources,
                     Map<String, Integer> usageScores) {
         this(length, words, frequencies, dictionaryFrequencies, wordRefs, sources, usageScores, null);
     }
 
     public LenIndex(int length, List<String> words, Map<String, Double> frequencies,
-                    Map<String, Double> dictionaryFrequencies, Map<String, Integer> wordRefs, String[] sources,
+                    Map<String, Double> dictionaryFrequencies, Map<String, Long> wordRefs, String[] sources,
                     Map<String, Integer> usageScores, Map<String, Integer> glossaryKeys) {
         this.length = length;
         this.words = words.toArray(new String[0]);
@@ -65,6 +69,7 @@ public final class LenIndex {
         this.freq = new float[this.words.length];
         this.dictFreq = new float[this.words.length];
         this.refs = wordRefs == null ? null : new int[this.words.length];
+        this.refSources = wordRefs == null ? null : new byte[this.words.length];
         this.sources = sources;
         this.usage = usageScores == null ? null : new byte[this.words.length];
         this.gloss = glossaryKeys == null ? null : new byte[this.words.length];
@@ -75,7 +80,11 @@ public final class LenIndex {
             freq[i] = f == null ? 0.0f : (float) (double) f;
             Double d = dictionaryFrequencies == null ? null : dictionaryFrequencies.get(w);
             dictFreq[i] = d == null ? 0.0f : (float) (double) d;
-            if (refs != null) refs[i] = wordRefs.get(w);
+            if (refs != null) {
+                long ref = wordRefs.get(w);
+                refs[i] = (int) (ref >>> Words.ROW_SOURCE_BITS);
+                refSources[i] = (byte) (ref & Words.ROW_SOURCE_MASK);
+            }
             if (usage != null) usage[i] = (byte) (int) usageScores.getOrDefault(w, Words.USAGE_SCORE_UNKNOWN);
             if (gloss != null) gloss[i] = (byte) (int) glossaryKeys.getOrDefault(w, 0);
             for (int p = 0; p < length; p++) Alpha.id(w.charAt(p));
@@ -132,7 +141,7 @@ public final class LenIndex {
     public boolean isMulti(String w) {
         if (refs == null) return false;
         Integer id = ids.get(w);
-        return id != null && (refs[id] & 3) == Words.ROW_SOURCE_MULTI;
+        return id != null && (refSources[id] & 0xFF) == Words.ROW_SOURCE_MULTI;
     }
 
     public double dictFreqOf(String w) {

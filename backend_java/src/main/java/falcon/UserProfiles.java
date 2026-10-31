@@ -2,7 +2,6 @@ package falcon;
 
 import falcon.gen.Words;
 
-import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -13,7 +12,6 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.text.Normalizer;
 import java.time.LocalDateTime;
@@ -34,8 +32,7 @@ import java.util.regex.Pattern;
  * on/off state and colour of the user's dictionaries and of the two Falcon glossaries, the Scrabble dictionary and the
  * others, colours of the fixed glossaries),
  * every uploaded word file as sent (upload_&lt;id&gt;&lt;ext&gt;), its converted form (dict_&lt;id&gt;.tsv,
- * MOT TAB ACCENTUE TAB SCORE) and, per language, the merged lexicon of the enabled dictionaries the grid engine
- * reads (lexicon_&lt;lang&gt;_&lt;hash&gt;.tsv, {@link #lexiconSpec}). */
+ * MOT TAB ACCENTUE TAB SCORE), which the grid engine reads directly ({@link #lexiconSpec}). */
 public final class UserProfiles {
     private UserProfiles() {}
 
@@ -442,76 +439,29 @@ public final class UserProfiles {
 
     /** The player's glossaries merged into {@code language}'s lexicon, null when they leave it as by default (no
      * enabled user dictionary in that language, both Falcon glossaries enabled, Scrabble first) or when no enabled item
-     * applies to it (mirrors lexicon_spec): the merged file (MOT TAB ACCENTUE TAB CANONIQUE TAB SCORE TAB RANK TAB ID,
-     * each word once, from the highest-ranked dictionary holding it), named after a hash of the ranked ids, the ranks
-     * of the two Falcon glossaries and the ranked ids. */
+     * applies to it (mirrors lexicon_spec): the user dictionaries in rank order, each its own dict_&lt;id&gt;.tsv with its
+     * rank (a word counts in the first one holding it, Words.mergeUserLexicon), the ranks of the two Falcon glossaries
+     * and the ranked ids. */
     @SuppressWarnings("unchecked")
     public static Words.UserLexicon lexiconSpec(String pseudo, String language) {
         if (pseudo == null || pseudo.isEmpty() || language == null || language.isEmpty()) return null;
         Path folder = profileDir(pseudo);
         Map<String, Object> prefs = normalized(folder, readJson(folder.resolve(PREFERENCES_FILE)));
-        List<Map<String, Object>> ranked = new ArrayList<>();
+        List<String> ids = new ArrayList<>();
         for (Map<String, Object> item : (List<Map<String, Object>>) prefs.get("glossaries")) {
             if (Boolean.TRUE.equals(item.get("enabled"))
-                    && (FALCON_IDS.contains(item.get("id")) || language.equals(item.get("language")))) ranked.add(item);
+                    && (FALCON_IDS.contains(item.get("id")) || language.equals(item.get("language")))) {
+                ids.add((String) item.get("id"));
+            }
         }
-        List<String> ids = new ArrayList<>();
-        for (Map<String, Object> item : ranked) ids.add((String) item.get("id"));
         if (ids.isEmpty() || ids.equals(FALCON_IDS)) return null;
         Integer scrabbleRank = ids.contains(SCRABBLE_ID) ? ids.indexOf(SCRABBLE_ID) : null;
         Integer othersRank = ids.contains(OTHERS_ID) ? ids.indexOf(OTHERS_ID) : null;
-        String digest;
-        try {
-            digest = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(String.join("\n", ids).getBytes(StandardCharsets.UTF_8))).substring(0, 16);
-        } catch (java.security.NoSuchAlgorithmException e) {
-            throw new IllegalStateException(e);
+        List<Words.UserDictionary> dictionaries = new ArrayList<>();
+        for (int rank = 0; rank < ids.size(); rank++) {
+            String id = ids.get(rank);
+            if (!FALCON_IDS.contains(id)) dictionaries.add(new Words.UserDictionary(dictPath(folder, id).toString(), rank));
         }
-        Path path = folder.resolve("lexicon_" + language + "_" + digest + ".tsv");
-        synchronized (LOCK) {
-            if (!Files.exists(path)) {
-                try {
-                    Files.createDirectories(folder);
-                    Set<String> seen = new HashSet<>();
-                    Path tmp = path.resolveSibling(path.getFileName() + ".tmp");
-                    try (BufferedWriter out = Files.newBufferedWriter(tmp, StandardCharsets.UTF_8)) {
-                        for (int rank = 0; rank < ranked.size(); rank++) {
-                            String id = ids.get(rank);
-                            if (FALCON_IDS.contains(id)) continue;
-                            Path src = dictPath(folder, id);
-                            if (!Files.exists(src)) continue;
-                            try (BufferedReader in = Files.newBufferedReader(src, StandardCharsets.UTF_8)) {
-                                String line;
-                                while ((line = in.readLine()) != null) {
-                                    String[] parts = line.split("\t", -1);
-                                    if (parts.length < 3 || seen.contains(parts[0])) continue;
-                                    seen.add(parts[0]);
-                                    String main = parts[1].split(";", -1)[0];
-                                    if (main.isEmpty()) main = parts[0];
-                                    out.write(parts[0] + "\t" + parts[1] + "\t" + main + "\t" + parts[2] + "\t" + rank
-                                            + "\t" + id + "\n");
-                                }
-                            }
-                        }
-                    }
-                    Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-                    try (DirectoryStream<Path> ds = Files.newDirectoryStream(folder, "lexicon_" + language + "_*.tsv")) {
-                        for (Path old : ds) {
-                            if (!old.equals(path)) {
-                                try {
-                                    Files.deleteIfExists(old);
-                                } catch (IOException ignored) {
-                                    // best-effort
-                                }
-                            }
-                        }
-                    }
-                } catch (IOException e) {
-                    Log.exception("user lexicon: echec d'ecriture de " + path, e);
-                    return null;
-                }
-            }
-        }
-        return new Words.UserLexicon(path.toString(), scrabbleRank, othersRank, List.copyOf(ids));
+        return new Words.UserLexicon(List.copyOf(dictionaries), scrabbleRank, othersRank, List.copyOf(ids));
     }
 }

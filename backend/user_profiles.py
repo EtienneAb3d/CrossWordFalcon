@@ -5,10 +5,8 @@ colour of the user's dictionaries and of the two Falcon glossaries, the
 Scrabble dictionary and the others), every uploaded
 word file as sent (`upload_<id><ext>`), its converted form (`dict_<id>.tsv`,
 `MOT<TAB>ACCENTUE<TAB>SCORE`: grid form, `;`-separated spellings with the
-main one first, Falcon usage score 0-5) and, per language, the merged
-lexicon of the enabled dictionaries the grid engine reads
-(`lexicon_<lang>_<hash>.tsv`, `MOT<TAB>ACCENTUE<TAB>CANONIQUE<TAB>SCORE<TAB>
-RANK<TAB>ID`, see `lexicon_spec`).
+main one first, Falcon usage score 0-5), which the grid engine reads
+directly (see `lexicon_spec`).
 
 The glossary order is: "Mots Défi", theme glossary (both fixed, outside
 these preferences), then the reorderable list — user dictionaries, the
@@ -20,7 +18,6 @@ enabled.
 Java mirror: `falcon.UserProfiles`.
 """
 
-import hashlib
 import json
 import math
 import os
@@ -360,8 +357,8 @@ def delete_dictionary(pseudo, dict_id):
 
 
 def lexicon_spec(pseudo, language):
-    """`(merged lexicon path, Scrabble rank, others rank, ranked ids)` the
-    grid engine merges into `language`'s lexicon for `pseudo`
+    """`(((dictionary path, rank), ...), Scrabble rank, others rank, ranked
+    ids)` the grid engine merges into `language`'s lexicon for `pseudo`
     (`crossword_gen.load_lexicon`'s `user`), `None` when the player's
     glossaries leave that language's lexicon as it is by default (no
     enabled user dictionary in it, both Falcon glossaries enabled, the
@@ -370,12 +367,9 @@ def lexicon_spec(pseudo, language):
     The ranked glossaries are the enabled items of the reorderable list
     that apply to `language` (its user dictionaries, and the two Falcon
     glossaries); a rank is a position in that list (`ranked ids`, a tuple),
-    a disabled Falcon glossary's rank `None`. The merged file lists every
-    word of those user dictionaries once, from the highest-ranked one
-    holding it: `MOT<TAB>ACCENTUE<TAB>CANONIQUE<TAB>SCORE<TAB>RANK<TAB>ID`
-    (CANONIQUE: the main spelling, ID: the dictionary's id). Its name
-    carries a hash of the ranked list, so it is written once and never
-    rewritten."""
+    a disabled Falcon glossary's rank `None`. Each user dictionary is its
+    own `dict_<id>.tsv`, listed in rank order with its rank; a word counts
+    in the first one holding it (`crossword_gen._merge_user_lexicon`)."""
     if not pseudo or not language:
         return None
     folder = profile_dir(pseudo)
@@ -389,39 +383,11 @@ def lexicon_spec(pseudo, language):
         return None
     scrabble_rank = ids.index(SCRABBLE_ID) if SCRABBLE_ID in ids else None
     others_rank = ids.index(OTHERS_ID) if OTHERS_ID in ids else None
-    digest = hashlib.sha256("\n".join(ids).encode("utf-8")).hexdigest()[:16]
-    path = folder / f"lexicon_{language}_{digest}.tsv"
-    with _LOCK:
-        if not path.exists():
-            folder.mkdir(parents=True, exist_ok=True)
-            seen = set()
-            tmp = path.with_name(path.name + ".tmp")
-            with open(tmp, "w", encoding="utf-8", newline="\n") as out:
-                for rank, item in enumerate(ranked):
-                    if item["id"] in FALCON_IDS:
-                        continue
-                    try:
-                        src = open(_dict_path(folder, item["id"]), encoding="utf-8")
-                    except OSError:
-                        continue
-                    with src:
-                        for line in src:
-                            parts = line.rstrip("\n").split("\t")
-                            if len(parts) < 3 or parts[0] in seen:
-                                continue
-                            seen.add(parts[0])
-                            main = parts[1].split(";")[0] or parts[0]
-                            out.write(
-                                f"{parts[0]}\t{parts[1]}\t{main}\t{parts[2]}\t{rank}\t{item['id']}\n"
-                            )
-            os.replace(tmp, path)
-            for old in folder.glob(f"lexicon_{language}_*.tsv"):
-                if old != path:
-                    try:
-                        old.unlink()
-                    except OSError:
-                        pass
-    return (str(path), scrabble_rank, others_rank, ids)
+    dictionaries = tuple(
+        (str(_dict_path(folder, gid)), rank)
+        for rank, gid in enumerate(ids) if gid not in FALCON_IDS
+    )
+    return (dictionaries, scrabble_rank, others_rank, ids)
 
 
 def lexicon_specs(pseudo, language, bilingual_language=None):

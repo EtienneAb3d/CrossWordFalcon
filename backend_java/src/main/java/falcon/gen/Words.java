@@ -46,10 +46,10 @@ public final class Words {
 
     /** The loaded lexicon (Python's {@code (by_length, refs, frequencies, proper_nouns, non_gloss)}): each word's
      * row reference stands for its accented form and lemmas, which stay on disk ({@link #wordForms}). */
-    public record Lexicon(Map<Integer, List<String>> byLength, Map<String, Integer> refs,
+    public record Lexicon(Map<Integer, List<String>> byLength, Map<String, Long> refs,
                           Map<String, Double> frequencies, Set<String> properNouns, Set<String> nonGloss) {}
 
-    private record Entry(String word, String accented, double freq, List<String> canonical, int ref) {}
+    private record Entry(String word, String accented, double freq, List<String> canonical, long ref) {}
 
     /** Whether {@code s} is a plain run of A-Z letters, the only words a grid can hold (mirrors _is_grid_word): a
      * wordlist row whose MOT holds any other character is ignored. */
@@ -70,45 +70,58 @@ public final class Words {
         }
     }
 
-    /** A row reference is the byte offset of a word's wordlist row shifted left by two bits, the low bits naming its
-     * wordlist — the index of its path in a lexicon's sources: the freq, Scrabble or multi-word wordlist (mirrors
-     * ROW_SOURCE_FREQ/ROW_SOURCE_SCRABBLE/ROW_SOURCE_MULTI), or a user's merged dictionary lexicon
-     * (ROW_SOURCE_USER, UserProfiles.lexiconSpec). */
+    /** While a lexicon is loaded, a row reference is the byte offset of a word's wordlist row shifted left by
+     * ROW_SOURCE_BITS bits, the low bits naming its wordlist — the index of its path in a lexicon's sources: the freq, Scrabble or multi-word wordlist
+     * (mirrors ROW_SOURCE_FREQ/ROW_SOURCE_SCRABBLE/ROW_SOURCE_MULTI), then from ROW_SOURCE_USER one per user dictionary
+     * of the lexicon, in rank order (dict_&lt;id&gt;.tsv, UserProfiles.lexiconSpec). A LenIndex keeps the two apart, 4 bytes
+     * of offset (refs) and 1 byte of source (refSources) per word. */
     public static final int ROW_SOURCE_FREQ = 0, ROW_SOURCE_SCRABBLE = 1, ROW_SOURCE_MULTI = 2, ROW_SOURCE_USER = 3;
+    public static final int ROW_SOURCE_BITS = 8;
+    public static final long ROW_SOURCE_MASK = (1L << ROW_SOURCE_BITS) - 1;
 
-    /** A user's glossaries merged into a lexicon (mirrors user_profiles.lexicon_spec): the merged lexicon file, the
-     * ranks of the two Falcon glossaries — the Scrabble dictionary and the others — (null when disabled) and the
-     * ranked glossary ids. */
-    public record UserLexicon(String path, Integer scrabbleRank, Integer othersRank, List<String> ids) {}
+    /** One user dictionary of a lexicon: its dict_&lt;id&gt;.tsv file and its rank in the ranked glossaries. */
+    public record UserDictionary(String path, int rank) {}
 
-    /** The words of a user's merged lexicon (null gives none): entries the player chose, never counted against the
+    /** A user's glossaries merged into a lexicon (mirrors user_profiles.lexicon_spec): the user dictionaries in rank
+     * order, the ranks of the two Falcon glossaries — the Scrabble dictionary and the others — (null when disabled) and
+     * the ranked glossary ids. */
+    public record UserLexicon(List<UserDictionary> dictionaries, Integer scrabbleRank, Integer othersRank,
+                              List<String> ids) {}
+
+    /** The words of a user's dictionaries (null gives none): entries the player chose, never counted against the
      * proper-noun and no-gloss quotas (mirrors _user_lexicon_words). */
     public static Set<String> userLexiconWords(UserLexicon user) throws IOException {
         Set<String> words = new HashSet<>();
-        if (user == null || user.path() == null || !Files.exists(Path.of(user.path()))) return words;
-        falcon.TextLines.forEachLine(Path.of(user.path()), (offset, line) -> {
-            int tab = line.indexOf('\t');
-            String word = tab < 0 ? line : line.substring(0, tab);
-            if (isGridWord(word)) words.add(word);
-        });
+        if (user == null) return words;
+        for (UserDictionary dictionary : user.dictionaries()) {
+            Path path = Path.of(dictionary.path());
+            if (!Files.exists(path)) continue;
+            falcon.TextLines.forEachLine(path, (offset, line) -> {
+                int tab = line.indexOf('\t');
+                String word = tab < 0 ? line : line.substring(0, tab);
+                if (isGridWord(word)) words.add(word);
+            });
+        }
         return words;
     }
 
-    /** Row reference of a user-lexicon row starting at byte {@code offset} (mirrors _user_row_ref). */
-    static int userRowRef(long offset) {
-        return (int) (offset << 2 | ROW_SOURCE_USER);
+    /** Row reference of a row starting at byte {@code offset} of the user dictionary at {@code position} in the
+     * lexicon's user dictionaries (mirrors _user_row_ref). */
+    static long userRowRef(long offset, int position) {
+        return offset << ROW_SOURCE_BITS | (ROW_SOURCE_USER + position);
     }
 
     /** Merges a user's glossaries ({@code user}) into a selected lexicon, in place, and returns its glossary keys
      * (mirrors _merge_user_lexicon): a word only in a disabled Falcon glossary — the Scrabble dictionary
      * ({@code scrabble}) or the others (a row of the freq or multi-word wordlist) — leaves the lexicon; a word of the
-     * merged file absent from it joins with its own row reference, a frequency of at least {@code noiseThreshold}
+     * user dictionaries, read in rank order and counting only in the first holding it, absent from it joins with its
+     * own row reference, a frequency of at least {@code noiseThreshold}
      * and its usage score — dropped below USAGE_DIFFICULTY_MIN_SCORE of {@code difficulty} (null when the lexicon is
      * not selected by usage score); a word already there keeps its row and takes the user's usage score when its
      * dictionary ranks above every Falcon glossary holding it. Key: the lowest rank of the glossaries holding the
      * word. */
     public static Map<String, Integer> mergeUserLexicon(UserLexicon user, String difficulty,
-                                                         Map<Integer, List<String>> byLength, Map<String, Integer> refs,
+                                                         Map<Integer, List<String>> byLength, Map<String, Long> refs,
                                                          Map<String, Double> frequencies,
                                                          Map<String, Integer> usageScores, Set<String> scrabble,
                                                          double noiseThreshold) throws IOException {
@@ -120,8 +133,8 @@ public final class Words {
             for (String w : byLength.get(length)) {
                 int best = Integer.MAX_VALUE;
                 if (scrabbleRank != null && scrabble.contains(w)) best = scrabbleRank;
-                Integer ref = refs.get(w);
-                int source = ref == null ? 0 : ref & 3;
+                Long ref = refs.get(w);
+                int source = ref == null ? 0 : (int) (ref & ROW_SOURCE_MASK);
                 if (othersRank != null && (source == ROW_SOURCE_FREQ || source == ROW_SOURCE_MULTI)) {
                     best = Math.min(best, othersRank);
                 }
@@ -134,25 +147,27 @@ public final class Words {
             else byLength.put(length, kept);
         }
         Map<String, Integer> keys = new HashMap<>(falconRanks);
-        Path path = user.path() == null ? null : Path.of(user.path());
-        if (path != null && Files.exists(path)) {
+        Set<String> seen = new HashSet<>();
+        List<UserDictionary> dictionaries = user.dictionaries();
+        for (int p = 0; p < dictionaries.size(); p++) {
+            Path path = Path.of(dictionaries.get(p).path());
+            if (!Files.exists(path)) continue;
+            int rank = dictionaries.get(p).rank(), position = p;
             falcon.TextLines.forEachLine(path, (offset, line) -> {
                 String[] parts = line.split("\t", -1);
-                if (parts.length < 5 || !isGridWord(parts[0]) || !isDigits(parts[3])) return;
+                if (parts.length < 3 || !isGridWord(parts[0]) || !isDigits(parts[2])) return;
                 String word = parts[0];
-                if (keys.containsKey(word) && !falconRanks.containsKey(word)) return;
-                int score = Integer.parseInt(parts[3]);
-                int rank = Integer.parseInt(parts[4]);
+                int score = Integer.parseInt(parts[2]);
+                if (!seen.add(word)) return;
                 Integer falconRank = falconRanks.get(word);
                 if (falconRank != null) {
                     if (rank < falconRank && usageScores != null) usageScores.put(word, score);
                     keys.put(word, Math.min(keys.get(word), rank));
-                    falconRanks.remove(word);
                     return;
                 }
                 if (minScore != null && score < minScore) return;
                 keys.put(word, rank);
-                refs.put(word, userRowRef(offset));
+                refs.put(word, userRowRef(offset, position));
                 byLength.computeIfAbsent(word.length(), k -> new ArrayList<>()).add(word);
                 frequencies.put(word, Math.max(frequencies.getOrDefault(word, 0.0), noiseThreshold));
                 if (usageScores != null) usageScores.put(word, score);
@@ -168,18 +183,18 @@ public final class Words {
     }
 
     /** Row reference of a freq-wordlist row starting at byte {@code offset} (mirrors _freq_row_ref). */
-    static int freqRowRef(long offset) {
-        return (int) (offset << 2 | ROW_SOURCE_FREQ);
+    static long freqRowRef(long offset) {
+        return offset << ROW_SOURCE_BITS | ROW_SOURCE_FREQ;
     }
 
     /** Row reference of a Scrabble-wordlist row starting at byte {@code offset} (mirrors _scrabble_row_ref). */
-    static int scrabbleRowRef(long offset) {
-        return (int) (offset << 2 | ROW_SOURCE_SCRABBLE);
+    static long scrabbleRowRef(long offset) {
+        return offset << ROW_SOURCE_BITS | ROW_SOURCE_SCRABBLE;
     }
 
     /** Row reference of a multi-word-wordlist row starting at byte {@code offset} (mirrors _multi_row_ref). */
-    static int multiRowRef(long offset) {
-        return (int) (offset << 2 | ROW_SOURCE_MULTI);
+    static long multiRowRef(long offset) {
+        return offset << ROW_SOURCE_BITS | ROW_SOURCE_MULTI;
     }
 
     public static Lexicon loadWordlist(String path, Number maxWords, boolean requireGloss, boolean excludeProperNouns)
@@ -195,7 +210,7 @@ public final class Words {
         List<Entry> entries = new ArrayList<>();
         falcon.TextLines.forEachLine(Path.of(path), (offset, line) -> {
             if (line.isEmpty() || line.startsWith("#")) return;
-            int ref = freqRowRef(offset);
+            long ref = freqRowRef(offset);
             String[] parts = line.split("\t", -1);
             if (parts.length >= 4) {
                 String word = parts[0].toUpperCase(Locale.ROOT);
@@ -241,7 +256,7 @@ public final class Words {
             if (keep < ranked.size()) ranked = new ArrayList<>(ranked.subList(0, Math.max(0, keep)));
         }
         Map<Integer, List<String>> byLength = new LinkedHashMap<>();
-        Map<String, Integer> refs = new HashMap<>();
+        Map<String, Long> refs = new HashMap<>();
         Map<String, Double> frequencies = new HashMap<>();
         Set<String> properNouns = new HashSet<>();
         Set<String> nonGloss = new HashSet<>();
@@ -278,12 +293,18 @@ public final class Words {
         return GlossLookup.hasAnyGloss(cands, lang);
     }
 
-    /** (accented, [canonical, ...]) of {@code word} read from its wordlist row {@code line} — the same parsing as
-     * loadWordlist (freq wordlist) or the Scrabble merge ({@code scrabble}, whose ACCENTUE column lists every possible
-     * spelling, ";"-separated, the main one first: accented is that one) (mirrors _row_forms). */
-    static Object[] rowForms(String line, String word, boolean scrabble) {
+    /** (accented, [canonical, ...]) of {@code word} read from its row {@code line} of the wordlist {@code source}
+     * (ROW_SOURCE_*) — the same parsing as loadWordlist (freq wordlist) or the Scrabble merge (whose ACCENTUE column
+     * lists every possible spelling, ";"-separated, the main one first: accented is that one). A user dictionary's row
+     * (MOT TAB ACCENTUE TAB SCORE) has no lemma: the main spelling is its own (mirrors _row_forms). */
+    static Object[] rowForms(String line, String word, int source) {
         String[] parts = line.split("\t", -1);
-        if (scrabble) {
+        if (source >= ROW_SOURCE_USER) {
+            String accented = parts.length > 1 ? parts[1].split(";", -1)[0] : "";
+            if (accented.isEmpty()) accented = word;
+            return new Object[]{accented, List.of(accented)};
+        }
+        if (source != ROW_SOURCE_FREQ) {
             if (parts.length < 3) return new Object[]{word, List.of(word)};
             String accented = parts[1].split(";", -1)[0];
             if (accented.isEmpty()) accented = word;
@@ -306,13 +327,11 @@ public final class Words {
         if (idx == null || idx.refs == null || idx.sources == null) return new Object[]{word, List.of(word)};
         Integer id = idx.ids.get(word);
         if (id == null) return new Object[]{word, List.of(word)};
-        int ref = idx.refs[id];
-        int source = ref & 3;
+        int source = idx.refSources[id] & 0xFF;
         String path = source < idx.sources.length ? idx.sources[source] : null;
         if (path == null) return new Object[]{word, List.of(word)};
         try {
-            return rowForms(falcon.TextLines.readLineAt(Path.of(path), Integer.toUnsignedLong(ref) >>> 2), word,
-                    source != ROW_SOURCE_FREQ);
+            return rowForms(falcon.TextLines.readLineAt(Path.of(path), Integer.toUnsignedLong(idx.refs[id])), word, source);
         } catch (IOException e) {
             return new Object[]{word, List.of(word)};
         }
@@ -328,27 +347,26 @@ public final class Words {
     }
 
     /** Adds to every length of {@code index} the lemma ids of its words, read from each word's own wordlist row
-     * ({@code refs}, the (freq, Scrabble, multi-word) wordlist paths {@code sources}): a word's lemmas are its CANONIQUE column
+     * ({@code refs}, the freq, Scrabble, multi-word and user dictionary paths {@code sources}): a word's lemmas are its CANONIQUE column
      * ({@link #rowForms}), else its accented form (mirrors _attach_lemmas). */
-    public static void attachLemmas(Map<Integer, LenIndex> index, Map<String, Integer> refs, String[] sources)
+    public static void attachLemmas(Map<Integer, LenIndex> index, Map<String, Long> refs, String[] sources)
             throws IOException {
         Map<String, Integer> interned = new HashMap<>();
         Map<String, int[]> perWord = new HashMap<>();
         for (int flag = 0; sources != null && flag < sources.length; flag++) {
             String path = sources[flag];
             if (path == null || !Files.exists(Path.of(path))) continue;
-            boolean scrabble = flag != ROW_SOURCE_FREQ;
             int f = flag;
             falcon.TextLines.forEachLine(Path.of(path), (offset, line) -> {
                 int tab = line.indexOf('\t');
                 if (tab <= 0) return;
                 String word = line.substring(0, tab);
-                Integer ref = refs.get(word);
-                if (ref == null || ref != (int) (offset << 2 | f) || perWord.containsKey(word)) return;
+                Long ref = refs.get(word);
+                if (ref == null || ref != (offset << ROW_SOURCE_BITS | f) || perWord.containsKey(word)) return;
                 LenIndex li = index.get(word.length());
                 if (li == null || !li.contains(word)) return;
                 @SuppressWarnings("unchecked")
-                List<String> lemmas = (List<String>) rowForms(line, word, scrabble)[1];
+                List<String> lemmas = (List<String>) rowForms(line, word, f)[1];
                 int[] ids = new int[lemmas.size()];
                 int n = 0;
                 for (String lemma : lemmas) {
@@ -405,19 +423,19 @@ public final class Words {
     }
 
     public static Map<Integer, LenIndex> buildIndex(Map<Integer, List<String>> byLength, Map<String, Double> frequencies,
-                                                    Map<String, Double> dictionaryFrequencies, Map<String, Integer> refs,
+                                                    Map<String, Double> dictionaryFrequencies, Map<String, Long> refs,
                                                     String[] sources) {
         return buildIndex(byLength, frequencies, dictionaryFrequencies, refs, sources, null);
     }
 
     public static Map<Integer, LenIndex> buildIndex(Map<Integer, List<String>> byLength, Map<String, Double> frequencies,
-                                                    Map<String, Double> dictionaryFrequencies, Map<String, Integer> refs,
+                                                    Map<String, Double> dictionaryFrequencies, Map<String, Long> refs,
                                                     String[] sources, Map<String, Integer> usageScores) {
         return buildIndex(byLength, frequencies, dictionaryFrequencies, refs, sources, usageScores, null);
     }
 
     public static Map<Integer, LenIndex> buildIndex(Map<Integer, List<String>> byLength, Map<String, Double> frequencies,
-                                                    Map<String, Double> dictionaryFrequencies, Map<String, Integer> refs,
+                                                    Map<String, Double> dictionaryFrequencies, Map<String, Long> refs,
                                                     String[] sources, Map<String, Integer> usageScores,
                                                     Map<String, Integer> glossaryKeys) {
         Map<Integer, LenIndex> index = new LinkedHashMap<>();
@@ -708,8 +726,8 @@ public final class Words {
     /** {MOT: row reference} of the language's Scrabble wordlist, in file order (empty when the language has none)
      * — transient, built only while a lexicon is loaded. At "easy" difficulty, only the words one of whose spellings
      * (the ";"-separated ACCENTUE column) is a form or a lemma of the inflection table (mirrors _scrabble_entries). */
-    static Map<String, Integer> scrabbleEntries(String language, boolean easy) {
-        Map<String, Integer> refs = new LinkedHashMap<>();
+    static Map<String, Long> scrabbleEntries(String language, boolean easy) {
+        Map<String, Long> refs = new LinkedHashMap<>();
         if (language == null || language.isEmpty()) return refs;
         Path path = scrabbleWordlistPath(language);
         if (!Files.exists(path)) return refs;
@@ -798,7 +816,7 @@ public final class Words {
      * its own Scrabble row, and every added Scrabble word gets a frequency of at least NOISE_FREQUENCY_THRESHOLD.
      * Returns the Scrabble word set used (mirrors merge_scrabble_lexicon). */
     public static Set<String> mergeScrabbleLexicon(String language, Lexicon lex, double noiseThreshold, boolean easy) {
-        Map<String, Integer> entries = scrabbleEntries(language, easy);
+        Map<String, Long> entries = scrabbleEntries(language, easy);
         entries.forEach((word, ref) -> {
             if (!lex.refs().containsKey(word)) {
                 lex.refs().put(word, ref);

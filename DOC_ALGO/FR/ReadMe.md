@@ -223,10 +223,11 @@ forment une liste ordonnée que le joueur coche et réordonne (au moins un
 élément coché), après les Mots Défi et le glossaire thématique ; par
 défaut le dictionnaire Scrabble précède les autres. Quand cette liste,
 pour la langue de la grille, n'est pas celle par défaut, les éléments
-cochés qui s'y appliquent sont rangés (rang = position) et les
-dictionnaires utilisateur fusionnés dans un fichier (`lexicon_spec`,
-chaque mot une fois, pris au premier dictionnaire qui le contient, avec
-son rang), puis dans le lexique (`_merge_user_lexicon`, appelé par
+cochés qui s'y appliquent sont rangés (rang = position, `lexicon_spec`) et
+les dictionnaires utilisateur, chacun lu dans son propre fichier
+`dict_<id>.tsv`, versés dans cet ordre dans le lexique, chaque mot ne
+comptant que pour le premier dictionnaire qui le contient
+(`_merge_user_lexicon`, appelé par
 `_select_lexicon`, `load_lexicon(..., user)`) : un mot qui n'appartient
 qu'à des glossaires Falcon décochés quitte le lexique ; un mot absent du
 lexique y entre avec la référence de sa ligne, sa note d'usage (et
