@@ -1726,6 +1726,35 @@ button:disabled {
   cursor: default;
 }
 
+/* A tool's answer zone with its sponge button at its top right, the button
+   shown only while the zone holds something (script.js's
+   watchClearableResults). Empty, the wrapper takes no part in its parent's
+   layout, so an empty zone leaves no gap. */
+.clearable-results {
+  display: contents;
+}
+.clearable-results.has-results {
+  display: block;
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+  padding-right: 2rem;
+}
+#interactive-answers-zone.has-results {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+}
+.results-clear-btn {
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+.results-clear-btn[hidden] {
+  display: none;
+}
+
 /* Sponge character (U+1F9FD) replacing the "Effacer" text on every
    "Effacer" button of the app (Dictionnaire, Paraphraseur, Interactif
    mode) — at the user's explicit request (a first version, a hand-drawn

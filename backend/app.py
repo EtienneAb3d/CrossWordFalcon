@@ -4621,6 +4621,25 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
     # grids framed in gold, before the successful grids themselves.
     last_live_preview = {"examples": None}
 
+    def _record_search_final(stopped=False):
+        # See `last_live_preview` above. Each tile's `previous` field is a
+        # STOP_DUMP-only diagnostic, never shown, so it is dropped. `stopped`
+        # (the "Stop" button): the attempts still running end "interrupted".
+        examples = last_live_preview["examples"]
+        if not examples:
+            return
+        last_live_preview["examples"] = None
+        tiles = [{k: v for k, v in ex.items() if k != "previous"} for ex in examples]
+        if stopped:
+            for tile in tiles:
+                if tile.get("live_status") == "computing":
+                    tile["live_status"] = "interrupted"
+        job["examples_history"].append({
+            "step": {"code": "search_final", "count": job["success_count"]},
+            "examples": tiles,
+            "success_count": job["success_count"],
+        })
+
     def _apply_zone_revert(examples):
         # "Finir la zone" (`zone_revert`) — shared by every channel that can
         # show a mid-search preview, at the user's explicit correction: "il
@@ -4701,18 +4720,8 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         # the same cell-by-cell revert as the live-preview channel does.
         _apply_zone_revert(data.get("examples"))
         _annotate_scrabble_cells(data.get("examples"), scrabble_words, multi_breaks, user_glossary)
-        if step == "minimizing" and last_live_preview["examples"]:
-            # See `last_live_preview` above. Each tile's `previous` field is
-            # a STOP_DUMP-only diagnostic, never shown, so it is dropped.
-            job["examples_history"].append({
-                "step": {"code": "search_final", "count": job["success_count"]},
-                "examples": [
-                    {k: v for k, v in ex.items() if k != "previous"}
-                    for ex in last_live_preview["examples"]
-                ],
-                "success_count": job["success_count"],
-            })
-            last_live_preview["examples"] = None
+        if step == "minimizing":
+            _record_search_final()
         job["step"] = {"code": step, **data}
         if step in ("minimizing", "grid_ready"):
             phase_times[step] = time.monotonic()
@@ -5471,7 +5480,12 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         # POST /api/generate/cancel/{job_id} further below) — its own
         # separate status, never "error": this isn't a failure, just a
         # voluntary stop, and the frontend shows it without the error
-        # styling (see frontend/static/script.js's pollJob()).
+        # styling (see frontend/static/script.js's pollJob()). The last known
+        # grids become the history's last entry before the status changes, so
+        # the client's final poll shows them; the dump keeps its own
+        # `live_preview`, not a second copy in its history.
+        dump_history = list(job.get("examples_history") or [])
+        _record_search_final(stopped=True)
         job["status"] = "cancelled"
         logger.info("[%s] cancelled by user", short_id)
         # Diagnostic snapshot for analysis — see grid_store.py's own
@@ -5482,7 +5496,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
             dump_id = await asyncio.to_thread(
                 save_stop_dump, job_id, req.pseudo, job.get("request"),
                 job.get("step"), job.get("live_preview"),
-                job.get("examples_history"), job.get("resume_state"),
+                dump_history, job.get("resume_state"),
                 job.get("success_count"),
             )
             logger.info("[%s] stop dump saved: %s", short_id, dump_id)

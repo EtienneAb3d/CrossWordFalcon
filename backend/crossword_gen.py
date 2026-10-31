@@ -1237,11 +1237,31 @@ def _reshape_keeps_style(before, after, rows, cols, blackened, pattern_style):
                 or _near_border_parallel_pair(after, rows, cols, blackened))
 
 
-def _undo_short_run_changes(before, after, rows, cols, confirmed, symmetry=None):
-    """The "grouped" pattern style's guard on an end-of-palier cleanup
+def _letters_after_pattern_change(after, grid, rows, cols, letters, permanent_locked_letters=None):
+    """`letters` (cell -> letter) once the pattern `after` has become `grid`:
+    every word of `after` — a slot fully covered by `letters` — whose cells no
+    longer form a slot of `grid` is removed, its letters erased except those a
+    kept word or a `permanent_locked_letters` cell carries; a letter on a cell
+    now black is erased too."""
+    final_slots = {tuple(cells) for cells in extract_slots(grid, rows, cols)}
+    kept_cells = set(permanent_locked_letters or ())
+    dropped_cells = set()
+    for cells in extract_slots(after, rows, cols):
+        if all(cell in letters for cell in cells):
+            (kept_cells if tuple(cells) in final_slots else dropped_cells).update(cells)
+    return {
+        cell: ch for cell, ch in letters.items()
+        if grid[cell[0]][cell[1]] != BLACK and (cell in kept_cells or cell not in dropped_cells)
+    }
+
+
+def _undo_short_run_changes(before, after, rows, cols, symmetry=None):
+    """The "grouped" pattern style's guard on a cleanup
     (`_clean_continue_candidate`, `_clean_retry_candidate_task`): the
     cleanup may not leave a white run shorter than `GROUPED_MIN_SLOT_LENGTH`
-    (a 2-letter slot, or a single cell belonging to one word only).
+    (a 2-letter slot, or a single cell belonging to one word only), a
+    line of too many black cells or a black pair parallel to a border too
+    close to it (`_reshape_keeps_style`).
     For each such run (`_short_runs` order), each black/white change from
     `before` to `after` lying in it or bounding it (row-major order) is
     undone with its symmetry images the cleanup changed too
@@ -1250,12 +1270,14 @@ def _undo_short_run_changes(before, after, rows, cols, confirmed, symmetry=None)
     resort every change is undone. An undo is kept only if the grid then
     holds fewer such runs and does not turn structurally invalid
     (`min_interior_free=1`; a cleanup output already invalid may stay so).
-    A cell carrying a `confirmed` letter is never blackened back. Returns
-    the new grid."""
+    A blackened cell breaking the line or border rule is then freed, with
+    its images. A grid still not satisfying `_reshape_keeps_style` gets
+    `before` back, whatever the undos above could do. A cell may be blackened
+    back under a letter: the caller drops the letters of the words this
+    changes (`_letters_after_pattern_change`). Returns the new grid."""
     after = [row[:] for row in after]
     changed = {(r, c) for r in range(rows) for c in range(cols)
-               if (before[r][c] == BLACK) != (after[r][c] == BLACK)
-               and not (before[r][c] == BLACK and (r, c) in confirmed)}
+               if (before[r][c] == BLACK) != (after[r][c] == BLACK)}
     count = len(_short_runs(after, rows, cols))
     valid = is_structurally_valid(after, rows, cols, min_interior_free=1)
 
@@ -1311,6 +1333,17 @@ def _undo_short_run_changes(before, after, rows, cols, confirmed, symmetry=None)
         if not progress:
             _try(sorted(changed))
             break
+    for cell in sorted(changed):
+        if after[cell[0]][cell[1]] == BLACK and (
+                _makes_long_black_line(after, rows, cols, [cell])
+                or _near_border_parallel_pair(after, rows, cols, [cell])):
+            for gr, gc in sorted(_with_images([cell])):
+                after[gr][gc] = BLACK if before[gr][gc] == BLACK else WHITE
+                changed.discard((gr, gc))
+    blackened = [(r, c) for r in range(rows) for c in range(cols)
+                 if after[r][c] == BLACK and before[r][c] != BLACK]
+    if not _reshape_keeps_style(before, after, rows, cols, blackened, "grouped"):
+        return [row[:] for row in before]
     return after
 
 
@@ -1500,18 +1533,7 @@ def _symmetrize_black_changes(before, after, rows, cols, letters, symmetry,
             for (r, c) in unit:
                 grid[r][c] = BLACK if after[r][c] == BLACK else WHITE
 
-    words = [tuple(cells) for cells in extract_slots(after, rows, cols)
-             if all(cell in letters for cell in cells)]
-    final_slots = {tuple(cells) for cells in extract_slots(grid, rows, cols)}
-    kept_cells = set(permanent_locked_letters)
-    dropped_cells = set()
-    for cells in words:
-        (kept_cells if cells in final_slots else dropped_cells).update(cells)
-    new_letters = {
-        cell: ch for cell, ch in letters.items()
-        if not black(grid, cell) and (cell in kept_cells or cell not in dropped_cells)
-    }
-    return grid, new_letters
+    return grid, _letters_after_pattern_change(after, grid, rows, cols, letters, permanent_locked_letters)
 
 
 # `_place_black_cells`' draw window, in percent, and its widening step: the
@@ -4793,8 +4815,10 @@ GRID_REPEAT_DISCARD_STREAK = 3
 # many is not counted, and a failed grid that still holds that many after
 # its end-of-palier cleanup is dropped from the next palier's pool, its
 # place going to a blank-grid worker (after a full cleanup, like
-# GRID_REPEAT_DISCARD_STREAK). Off when the objective is 0, or when the
-# permanent black cells alone exceed the limit.
+# GRID_REPEAT_DISCARD_STREAK). An attempt whose repair of a blockage would
+# hold that many fails at once (`Filler._repair_blockage`, reason
+# "black_overflow"), with no second chance. Off when the objective is 0, or
+# when the permanent black cells alone exceed the limit.
 BLACK_OVERFLOW_FACTOR = 1.5
 
 # Number of PARALLEL_ATTEMPTS workers that, right after a full cleanup
@@ -5497,8 +5521,16 @@ class Filler:
         # can tell a strict search cut short from one genuinely exhausted.
         self._budget_exhausted = False
         # "auto" fill method (see FILL_METHODS): `_backtrack` hands the grid
-        # over to `IngridSolver` once `_falcon_phase_over` says so.
+        # over to `IngridSolver` once `_ingrid_handoff_due` says so.
         self.ingrid_handoff = False
+        self._repairing_blockage = False
+        self._repair_recheck_at = 0
+        self._repair_until = 0
+        self._repair_states = set()
+        # See BLACK_OVERFLOW_FACTOR: the most black cells a repair may leave
+        # (`None` = no limit), and whether one was refused for exceeding it.
+        self.black_overflow_limit = None
+        self.black_overflow_refused = False
         # Whether a node may enter its last-resort `allow_breaking` stage.
         # False for the whole strict search; `solve()` turns it on only
         # once that strict search has been exhausted from the root.
@@ -7259,6 +7291,86 @@ class Filler:
         white = sum(1 for row in self.pattern for cell in row if cell != BLACK)
         return falcon_phase_over(len(self._known_cells()), white)
 
+    def _ingrid_handoff_due(self):
+        """The "auto" fill method's switch from Falcon to `IngridSolver`:
+        `_falcon_phase_over` and, while a blockage is being repaired, no
+        blockage left (`IngridSolver.root_blocked`, at most once per
+        FALCON_REPAIR_CHECK_INTERVAL checks) or FALCON_REPAIR_MAX_CHECKS checks
+        spent on it."""
+        if not self._falcon_phase_over():
+            return False
+        if not self._repairing_blockage:
+            return True
+        if self.checks < self._repair_recheck_at:
+            return False
+        self._repair_recheck_at = self.checks + FALCON_REPAIR_CHECK_INTERVAL
+        if self.checks < self._repair_until and IngridSolver(self, 0).root_blocked():
+            return False
+        self._repairing_blockage = False
+        return True
+
+    def _repair_blockage(self, blocked, may_reshape):
+        """Falcon's end-of-palier repair, inside the attempt, of the `blocked`
+        slots `IngridSolver` stopped on: shorter or longer words with a black
+        cell added or moved, then the hard clean (`_clean_continue_candidate`,
+        which also carries out the symmetry and pattern-style rules), or the
+        hard clean alone when `may_reshape` is off. Locked letters it erases
+        are unlocked, none is added, as in `_early_hardclean`. The cleaned state
+        becomes the search's new state and record. False, with nothing done,
+        when this repair already produced that state in this attempt, or when
+        it would leave more than `black_overflow_limit` black cells, which
+        declares the attempt failed (`black_overflow_refused`)."""
+        cleared = set()
+        if may_reshape:
+            diag = {
+                "assignment": list(self.assignment),
+                "impossible_slots": sorted(blocked),
+                "locked_letters": [[r, c, ch] for (r, c), ch in self.locked_letters.items()],
+            }
+            pattern, confirmed, slots, cleaned, _, _ = _clean_continue_candidate(
+                [row[:] for row in self.pattern], diag, self.rows, self.cols, self.index, self.rng,
+                permanent_locked_letters=self.permanent_locked_letters or None,
+                permanent_black_cells=self.permanent_black_cells,
+                challenge_words=self.challenge_words,
+                symmetry=self.reshape_symmetry,
+                grouped=self.reshape_pattern_style == "grouped",
+                multi_word_percent=self.multi_word_percent,
+            )
+            if self.black_overflow_limit is not None and _candidate_black_count(pattern) > self.black_overflow_limit:
+                self.black_overflow_refused = True
+                return False
+            cleared = {
+                cell for cell, ch in self.locked_letters.items()
+                if pattern[cell[0]][cell[1]] == BLACK or confirmed.get(cell) != ch
+            }
+        else:
+            slots, pattern = self.slots, self.pattern
+            cleaned, _, _, _ = _clean_blocked_slots(
+                slots, list(self.assignment), sorted(blocked),
+                locked_letters=dict(self.locked_letters) or None, index=self.index, rng=self.rng,
+                permanent_locked_letters=self.permanent_locked_letters or None,
+                cleared_cells_out=cleared,
+            )
+        known = {cell: ch for cell, ch in self.locked_letters.items() if cell not in cleared}
+        for j, word in enumerate(cleaned):
+            if word is not None:
+                known.update(zip(slots[j], word))
+        state = (tuple("".join(row) for row in pattern), tuple(sorted(known.items())))
+        if state in self._repair_states:
+            return False
+        self._repair_states.add(state)
+        self._flat_restart = (list(cleaned), cleared, slots, pattern, None, None)
+        self._restart_from_state()
+        self.best_assigned_count = sum(1 for a in self.assignment if a is not None)
+        self.best_assignment = list(self.assignment)
+        self.best_slots = self.slots
+        self.best_pattern = self.pattern
+        self.best_stat_letters = self.stat_letters(self.assignment)
+        self._repairing_blockage = True
+        self._repair_recheck_at = self.checks
+        self._repair_until = self.checks + FALCON_REPAIR_MAX_CHECKS
+        return True
+
     def _reshape_candidates(self, i, family, active_challenge_words):
         """Reshape candidates of one family for slot `i` (see
         `_backtrack`): the family's still-active, unused words of another
@@ -8768,7 +8880,7 @@ class Filler:
             return False
         if self._periodic_checkpoints():
             return False
-        if self.ingrid_handoff and self._falcon_phase_over():
+        if self.ingrid_handoff and self._ingrid_handoff_due():
             raise _IngridHandoff()
         unassigned = [
             i for i in range(len(self.slots))
@@ -9985,11 +10097,22 @@ def _canonical_conflict_slot_indices(index, slots, assignment, permanent_locked_
 # and what every automatic fill and "Suivant" use, is "falcon" until more than
 # `FALCON_PHASE_MAX_FILL_PERCENT` % of the grid's white cells hold a letter, then
 # "ingrid" (`falcon_phase_over`; an attempt goes on from the grid reached,
-# `Filler._falcon_phase_over`, `_IngridHandoff`; "Suivant" decides at each click,
-# `resolve_fill_method`).
+# `_auto_fill`, `_IngridHandoff`; "Suivant" decides at each click,
+# `resolve_fill_method`). An attempt whose "ingrid" search is blocked gets its
+# blockage repaired and goes back to "falcon" until no blockage is left
+# (`Filler._repair_blockage`, `Filler._ingrid_handoff_due`).
 FILL_METHODS = ("falcon", "ingrid", "auto")
 FILL_METHOD_DEFAULT = "auto"
 FALCON_PHASE_MAX_FILL_PERCENT = 15
+# "auto" fill method: `IngridSolver.solve` calls the search blocked after this
+# many restarts in a row with no new record.
+INGRID_STALL_RESTARTS = 10
+# "auto" fill method: while Falcon repairs a blockage, checks between two tests
+# of whether one is left (`IngridSolver.root_blocked`, which builds every domain).
+FALCON_REPAIR_CHECK_INTERVAL = 1000
+# "auto" fill method: checks Falcon gets to repair one blockage, past which
+# `IngridSolver` takes over again, so a blockage still there gets another repair.
+FALCON_REPAIR_MAX_CHECKS = 5000
 
 
 def falcon_phase_over(filled_cells, white_cells):
@@ -10040,7 +10163,7 @@ INGRID_WORDS_PER_CHECK = 10
 
 class _IngridHandoff(Exception):
     """Raised by `Filler._backtrack` under the "auto" fill method once
-    `Filler._falcon_phase_over`. It unwinds the whole search with no undo, so
+    `Filler._ingrid_handoff_due`. It unwinds the whole search with no undo, so
     the Filler keeps the grid reached for `IngridSolver`."""
 
 
@@ -10310,6 +10433,20 @@ class IngridSolver:
             self._undo_to(mark)
             dropped.append(self.wiped)
             self._drop_slot(self.wiped)
+
+    def _dry_slots(self):
+        """The open slots outside the CSP for having no word at all."""
+        f = self.f
+        return [i for i in range(self.n)
+                if f.assignment[i] is None and i not in f.excluded_slots and not self.active[i]]
+
+    def root_blocked(self):
+        """Whether this grid is blocked for the search: a slot with no word,
+        or an initial propagation wiping a domain out."""
+        if self._dry_slots():
+            return True
+        active = [i for i in range(self.n) if self.active[i]]
+        return self._propagate(active, [i for i in active if len(self.dom[i]) == 1]) is not None
 
     def _drop_slot(self, x):
         self.active[x] = False
@@ -10601,14 +10738,21 @@ class IngridSolver:
                 if self._step():
                     return "stop"
 
-    def solve(self):
+    def solve(self, stop_when_blocked=False):
         """Fills the grid: initial propagation, then runs from the root
         under a backtrack limit growing by INGRID_RETRY_GROWTH_FACTOR,
         until the grid is filled, the root is proved unfillable or the
         search must stop. Leaves the Filler's `best_assignment` (most slots
         holding a single word) and `ingrid_blocked_slots` (on failure, the
         open slot of that record whose crossings caused the most domain
-        wipe-outs) for `try_fill`."""
+        wipe-outs) for `try_fill`.
+
+        `stop_when_blocked` (the "auto" fill method): the search also ends on
+        a slot with no word at all before it starts, and after
+        INGRID_STALL_RESTARTS restarts in a row with no new record, and
+        `blocked_slots` then names what blocks it: the dry slots, the slot the
+        initial propagation wiped out, else `ingrid_blocked_slots`. Empty when
+        the search ended for any other reason."""
         f = self.f
         f.best_assignment = list(self.initial)
         f.best_assigned_count = sum(1 for w in self.initial if w is not None)
@@ -10619,25 +10763,39 @@ class IngridSolver:
         active = [i for i in range(self.n) if self.active[i]]
         singletons = [i for i in active if len(self.dom[i]) == 1]
         solved = False
-        updates = self._propagate(active, singletons)
-        if updates is None:
+        self.blocked_slots = self._dry_slots() if stop_when_blocked else []
+        stuck = False
+        updates = None if self.blocked_slots else self._propagate(active, singletons)
+        if self.blocked_slots:
+            pass
+        elif updates is None:
             self.freeze_initial()
             self._record()
             root = len(self.trail)
             max_backtracks = INGRID_INITIAL_MAX_BACKTRACKS
+            stalled = 0
             while True:
+                count = self.best_count
                 outcome = self._run(max_backtracks)
                 if outcome == "solved":
                     self._record()
                     solved = True
                     break
+                if outcome == "hard":
+                    stuck = stop_when_blocked
                 if outcome != "limit":
+                    break
+                stalled = stalled + 1 if self.best_count == count else 0
+                if stop_when_blocked and stalled >= INGRID_STALL_RESTARTS:
+                    stuck = True
                     break
                 self._undo_to(root)
                 max_backtracks = max(max_backtracks + 1,
                                      int(max_backtracks * INGRID_RETRY_GROWTH_FACTOR))
         else:
             self._learn(updates)
+            if stop_when_blocked:
+                self.blocked_slots = [self.wiped]
         f.assignment = list(f.best_assignment)
         f.used_words = UsedWords(f.index, f.best_assignment)
         if not solved:
@@ -10648,7 +10806,40 @@ class IngridSolver:
                 worst = max(open_slots, key=lambda i: (weight[i], -i))
                 if weight[worst] > 0:
                     f.ingrid_blocked_slots = [worst]
+        if stuck:
+            self.blocked_slots = list(f.ingrid_blocked_slots)
         return solved
+
+
+def _auto_fill(filler, deadline_checks):
+    """The "auto" fill method (see FILL_METHODS) on `filler`: Falcon up to the
+    threshold, then `IngridSolver`; each time that search is blocked
+    (`IngridSolver.solve`'s `blocked_slots`), the blockage is repaired
+    (`Filler._repair_blockage`) and Falcon goes on until no blockage is left
+    (`Filler._ingrid_handoff_due`), then `IngridSolver` again. The attempt ends
+    when one of them fills the grid, on the budget or a stop signal, when Falcon
+    fails, or when a repair gives a state it already gave. Returns (solved,
+    whether `IngridSolver` ran last)."""
+    may_reshape = filler.reshape_enabled
+    filler.ingrid_handoff = True
+    filler.mark_immediately_impossible_slots()
+    while True:
+        if not filler._ingrid_handoff_due():
+            filler.reshape_enabled = may_reshape
+            try:
+                return filler.solve(deadline_checks), False
+            except _IngridHandoff:
+                filler.attention_step = filler.best_attention_step = None
+                filler._impossible_this_attempt = _RecentSlots(MAX_EXCLUDED_SLOTS)
+        filler.reshape_enabled = False
+        solver = IngridSolver(filler, deadline_checks)
+        if solver.solve(stop_when_blocked=True):
+            return True, True
+        filler.checks += 1
+        if (not solver.blocked_slots or filler._periodic_checkpoints()
+                or filler._deadline_reached_without_extension(deadline_checks)
+                or not filler._repair_blockage(solver.blocked_slots, may_reshape)):
+            return False, True
 
 
 def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=None,
@@ -10663,8 +10854,10 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
              early_hardclean_percent=100, permanent_locked_letters=None,
              incremental_fill=False, same_word_limit=None,
              words_per_node=WORDS_PER_NODE, reshape_symmetry=None, reshape_pattern_style=None,
-             multi_word_percent=None, fill_method="falcon"):
-    """`fill_method` ("falcon" by default, the method of every fill that is
+             multi_word_percent=None, fill_method="falcon", black_overflow_limit=None):
+    """`black_overflow_limit`: see `Filler._repair_blockage`.
+
+    `fill_method` ("falcon" by default, the method of every fill that is
     not a generation attempt's own search): see FILL_METHODS — "ingrid" runs `IngridSolver` on
     the Filler instead of `Filler.solve` (no reshape, early hardclean, zone
     softclean, repeated-word hardclean, attention zone nor words per node
@@ -10946,6 +11139,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     filler.same_word_limit = same_word_limit
     filler.words_per_node = words_per_node
     filler.multi_word_percent = multi_word_percent
+    filler.black_overflow_limit = black_overflow_limit
     filler.incremental_fill = incremental_fill
     filler.permanent_locked_letters = dict(permanent_locked_letters or {})
     filler.permanent_black_cells = frozenset(permanent_black_cells or ())
@@ -11102,19 +11296,15 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
         filler.used_words = UsedWords(index, preseed_assignment)
         filler.best_assignment = list(preseed_assignment)
         filler.best_assigned_count = sum(1 for w in preseed_assignment if w is not None)
-    ingrid = fill_method == "ingrid" or (fill_method == "auto" and filler._falcon_phase_over())
-    if not ingrid:
-        filler.mark_immediately_impossible_slots()
-        filler.ingrid_handoff = fill_method == "auto"
-        try:
-            solved_internally = filler.solve(deadline_checks)
-        except _IngridHandoff:
-            ingrid = True
-            filler.attention_step = filler.best_attention_step = None
-            filler._impossible_this_attempt = _RecentSlots(MAX_EXCLUDED_SLOTS)
-    if ingrid:
+    ingrid = fill_method == "ingrid"
+    if fill_method == "auto":
+        solved_internally, ingrid = _auto_fill(filler, deadline_checks)
+    elif ingrid:
         filler.reshape_enabled = False
         solved_internally = IngridSolver(filler, deadline_checks).solve()
+    else:
+        filler.mark_immediately_impossible_slots()
+        solved_internally = filler.solve(deadline_checks)
     # A failed search has undone every reshape, but its record may have
     # been taken on a reshaped grid: carry on from that grid, and hand its
     # pattern back to the caller through `grid`.
@@ -11200,6 +11390,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
             else "too_many_non_gloss_words" if over_non_gloss_budget
             else "shared_canonical_form" if canonical_conflict_slots
             else "solved" if truly_complete
+            else "black_overflow" if filler.black_overflow_refused
             else "interrupted_other_attempt_done" if filler.interrupted_by_sibling
             else "abandoned_too_unfillable" if filler.abandoned
             else "deadline_exceeded" if filler.checks >= deadline_checks
@@ -17170,11 +17361,11 @@ def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng,
             permanent_black_cells=permanent_black_cells, moves=moves,
         )
     if grouped:
-        # "Grouped" style: the cleanup may leave no 2-letter slot.
-        cand_seed_grid = _undo_short_run_changes(
-            original_grid, cand_seed_grid, rows, cols, confirmed, symmetry)
-        confirmed = {cell: ch for cell, ch in confirmed.items()
-                     if cand_seed_grid[cell[0]][cell[1]] != BLACK}
+        # "Grouped" style: the cleanup must leave a conforming pattern.
+        guarded_grid = _undo_short_run_changes(original_grid, cand_seed_grid, rows, cols, symmetry)
+        confirmed = _letters_after_pattern_change(
+            cand_seed_grid, guarded_grid, rows, cols, confirmed, permanent_locked_letters)
+        cand_seed_grid = guarded_grid
     if new_black_cells or reopened_cells or cand_seed_grid != cand_grid:
         new_slots = extract_slots(cand_seed_grid, rows, cols)
         cand_preseed_assignment = [
@@ -17254,6 +17445,9 @@ _worker_multi_word_percent = MULTI_WORD_PERCENT
 # Fill method of the attempts' search (generate_grid's `fill_method`, see
 # FILL_METHODS), shared the same way.
 _worker_fill_method = FILL_METHOD_DEFAULT
+# The most black cells a repair may leave in an attempt (generate_grid's
+# `black_overflow_limit`, see BLACK_OVERFLOW_FACTOR).
+_worker_black_overflow_limit = None
 # Black-cell symmetry of the ratio draw (generate_grid's `black_symmetry`,
 # see `make_pattern`'s `symmetry`), shared the same way.
 _worker_black_symmetry = None
@@ -17506,7 +17700,7 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
                   priority_words=None, challenge_words=None, scrabble_words=None,
                   words_per_node=WORDS_PER_NODE, black_symmetry=None, pattern_style=None,
                   multi_word_percent=MULTI_WORD_PERCENT, pattern_mix=None,
-                  fill_method=FILL_METHOD_DEFAULT):
+                  fill_method=FILL_METHOD_DEFAULT, black_overflow_limit=None):
     # See GENERATION_PROCESS_NICE_INCREMENT (right after PARALLEL_ATTEMPTS)
     # for the full reasoning — applied only once here, the very first time
     # this worker starts up (never per submitted task), since the pool
@@ -17533,9 +17727,10 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
         _worker_non_gloss_words, _worker_max_non_gloss, _worker_priority_words, \
         _worker_challenge_words, _worker_scrabble_words, _worker_words_per_node, \
         _worker_black_symmetry, _worker_pattern_style, _worker_multi_word_percent, \
-        _worker_pattern_mix, _worker_fill_method
+        _worker_pattern_mix, _worker_fill_method, _worker_black_overflow_limit
     _worker_index = index
     _worker_fill_method = fill_method
+    _worker_black_overflow_limit = black_overflow_limit
     _worker_words_per_node = words_per_node
     _worker_multi_word_percent = multi_word_percent
     _worker_black_symmetry = black_symmetry
@@ -18268,7 +18463,8 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                            same_word_limit=MAX_SAME_WORD_PLACEMENTS,
                            words_per_node=_worker_words_per_node,
                            multi_word_percent=_worker_multi_word_percent,
-                           fill_method=_worker_fill_method)
+                           fill_method=_worker_fill_method,
+                           black_overflow_limit=_worker_black_overflow_limit)
     finally:
         if racing and checks_slot is not None and _worker_attempt_active is not None:
             _worker_attempt_active[checks_slot] = 0
@@ -18552,7 +18748,8 @@ def _continue_search(rows, cols, seed, rng, seed_grid, preseed_assignment, exclu
                        same_word_limit=MAX_SAME_WORD_PLACEMENTS,
                        words_per_node=_worker_words_per_node,
                        multi_word_percent=_worker_multi_word_percent,
-                       fill_method=_worker_fill_method)
+                       fill_method=_worker_fill_method,
+                       black_overflow_limit=_worker_black_overflow_limit)
     return result, diag
 
 
@@ -18755,9 +18952,11 @@ def _clean_retry_candidate_task(cand_grid, cand_diag, rows, cols, deep, rng_seed
         symmetry=_worker_black_symmetry,
     )
     if _worker_pattern_style == "grouped":
-        # "Grouped" style: the cleanup may leave no 2-letter slot.
-        cand_seed = _undo_short_run_changes(
-            cand_grid, cand_seed, rows, cols, cand_confirmed, _worker_black_symmetry)
+        # "Grouped" style: the cleanup must leave a conforming pattern.
+        guarded_seed = _undo_short_run_changes(cand_grid, cand_seed, rows, cols, _worker_black_symmetry)
+        cand_confirmed = _letters_after_pattern_change(
+            cand_seed, guarded_seed, rows, cols, cand_confirmed, permanent_locked_letters)
+        cand_seed = guarded_seed
     return cand_seed, cand_confirmed, cand_slots, cand_diag.get("process_number")
 
 
@@ -19834,7 +20033,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                   checks_progress, attempt_active, warmup_barrier, proper_noun_words, max_proper_nouns,
                   non_gloss_words, max_non_gloss, priority_words, challenge_words, scrabble_words,
                   words_per_node, black_symmetry, pattern_style, multi_word_percent, pattern_mix,
-                  fill_method)
+                  fill_method, black_overflow_limit)
     ) as executor:
         # Pool warm-up: forces every worker to finish its real startup
         # before the very first palier (see `_warmup_worker`/`warmup_
@@ -20438,12 +20637,14 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     second_chance = None
                     # A failure the isolated-cell plug below completes is
                     # never declared failed either, and needs no second
-                    # chance.
-                    if r is None and not attempt_done_event.is_set() and _plug_isolated_cells(
+                    # chance. Nor does one holding too many black cells
+                    # after a repair (BLACK_OVERFLOW_FACTOR), failed for good.
+                    if (r is None and d.get("reason") != "black_overflow"
+                            and not attempt_done_event.is_set() and _plug_isolated_cells(
                         g, rows, cols, extract_slots(g, rows, cols), d["assignment"], index,
                         permanent_locked_letters=permanent_locked_letters,
                         symmetry=black_symmetry,
-                    ) is None:
+                    ) is None):
                         state_key = _blocked_state_key(g, d["assignment"], rows, cols)
                         if state_key not in chain_keys:
                             second_chance = chain_keys | {state_key}

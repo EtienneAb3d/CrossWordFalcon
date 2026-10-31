@@ -1015,9 +1015,18 @@ public final class Cleanup {
                 }
             }
         }
+        return new Object[]{grid, lettersAfterPatternChange(after, grid, rows, cols, letters, perm)};
+    }
+
+    /** The letters once the pattern after has become grid (mirrors _letters_after_pattern_change): every word of
+     * after whose cells no longer form a slot of grid is removed, its letters erased except those a kept word or a
+     * permanent letter carries; a letter on a cell now black is erased too. */
+    static Map<Integer, Character> lettersAfterPatternChange(char[][] after, char[][] grid, int rows, int cols,
+                                                             Map<Integer, Character> letters,
+                                                             Map<Integer, Character> permanentLocked) {
         Set<Cells.Key> finalSlots = new HashSet<>();
         for (int[] cells : Grids.extractSlots(grid, rows, cols)) finalSlots.add(Cells.key(cells));
-        Set<Integer> keptCells = new HashSet<>(perm.keySet());
+        Set<Integer> keptCells = permanentLocked == null ? new HashSet<>() : new HashSet<>(permanentLocked.keySet());
         Set<Integer> droppedCells = new HashSet<>();
         for (int[] cells : Grids.extractSlots(after, rows, cols)) {
             if (!Grids.allKnown(cells, letters)) continue;
@@ -1030,7 +1039,7 @@ public final class Cleanup {
             if (grid[Cells.r(cell)][Cells.c(cell)] == BLACK) continue;
             if (keptCells.contains(cell) || !droppedCells.contains(cell)) out.put(cell, e.getValue());
         }
-        return new Object[]{grid, out};
+        return out;
     }
 
     // ================================================================== scores / pools
@@ -1277,13 +1286,10 @@ public final class Cleanup {
             confirmed = symConfirmed;
         }
         if (grouped) {
-            // "Grouped" style: the cleanup may leave no 2-letter slot.
-            seed = Grids.undoShortRunChanges(originalGrid, seed, rows, cols, confirmed, symmetry);
-            Map<Integer, Character> kept = new LinkedHashMap<>();
-            for (Map.Entry<Integer, Character> e : confirmed.entrySet()) {
-                if (seed[Cells.r(e.getKey())][Cells.c(e.getKey())] != BLACK) kept.put(e.getKey(), e.getValue());
-            }
-            confirmed = kept;
+            // "Grouped" style: the cleanup must leave a conforming pattern.
+            char[][] guarded = Grids.undoShortRunChanges(originalGrid, seed, rows, cols, symmetry);
+            confirmed = lettersAfterPatternChange(seed, guarded, rows, cols, confirmed, permanentLocked);
+            seed = guarded;
         }
         if (!newBlack.isEmpty() || !reopened.isEmpty() || !Arrays.deepEquals(seed, z.grid())) {
             List<int[]> newSlots = Grids.extractSlots(seed, rows, cols);

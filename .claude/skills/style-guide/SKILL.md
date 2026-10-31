@@ -4071,14 +4071,11 @@ end through the real running API (interactive start/step/save,
   column AND "Mots Défi"); `#interactive-draft-save-btn` measured
   centered at x≈700, exactly the row's own midpoint.
 
-- **"Éponge" (clear) button in the "Mots"/"Croisés"/"Début"/"Fin" row
-  moved from the very end of the button rows (after "Finir la grille")
-  to right after "Fin"**, at the user's explicit request: "mettre
-  l'éponge à droite de Fin (et non après 'Finir la grille')." Purely a
-  DOM reorder of `#interactive-results-clear-btn` within `index.html`'s
-  first `.interactive-arrows-row` — no CSS/JS change, since the button is
-  wired by `id`, not by DOM position, and the row's own `flex-wrap: wrap`
-  layout doesn't care where in the row an item sits.
+- **Each tool's "éponge" (clear) button sits at the top right of its answer
+  zone, shown only while the zone holds something**, never in a button row — the
+  user's rule (`.clearable-results`, `.results-clear-btn`, `watchClearableResults`;
+  `.has-results` reserves a 2rem right padding so it covers no text). An empty
+  wrapper is `display: contents`, leaving no gap in its parent's flex column.
 
 - **`.cell.white.interactive-deadlock`** — a more vivid red for the exact
   crossing cell of a "crossing-letter deadlock" (see CLAUDE.md/`DOC_ALGO/

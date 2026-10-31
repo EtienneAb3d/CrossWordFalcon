@@ -452,7 +452,10 @@ json`. Holds all server-side state in plain module dicts/lists:
   only log of attempt-preview snapshots the web UI replays, each entry
   also carrying the job's `success_count` at that moment, which the web
   UI's gold-medal badge shows for the navigated entry — plus one
-  `search_final` entry appended right before "minimizing": the last
+  `search_final` entry appended right before "minimizing", or by "Stop"
+  (`_record_search_final(stopped=True)`, Java `App.searchFinalEntry`: tiles
+  still computing become `interrupted`, the entry not copied into the
+  STOP_DUMP's own history): the last
   non-empty `live_preview` snapshot, `previous` stripped, successful
   tiles framed gold), `live_preview`
   (a single, continuously OVERWRITTEN attempt-preview snapshot — every new
@@ -754,7 +757,7 @@ budget, "(1K mots / cycle)" … "(100M mots / cycle)" — `data-budget` +
 `script.js`'s `compactBudget`, i18n `modeBudgetSuffix`; the page's
 initial size, changing `#width`/`#height` or picking a preset selects the effort fitting the
 grid's larger side, `applySizeEffort`/`SIZE_EFFORT_STEPS`: up to 10
-"fast", up to 15 "medium", above "strong"); the web UI disables its Ultra,
+"fast", up to 21 "medium", above "strong"); the web UI disables its Ultra,
 Megatron and GridZilla options off localhost (`script.js`'s `LOCALHOST_ONLY_MODES`/
 `restrictHeavyModesToLocalhost`, frontend-only — the API accepts them all),
 except Ultra with the Java back end: `GET /api/system_info` carries
@@ -923,16 +926,23 @@ own rng drawn from the parent's in candidate order:
    `generation_params.pattern_style` — an Interactive session stores
    `{"pattern_style"}` there, `InteractiveFromAttemptRequest.pattern_style`
    too), so a 2-letter slot, whatever step creates it, is an "emplacement
-   bloqué" and no successful grid holds one. An end-of-palier cleanup may not
-   create one either: `_clean_continue_candidate(grouped=)` and
+   bloqué" and no successful grid holds one. A cleanup (end of palier, or a
+   blockage repair inside an attempt) may not leave a non-conforming pattern:
+   `_clean_continue_candidate(grouped=)` and
    `_clean_retry_candidate_task` (Java `Cleanup.cleanContinueCandidate`,
    `Generator.cleanCandidate`) pass their output pattern through
    `_undo_short_run_changes` (Java `Grids.undoShortRunChanges`), which
    undoes the cleanup's black/white changes lying in or bounding a run of
    `_short_runs` (every white run of 1 or 2 cells) — the cell with its changed images, else its whole block
    of side-adjacent changed cells, else every change — keeping an undo only
-   if it lowers the number of such runs without turning the grid invalid,
-   never re-blackening a cell holding a confirmed letter. Once the grouped draw reaches
+   if it lowers the number of such runs without turning the grid invalid; a
+   blackened cell in a too-long black line or a pair parallel to a near border
+   is then freed with its images, and a grid still failing `_reshape_keeps_style`
+   gets the cleanup's input pattern back. A cell may be re-blackened under a
+   letter: `_letters_after_pattern_change` (Java `Cleanup.
+   lettersAfterPatternChange`) removes the words whose cells no longer form a
+   slot, their letters erased except those a kept word or a permanent letter
+   carries. Once the grouped draw reaches
    its target (and after every short-slot redraw), `_declump_black_cells`
    (Java `Grids.declumpBlackCells`) takes off, in row-major order with
    their images, the drawn black cells with more than
@@ -1485,7 +1495,8 @@ candidates` on "reprise telle quelle", `kept_candidates` on a full cleanup)
 and dropped when it still holds that many. After a full cleanup every
 dropped grid (overflowing success included) adds a blank-grid worker to the
 next palier (`discarded_count`); with no grid left to resume, the next
-palier starts from a blank grid. Off when the objective is 0 or when
+palier starts from a blank grid. A repair of a blockage inside an attempt obeys
+the same limit (`Filler._repair_blockage`, see "Fill method"). Off when the objective is 0 or when
 `permanent_black_cells` alone exceed the limit. Every worker of a palier left without a
 distinct pool grid of its own (grids dropped, or merged as identical)
 starts from a new grid rather than resuming one already assigned:
@@ -2773,16 +2784,37 @@ hold a letter, then Ingrid-like (`falcon_phase_over`, Java `IngridSolver.
 falconPhaseOver`). "Suivant" and `POST /api/interactive/impossible` decide per
 request from the letters of the posted grid (`resolve_fill_method`, Java
 `IngridSolver.resolveFillMethod`), and "falcon" and "ingrid" stay accepted by the
-API and the CLI. An attempt: `try_fill` goes straight to `IngridSolver` when
-`Filler._falcon_phase_over` (Java `falconPhaseOver`: its placed words' and locked
-letters' cells, `_known_cells`, over the pattern's white cells) is already true,
-otherwise runs `Filler.solve` with `ingrid_handoff`; that test, at every
-`_backtrack` entry, raises `_IngridHandoff` (Java `Filler.IngridHandoff`) once
-true, which unwinds with no undo: the Filler keeps the current slots, pattern,
-words and locked letters, every word placed so far staying placed for
-`IngridSolver`, which goes on with the attempt's `checks` and budget. The test runs
-again on each attempt, so a palier whose cleanup brought the grid back under the
-threshold goes back to Falcon. "ingrid" runs `IngridSolver(filler, deadline_
+API and the CLI. An attempt (`_auto_fill`, Java `Fill.autoFill`): Falcon
+(`Filler.solve` with `ingrid_handoff`) until `Filler._ingrid_handoff_due` (Java
+`ingridHandoffDue`), tested at every `_backtrack` entry and before starting, is
+true: `_falcon_phase_over` (Java `falconPhaseOver`: its placed words' and locked
+letters' cells, `_known_cells`, over the pattern's white cells). It raises
+`_IngridHandoff` (Java `Filler.IngridHandoff`), which unwinds with no undo: the
+Filler keeps the current slots, pattern, words and locked letters, every word
+placed so far staying placed for `IngridSolver`, which goes on with the attempt's
+`checks` and budget. `IngridSolver.solve(stop_when_blocked=True)` ends blocked
+(`blocked_slots`) on an open slot with no word (`_dry_slots`), on an initial
+propagation wiping a slot out (`wiped`), on "hard", or after
+`INGRID_STALL_RESTARTS` (10) restarts in a row with no new record
+(`ingrid_blocked_slots`). `Filler._repair_blockage` (Java `repairBlockage`) then
+applies `_clean_continue_candidate` to those slots on the current state (shorter
+or longer words with a black cell added or moved, the hard clean, the symmetry and
+style guards; `_clean_blocked_slots` alone when reshapes are off, i.e. in "Finir la
+zone"), its erased locked letters unlocked, none added; the state goes back through
+`_restart_from_state`, becomes the record, and Falcon resumes with
+`_repairing_blockage`: `_ingrid_handoff_due` is then also true only once
+`IngridSolver.root_blocked` finds no blockage (at most once per
+`FALCON_REPAIR_CHECK_INTERVAL`, 1000, checks) or `FALCON_REPAIR_MAX_CHECKS` (5000)
+checks were spent, a blockage still there getting another repair. The attempt ends
+on a filled grid, a budget or stop signal, a Falcon failure, or a repair giving a
+state it already gave in the attempt (`_repair_states`), or a repair that would
+leave more than `black_overflow_limit` black cells (`generate_grid`'s, through
+`_worker_black_overflow_limit` and `try_fill(black_overflow_limit=)`; Java
+`Generator.Ctx`/`Fill.FillArgs`/`Filler.blackOverflowLimit`): that repair is not
+applied, the attempt fails with reason `"black_overflow"` on the state before it,
+and the harvest gives it no second chance. The test runs again on
+each attempt, so a palier whose cleanup brought the grid back under the threshold
+goes back to Falcon. "ingrid" runs `IngridSolver(filler, deadline_
 checks).solve()` (Java `IngridSolver`) on the `Filler` `try_fill` built,
 instead of `mark_immediately_impossible_slots` + `Filler.solve`, with
 reshapes off; it reports through the Filler's own fields (`checks`,
@@ -3788,7 +3820,9 @@ step` has its own `STEP_PROXY_TIMEOUT_S` (60 s), the page its
 per request to `logs/frontend-action.log` (`ACTION_LOG_PATH`), shared by the
 HTTP and HTTPS instances and all their workers, every path but
 `ACTION_LOG_EXCLUDED_PATHS` (`/api/presence`), static files and status polls
-included: time, scheme, client IP, pseudo (`_action_log_pseudo`: the
+included, an HTTP error (status 400 and above) only for a registered player
+(`_action_log_registered`: the cookie holds a pseudo and a secret word, and
+`SECRET/` holds that pseudo's file, the secret word not hashed): time, scheme, client IP, pseudo (`_action_log_pseudo`: the
 `cwf-prefs` cookie's, as the browser declares it, `-` without one, spaces
 kept, the rest of the line starting at the first `"`), `"METHOD path?query"`,
 status, and the milliseconds until the response started, e.g. `2026-10-30
@@ -4066,6 +4100,13 @@ cookie also holds the secret word, which is never logged.
   `.outdated`, while the server's version differs from the page's; the
   page never reloads on its own); the virtual keyboard; the welcome overlay
   and cookie-based preference storage (`cwf-prefs`).
+  Each tool's sponge button (`.results-clear-btn`: `#dictionary-clear-btn`,
+  `#paraphrase-clear-btn`, `#interactive-results-clear-btn`,
+  `#interactive-propose-clear-btn`, `#interactive-title-propose-clear-btn`) sits
+  at the top right of its answer zone's `.clearable-results` wrapper, shown only
+  while a zone of the wrapper is not hidden and holds something
+  (`watchClearableResults`, one `MutationObserver` per wrapper; an empty wrapper
+  is `display: contents`, a filled one `.has-results`).
 - **`style.css`** — one flat stylesheet organized by component in source
   order, IDs/classes mirroring `script.js`'s DOM references 1:1.
 - **`i18n.js`** — pure-data translation table, `I18N = {fr, en, de, es,

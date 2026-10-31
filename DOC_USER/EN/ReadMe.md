@@ -289,7 +289,7 @@ full again whenever a new generation or an Interactive session starts.
   need a slower mode to succeed at all. The effort shown when the page opens
   follows its default size (15×15: Moyen/Medium); changing
   **Largeur**/**Hauteur** or picking a **Préconfigurations** entry selects the effort fitting the
-  grid's larger side: Rapide/Fast up to 10, Moyen/Medium up to 15,
+  grid's larger side: Rapide/Fast up to 10, Moyen/Medium up to 21,
   Fort/Strong above (`frontend/static/script.js`, `applySizeEffort`); the
   player may then pick another one. **Ultra**, **Megatron** and **GridZilla** are only
   selectable when the page is opened on the local machine; from another
@@ -311,9 +311,11 @@ full again whenever a new generation or an Interactive session starts.
   every slot's list of possible words pruned against its crossings at all times
   and restarts with what it learnt about the hardest crossings (`IngridSolver`).
   Both use the same dictionary, difficulty level, theme glossary, "Mots Défi" and
-  every other setting of the form. So black cells only move for a word while the
-  grid is at most 15 % filled, including with **Finir la grille / Finish the grid**
-  on a grid already fuller than that. With Ingrid-like, **Suivant / Next**
+  every other setting of the form. When Ingrid-like gets stuck in an automatic
+  fill, the blocked slots are repaired (crossing words removed, a black cell added
+  or moved for a shorter or longer word) and Falcon takes over until the grid is no
+  longer blocked, then Ingrid-like resumes (`_auto_fill`). Outside those repairs,
+  black cells only move for a word while the grid is at most 15 % filled. With Ingrid-like, **Suivant / Next**
   works the grid out again from what is on screen at every click — so
   letters or black cells changed by hand always count — and remembers
   between clicks only which crossings have been hardest so far: a slot
@@ -463,7 +465,9 @@ main form (`#run-actions`); "Continuer" sits above the "Générer les mots crois
   handler, `POST /api/generate/cancel/{job_id}`) — appears once a
   generation has started; asks the server to abandon it. Takes effect at
   the next safe checkpoint (search, optimization, or clue writing), not
-  necessarily instantly.
+  necessarily instantly. The last known grids stay on screen as the last
+  entry of the attempt history, the attempts still running framed as
+  interrupted (`backend/app.py`, `_record_search_final`).
 - **Gold medal counter** (`#success-medal`, `frontend/static/script.js`,
   `runGeneration`/`pollJob`) — while an automatic generation runs, a gold
   medal sits fixed in the page's left margin, vertically centered, showing
@@ -705,8 +709,9 @@ those was showing.
     independent definitions of what you typed, one per line. This can
     take up to a minute or so, especially on a small local model. If the
     LLM is unreachable, it shows a short "unavailable" message instead.
-- **Effacer / Clear** (`#dictionary-clear-btn`) empties the field and all
-  results. Each search (of any of the four kinds) stacks its own result
+- **Effacer / Clear** (`#dictionary-clear-btn`, the sponge icon at the top right
+  of the results, shown only when there are some, `frontend/static/script.js`,
+  `watchClearableResults`) empties the field and all results. Each search (of any of the four kinds) stacks its own result
   block at the top, newest first, until cleared.
 - **External AI assistants** (`#dictionary-ai-buttons`,
   `frontend/static/script.js`, `dictionaryAiButtons`) — five violet
@@ -746,7 +751,8 @@ area:
   same thing, one per line, in the chosen language (side by side for a
   combined option). If the model is unreachable, a short "unavailable"
   message is shown instead.
-- **Effacer / Clear** (`#paraphrase-clear-btn`, the sponge icon) empties
+- **Effacer / Clear** (`#paraphrase-clear-btn`, the sponge icon at the top right
+  of the results, shown only when there are some) empties
   the field and every result; each request otherwise stacks its result
   block at the top, newest first.
 - **External AI assistants** (`#paraphrase-ai-buttons`,
@@ -1527,8 +1533,8 @@ real letter. Both update after every edit.
   become black (never one that would erase an existing letter) and doing
   so keeps the grid valid. Useful when no word fills the whole slot but
   part of it still can.
-- The sponge button right after "Fin" (`#interactive-results-clear-btn`)
-  empties the display area below the buttons (status message, "Vérifier"
+- The sponge button at the top right of the display area below the buttons,
+  shown only when it holds something (`#interactive-results-clear-btn`), empties it (status message, "Vérifier"
   report, candidate lists) and removes the matching red/orange
   highlighting from the grid, without changing any letter.
 - Every one of these four lists ("Mots", "Croisés", "Début", "Fin")
@@ -1761,8 +1767,8 @@ real letter. Both update after every edit.
   line above the other (`renderInteractiveCorrection`): the letters that
   changed — found by a letter-by-letter edit-distance comparison — are
   red on the "before" line and green on the "after" one (a space added
-  between two merged words shows as a green block). The sponge button
-  clears it.
+  between two merged words shows as a green block). The sponge button at the
+  top right of the result clears it.
 - **Proposer une définition / Suggest a definition**
   (`#interactive-propose-btn`) — asks the language
   model for several possible definitions of the selected word (it must be
@@ -1843,8 +1849,8 @@ real letter. Both update after every edit.
   static/script.js`, `correctInteractiveField`) — just left of "Proposer
   un titre": the same correction as the definition field's own
   "Corriger" (see above), applied to the title, with the same red/green
-  before/after comparison shown below the title field and cleared by its
-  sponge button.
+  before/after comparison shown below the title field and cleared by the
+  sponge button at its top right.
 - **Proposer un titre / Suggest a title** (`#interactive-title-propose-btn`,
   `POST /api/interactive/title`) — asks the language model for up to 10
   distinct title ideas for the whole grid and lists them right below the
@@ -2257,7 +2263,7 @@ leave its own core sitting idle in the meantime for no benefit.
 
 **The second filling method: Ingrid-like.** The search described above
 (trial and backtracking) is the "Falcon" method, used until more than 15 % of the
-grid's white cells hold a letter. The rest of the grid is filled with a different
+grid's white cells hold a letter, and again to repair a blockage. The rest of the grid is filled with a different
 search, modelled on the Ingrid crossword filler, which takes over the grid reached
 so far. Every slot keeps
 its full list of still-possible words, and after each decision every list

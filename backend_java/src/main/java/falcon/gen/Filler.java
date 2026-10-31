@@ -1763,14 +1763,92 @@ public final class Filler {
         }
     }
 
-    /** "auto" fill method: backtrack hands the grid over to IngridSolver once falconPhaseOver says so. */
+    /** "auto" fill method: backtrack hands the grid over to IngridSolver once ingridHandoffDue says so. */
     public boolean ingridHandoff = false;
+    boolean repairingBlockage = false;
+    long repairRecheckAt = 0;
+    long repairUntil = 0;
+    final Set<String> repairStates = new HashSet<>();
+    /** See Generator.BLACK_OVERFLOW_FACTOR: the most black cells a repair may leave (null = no limit). */
+    public Double blackOverflowLimit;
+    /** Whether a repair was refused for exceeding blackOverflowLimit, which declares the attempt failed. */
+    boolean blackOverflowRefused;
 
     /** IngridSolver.falconPhaseOver on the grid as it stands (mirrors _falcon_phase_over). */
     public boolean falconPhaseOver() {
         int white = 0;
         for (char[] row : pattern) for (char cell : row) if (cell != Grids.BLACK) white++;
         return IngridSolver.falconPhaseOver(knownCells().size(), white);
+    }
+
+    /** The "auto" fill method's switch from Falcon to IngridSolver (mirrors _ingrid_handoff_due). */
+    public boolean ingridHandoffDue() {
+        if (!falconPhaseOver()) return false;
+        if (!repairingBlockage) return true;
+        if (checks < repairRecheckAt) return false;
+        repairRecheckAt = checks + IngridSolver.FALCON_REPAIR_CHECK_INTERVAL;
+        if (checks < repairUntil && new IngridSolver(this, 0).rootBlocked()) return false;
+        repairingBlockage = false;
+        return true;
+    }
+
+    /** Falcon's end-of-palier repair, inside the attempt, of the slots IngridSolver stopped on (mirrors
+     * _repair_blockage). False, with nothing done, when it already produced that state in this attempt, or when it
+     * would leave more than blackOverflowLimit black cells, which declares the attempt failed. */
+    public boolean repairBlockage(List<Integer> blocked, boolean mayReshape) {
+        Set<Integer> cleared = new HashSet<>();
+        List<int[]> newSlots = slots;
+        char[][] newPattern = pattern;
+        String[] cleaned;
+        Map<Integer, Character> permanent = permanentLockedLetters.isEmpty() ? null : permanentLockedLetters;
+        List<Integer> sorted = new ArrayList<>(blocked);
+        java.util.Collections.sort(sorted);
+        if (mayReshape) {
+            Diag diag = new Diag();
+            diag.assignment = assignment.clone();
+            diag.impossibleSlots = sorted;
+            diag.lockedLetters = new java.util.LinkedHashMap<>(lockedLetters);
+            Cleanup.ContinueCandidate c = Cleanup.cleanContinueCandidate(Grids.copy(pattern), diag, rows, cols, index,
+                    rng, permanent, permanentBlackCells, challengeWords, reshapeSymmetry,
+                    "grouped".equals(reshapePatternStyle), multiWordPercent);
+            newSlots = c.slots();
+            newPattern = c.seedGrid();
+            cleaned = c.preseed();
+            if (blackOverflowLimit != null && Grids.countBlack(newPattern) > blackOverflowLimit) {
+                blackOverflowRefused = true;
+                return false;
+            }
+            for (Map.Entry<Integer, Character> e : lockedLetters.entrySet()) {
+                int cell = e.getKey();
+                if (newPattern[Cells.r(cell)][Cells.c(cell)] == Grids.BLACK
+                        || !e.getValue().equals(c.confirmed().get(cell))) cleared.add(cell);
+            }
+        } else {
+            cleaned = (String[]) Cleanup.cleanBlockedSlots(slots, assignment.clone(), sorted,
+                    lockedLetters.isEmpty() ? null : new java.util.LinkedHashMap<>(lockedLetters), false, index, rng,
+                    null, null, null, permanent, null, null, false, cleared)[0];
+        }
+        Map<Integer, Character> known = new java.util.TreeMap<>();
+        lockedLetters.forEach((cell, ch) -> { if (!cleared.contains(cell)) known.put(cell, ch); });
+        for (int j = 0; j < cleaned.length; j++) {
+            if (cleaned[j] == null) continue;
+            int[] cells = newSlots.get(j);
+            for (int k = 0; k < cells.length; k++) known.put(cells[k], cleaned[j].charAt(k));
+        }
+        if (!repairStates.add(Grids.key(newPattern) + "|" + known)) return false;
+        flatRestart = new FlatRestart(cleaned.clone(), cleared, newSlots, newPattern, -1, -1L);
+        restartFromState();
+        int count = 0;
+        for (String w : assignment) if (w != null) count++;
+        bestAssignedCount = count;
+        bestAssignment = assignment.clone();
+        bestSlots = slots;
+        bestPattern = pattern;
+        bestStatLetters = statLetters(assignment);
+        repairingBlockage = true;
+        repairRecheckAt = checks;
+        repairUntil = checks + IngridSolver.FALCON_REPAIR_MAX_CHECKS;
+        return true;
     }
 
     List<Reshape> reshapeCandidates(int i, String family, Set<String> active) {
@@ -2614,7 +2692,7 @@ public final class Filler {
             return false;
         }
         if (periodicCheckpoints()) return false;
-        if (ingridHandoff && falconPhaseOver()) throw new IngridHandoff();
+        if (ingridHandoff && ingridHandoffDue()) throw new IngridHandoff();
         List<Integer> unassigned = new ArrayList<>();
         int assignedCount = 0;
         for (int i = 0; i < assignment.length; i++) {

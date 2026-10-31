@@ -27,6 +27,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from backend.secret_store import _pseudo_path
+
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 VERSION_PATH = Path(__file__).resolve().parent.parent / "VERSION.txt"
 BACKEND_URL = os.environ.get("CROSSWORDFALCON_BACKEND_URL", "http://127.0.0.1:3001")
@@ -54,8 +56,9 @@ PROXY_TIMEOUT_S = 30.0
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("crosswordfalcon.proxy")
 
-# Every request but the presence heartbeats, one line each, from the HTTP and
-# HTTPS instances and all their workers alike (log_action). The file is opened
+# Every request but the presence heartbeats and the HTTP errors of anyone but a
+# registered player, one line each, from the HTTP and HTTPS instances and all
+# their workers alike (log_action). The file is opened
 # in append mode by each worker, and each line is one write. The launchers
 # empty it when they start the middleware.
 ACTION_LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "frontend-action.log"
@@ -74,17 +77,33 @@ ACTION_LOG_NO_PSEUDO = "-"
 _ACTION_LOG_PSEUDO_UNSAFE_RE = re.compile(r"[^\w -]")
 
 
-def _action_log_pseudo(request: Request) -> str:
-    """The pseudo of the browser's cwf-prefs cookie (see savePrefs in
-    frontend/static/script.js), `-` when it has none. It is what the browser
-    declares, never checked against its secret word, so anything a valid
-    pseudo cannot hold is replaced to keep the line's format. That cookie also
-    carries the secret word: only the pseudo may reach the log."""
+def _action_log_prefs(request: Request) -> dict:
+    """The browser's cwf-prefs cookie (see savePrefs in
+    frontend/static/script.js), empty when it has none."""
     try:
         prefs = json.loads(unquote(request.cookies.get("cwf-prefs", "")))
-        pseudo = prefs.get("pseudo") if isinstance(prefs, dict) else None
     except ValueError:
-        return ACTION_LOG_NO_PSEUDO
+        return {}
+    return prefs if isinstance(prefs, dict) else {}
+
+
+def _action_log_registered(request: Request) -> bool:
+    """Whether the request comes from a registered player: its cookie holds a
+    pseudo and a secret word, and that pseudo was claimed (backend/secret_store.py's
+    file exists). The secret word is not hashed here: this runs on every HTTP error."""
+    prefs = _action_log_prefs(request)
+    pseudo, secret = prefs.get("pseudo"), prefs.get("secret")
+    return (isinstance(pseudo, str) and bool(pseudo.strip())
+            and isinstance(secret, str) and bool(secret)
+            and _pseudo_path(pseudo).is_file())
+
+
+def _action_log_pseudo(request: Request) -> str:
+    """The pseudo of the browser's cwf-prefs cookie, `-` when it has none. It
+    is what the browser declares, never checked against its secret word, so
+    anything a valid pseudo cannot hold is replaced to keep the line's format.
+    That cookie also carries the secret word: only the pseudo may reach the log."""
+    pseudo = _action_log_prefs(request).get("pseudo")
     if not isinstance(pseudo, str):
         return ACTION_LOG_NO_PSEUDO
     pseudo = unicodedata.normalize("NFC", pseudo)[:ACTION_LOG_PSEUDO_MAX_LENGTH]
@@ -162,7 +181,8 @@ async def no_cache(request: Request, call_next):
 @app.middleware("http")
 async def log_action(request: Request, call_next):
     """Writes one line per request to logs/frontend-action.log, the presence
-    heartbeats excepted: scheme, client IP, pseudo, method, path + query, status,
+    heartbeats and the HTTP errors (status 400 and above) of anyone but a
+    registered player excepted: scheme, client IP, pseudo, method, path + query, status,
     and the time until the response started (a streamed reply goes on after it).
     The path is percent-encoded like uvicorn's access log, so a line always
     keeps its format. A request that raises is logged as a 500."""
@@ -176,18 +196,19 @@ async def log_action(request: Request, call_next):
         status = response.status_code
         return response
     finally:
-        query = request.url.query
-        target = quote(path) + (f"?{query}" if query else "")
-        action_logger.info(
-            '%s %s %s "%s %s" %d %dms',
-            request.url.scheme,
-            request.client.host if request.client else "-",
-            _action_log_pseudo(request),
-            request.method,
-            target,
-            status,
-            (time.monotonic() - started) * 1000,
-        )
+        if status < 400 or _action_log_registered(request):
+            query = request.url.query
+            target = quote(path) + (f"?{query}" if query else "")
+            action_logger.info(
+                '%s %s %s "%s %s" %d %dms',
+                request.url.scheme,
+                request.client.host if request.client else "-",
+                _action_log_pseudo(request),
+                request.method,
+                target,
+                status,
+                (time.monotonic() - started) * 1000,
+            )
 
 
 @app.post("/api/generate")

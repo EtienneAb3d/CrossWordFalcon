@@ -639,23 +639,22 @@ public final class Grids {
     }
 
     /**
-     * The "grouped" pattern style's guard on an end-of-palier cleanup (mirrors _undo_short_run_changes): for each run
+     * The "grouped" pattern style's guard on a cleanup (mirrors _undo_short_run_changes): for each run
      * of {@link #shortRuns}, each black/white change from {@code before} to {@code after} lying in it or bounding it
      * is undone with its symmetry images the cleanup changed too, then, failing that, with the whole block of
      * side-adjacent changed cells it belongs to (images included); as a last resort every change is undone. An undo is
      * kept only if the grid then holds fewer such runs and does not turn structurally invalid (an output already
-     * invalid may stay so). A cell carrying a {@code confirmed} letter is never blackened back. Returns the new grid.
+     * invalid may stay so). A blackened cell breaking the line or border rule is then freed, with its images. A grid
+     * still not satisfying {@link #reshapeKeepsStyle} gets {@code before} back, whatever the undos above could do. A
+     * cell may be blackened back under a letter: the caller drops the letters of the words this changes
+     * (Cleanup.lettersAfterPatternChange). Returns the new grid.
      */
-    static char[][] undoShortRunChanges(char[][] before, char[][] after0, int rows, int cols,
-                                        Map<Integer, Character> confirmed, String symmetry) {
+    static char[][] undoShortRunChanges(char[][] before, char[][] after0, int rows, int cols, String symmetry) {
         char[][] after = copy(after0);
         java.util.TreeSet<Integer> changed = new java.util.TreeSet<>();
         for (int r = 0; r < rows; r++) {
             for (int c = 0; c < cols; c++) {
-                if ((before[r][c] == BLACK) != (after[r][c] == BLACK)
-                        && !(before[r][c] == BLACK && confirmed != null && confirmed.containsKey(Cells.of(r, c)))) {
-                    changed.add(Cells.of(r, c));
-                }
+                if ((before[r][c] == BLACK) != (after[r][c] == BLACK)) changed.add(Cells.of(r, c));
             }
         }
         int[] count = {shortRuns(after, rows, cols).size()};
@@ -723,7 +722,23 @@ public final class Grids {
                 break;
             }
         }
-        return after;
+        for (int cell : new java.util.ArrayList<>(changed)) {
+            if (after[Cells.r(cell)][Cells.c(cell)] == BLACK
+                    && (makesLongBlackLine(after, rows, cols, List.of(cell))
+                        || nearBorderParallelPair(after, rows, cols, List.of(cell)))) {
+                for (int g : withImages.apply(Set.of(cell))) {
+                    after[Cells.r(g)][Cells.c(g)] = before[Cells.r(g)][Cells.c(g)] == BLACK ? BLACK : WHITE;
+                    changed.remove(g);
+                }
+            }
+        }
+        List<Integer> blackened = new ArrayList<>();
+        for (int r = 0; r < rows; r++) {
+            for (int c = 0; c < cols; c++) {
+                if (after[r][c] == BLACK && before[r][c] != BLACK) blackened.add(Cells.of(r, c));
+            }
+        }
+        return reshapeKeepsStyle(before, after, rows, cols, blackened, "grouped") ? after : copy(before);
     }
 
     /**

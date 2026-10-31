@@ -691,15 +691,21 @@ En style « Groupé/aligné », le dictionnaire de la grille ne contient
 (`style_index`, appliqué par `generate_grid` et au lexique d'une session
 Interactive ; un « Mot Défi » de 2 lettres est ignoré). Un emplacement de
 2 lettres, ni une case n'appartenant qu'à un seul mot, ne peut pas non
-plus naître d'un nettoyage de fin de palier : toute modification de case
+plus naître d'un nettoyage, de fin de palier ou de réparation d'un blocage en
+cours de tentative : toute modification de case
 noire faite par le nettoyage (case ajoutée ou rouverte, « reprise telle
 quelle » comme nettoyage complet) qui touche une suite de moins de 3
 cases (1 case comprise) est annulée avec ses images de symétrie, puis,
 si cela ne suffit pas, avec tout le bloc de cases voisines modifiées, et
 en dernier recours toutes les modifications du nettoyage le sont ; une
 annulation n'est gardée que si elle diminue le nombre de ces emplacements
-sans rendre la grille invalide, et une case portant une lettre confirmée
-n'est jamais renoircie (`_undo_short_run_changes`, `_short_runs`).
+sans rendre la grille invalide. Une case noire ajoutée qui construit une
+ligne de plus de 4 cases noires, ou une paire parallèle à un bord trop proche,
+est retirée avec ses images. Si le motif reste non conforme, le nettoyage rend
+celui qu'il a reçu. Une case peut être renoircie sous une lettre confirmée :
+les mots dont les cases ne forment plus un emplacement sont retirés, leurs
+lettres effacées sauf celles qu'un mot gardé ou une lettre permanente porte
+(`_undo_short_run_changes`, `_short_runs`, `_letters_after_pattern_change`).
 Un emplacement de 2 lettres, quelle que soit l'étape qui le crée
 (optimisations, réaménagements, édition à la main), n'a de toute façon
 aucun candidat : c'est un emplacement bloqué, que le pré-remplissage
@@ -2284,6 +2290,27 @@ applique le même seuil à chaque clic, aux lettres de la grille affichée
 (`resolve_fill_method`). Les cases noires ne sont donc réaménagées pour un Mot Défi
 ou un mot thématique que tant que la grille est remplie à 15 % au plus.
 
+**Le retour à Falcon sur un blocage** (`backend/crossword_gen.py`, `_auto_fill`).
+Une tentative Ingrid-like est bloquée quand un emplacement ouvert n'a aucun mot,
+quand la propagation initiale vide un domaine, quand la racine est prouvée
+infaisable, ou après `INGRID_STALL_RESTARTS` (10) redémarrages de suite sans nouveau
+record (`IngridSolver.solve`, `blocked_slots`). Les emplacements en cause reçoivent
+alors la réparation de fin de palier, à l'intérieur de la tentative : mots plus
+courts ou plus longs avec une case noire ajoutée ou déplacée, puis hardclean, sous
+les règles de symétrie et de style (`Filler._repair_blockage`,
+`_clean_continue_candidate`) ; le hardclean seul pour « Finir la zone ». Une lettre
+verrouillée effacée est déverrouillée, aucune n'est ajoutée. Falcon reprend ensuite
+sur l'état nettoyé, avec tous ses mécanismes, jusqu'à ce qu'Ingrid-like ne trouve
+plus de blocage (`IngridSolver.root_blocked`, testé toutes les
+`FALCON_REPAIR_CHECK_INTERVAL` vérifications) ou après `FALCON_REPAIR_MAX_CHECKS`
+vérifications, et Ingrid-like repart (`Filler._ingrid_handoff_due`) ; un blocage
+restant reçoit une nouvelle réparation. La tentative s'arrête si une réparation
+redonne un état déjà produit (`_repair_states`). Une réparation qui laisserait plus
+de `BLACK_OVERFLOW_FACTOR` (1,5) fois l'objectif « Taux noir » en cases noires n'est
+pas appliquée : la tentative s'arrête, déclarée échouée sans seconde chance, sur son
+état d'avant la réparation (`Filler.black_overflow_limit`, raison `black_overflow`).
+Cette réparation peut retirer un Mot Défi posé. **Suivant** n'emploie pas ce mécanisme.
+
 Les deux recherches qu'une tentative peut appliquer à son motif sont
 **Ingrid-like**, une recherche
 inspirée du remplisseur de grilles Ingrid (`github.com/rf-/ingrid_core`)
@@ -3054,6 +3081,11 @@ Une grille qui compte, en fin de palier, plus de `BLACK_OVERFLOW_FACTOR`
   place revient à une tentative partant d'une grille vierge ; en reprise
   « telle quelle », les grilles restantes se partagent les tentatives.
 
+La même limite s'applique dès la tentative à la réparation d'un blocage en
+remplissage automatique : une réparation qui la dépasserait déclare la tentative
+échouée, sans seconde chance (`Filler._repair_blockage`, `generate_grid`), et son
+processus passe à une nouvelle grille tant que le palier est en course.
+
 Chaque tentative du palier suivant qui n'a pas de grille reprise qui lui
 soit propre (grilles écartées, ou fusionnées parce qu'identiques) part
 d'une **grille neuve** au lieu de reprendre une grille déjà attribuée à
@@ -3176,7 +3208,10 @@ l'historique navigable reçoit encore, juste avant les grilles réussies en
 cours d'optimisation, le **dernier état des recherches** : la dernière
 vignette en direct de chaque processus, telle qu'elle s'est figée (or,
 orange ou bleu clair), avec son numéro de Process et son budget consommé
-(`backend/app.py`, `_run_generate_job`, étape `search_final`). Chaque
+(`backend/app.py`, `_run_generate_job`, étape `search_final`). Le bouton
+**Stop** enregistre cette même étape comme dernière entrée de l'historique, les
+tentatives encore en cours y passant à l'état interrompu : les dernières grilles
+connues restent affichées (`_record_search_final`). Chaque
 entrée de l'historique mémorise aussi le nombre de grilles réussies à ce
 moment (`success_count`), que le badge médaille affiche quand on la
 consulte (`frontend/static/script.js`, `showEntrySuccessMedal`). Les

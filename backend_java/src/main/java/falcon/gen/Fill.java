@@ -467,6 +467,8 @@ public final class Fill {
          * default (every fill that is not a generation attempt's own search): "ingrid" runs IngridSolver on the
          * Filler instead of Filler.solve. */
         public String fillMethod = "falcon";
+        /** See Filler.blackOverflowLimit (mirrors try_fill's black_overflow_limit). */
+        public Double blackOverflowLimit;
     }
 
     /** Indices of the slots whose word is the same as, or shares a canonical form with, another slot's word of
@@ -514,6 +516,36 @@ public final class Fill {
             if (!required && open) out.add(i);
         }
         return out;
+    }
+
+    /** The "auto" fill method (mirrors _auto_fill): Falcon up to the threshold, then IngridSolver; each time that
+     * search is blocked the blockage is repaired and Falcon goes on until none is left, then IngridSolver again.
+     * Returns {solved, whether IngridSolver ran last}. */
+    static boolean[] autoFill(Filler filler, long deadline) {
+        boolean mayReshape = filler.reshapeEnabled;
+        filler.ingridHandoff = true;
+        filler.markImmediatelyImpossibleSlots();
+        while (true) {
+            if (!filler.ingridHandoffDue()) {
+                filler.reshapeEnabled = mayReshape;
+                try {
+                    return new boolean[]{filler.solve(deadline), false};
+                } catch (Filler.IngridHandoff handoff) {
+                    filler.attentionStep = null;
+                    filler.bestAttentionStep = null;
+                    filler.impossibleThisAttempt = new Filler.RecentSlots(Filler.MAX_EXCLUDED_SLOTS);
+                }
+            }
+            filler.reshapeEnabled = false;
+            IngridSolver solver = new IngridSolver(filler, deadline);
+            if (solver.solve(true)) return new boolean[]{true, true};
+            filler.checks++;
+            if (solver.blockedSlots.isEmpty() || filler.periodicCheckpoints()
+                    || filler.deadlineReachedWithoutExtension(deadline)
+                    || !filler.repairBlockage(solver.blockedSlots, mayReshape)) {
+                return new boolean[]{false, true};
+            }
+        }
     }
 
     public static Result tryFill(char[][] grid, int rows, int cols, DualIndex index, Rng rng, FillArgs a) {
@@ -579,6 +611,7 @@ public final class Fill {
         filler.sameWordLimit = a.sameWordLimit;
         filler.wordsPerNode = a.wordsPerNode;
         filler.multiWordPercent = a.multiWordPercent;
+        filler.blackOverflowLimit = a.blackOverflowLimit;
         filler.incrementalFill = a.incrementalFill;
         filler.permanentLockedLetters = a.permanentLocked == null ? Map.of() : a.permanentLocked;
         filler.permanentBlackCells = a.permanentBlackCells == null ? Set.of() : a.permanentBlackCells;
@@ -656,23 +689,18 @@ public final class Fill {
             for (String w : a.preseedAssignment) if (w != null) n++;
             filler.bestAssignedCount = n;
         }
-        boolean ingrid = "ingrid".equals(a.fillMethod) || ("auto".equals(a.fillMethod) && filler.falconPhaseOver());
-        boolean solvedInternally = false;
-        if (!ingrid) {
-            filler.markImmediatelyImpossibleSlots();
-            filler.ingridHandoff = "auto".equals(a.fillMethod);
-            try {
-                solvedInternally = filler.solve(deadline);
-            } catch (Filler.IngridHandoff handoff) {
-                ingrid = true;
-                filler.attentionStep = null;
-                filler.bestAttentionStep = null;
-                filler.impossibleThisAttempt = new Filler.RecentSlots(Filler.MAX_EXCLUDED_SLOTS);
-            }
-        }
-        if (ingrid) {
+        boolean ingrid = "ingrid".equals(a.fillMethod);
+        boolean solvedInternally;
+        if ("auto".equals(a.fillMethod)) {
+            boolean[] out = autoFill(filler, deadline);
+            solvedInternally = out[0];
+            ingrid = out[1];
+        } else if (ingrid) {
             filler.reshapeEnabled = false;
             solvedInternally = new IngridSolver(filler, deadline).solve();
+        } else {
+            filler.markImmediatelyImpossibleSlots();
+            solvedInternally = filler.solve(deadline);
         }
         // A failed search has undone every reshape, but its record may have
         // been taken on a reshaped grid: carry on from that grid, and hand its
@@ -717,7 +745,8 @@ public final class Fill {
             diag.checks = filler.checks;
             diag.reason = overProper ? "too_many_proper_nouns" : overNonGloss ? "too_many_non_gloss_words"
                     : !canonicalConflicts.isEmpty() ? "shared_canonical_form"
-                    : complete ? "solved" : filler.interruptedBySibling ? "interrupted_other_attempt_done"
+                    : complete ? "solved" : filler.blackOverflowRefused ? "black_overflow"
+                    : filler.interruptedBySibling ? "interrupted_other_attempt_done"
                     : filler.abandoned ? "abandoned_too_unfillable" : filler.checks >= deadline ? "deadline_exceeded"
                     : solvedInternally ? "blocked_on_excluded_slot" : "search_exhausted";
             if (!complete) {

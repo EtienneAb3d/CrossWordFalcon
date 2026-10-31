@@ -671,19 +671,6 @@
                at the user's explicit request. -->
           <button type="button" id="dictionary-define-btn"
                   data-i18n="dictionaryDefineBtn">Définir</button>
-          <!-- Sponge character U+1F9FD instead of the text "Effacer", at
-               the user's explicit request (replaces an earlier
-               hand-drawn SVG icon version) — accessible name/tooltip via
-               aria-label/title, on the same i18n key as the text it
-               replaces (already translated in all 6 languages).
-               `aria-hidden` on the character itself: it is purely
-               decorative, the accessible name is still carried by
-               aria-label/title. Same convention reused by every other
-               "Effacer" button below. -->
-          <button type="button" id="dictionary-clear-btn" class="nav-btn clear-icon-btn"
-                  data-i18n-aria="dictionaryClearBtn" data-i18n-title="dictionaryClearBtn">
-            <span class="clear-icon" aria-hidden="true">🧽</span>
-          </button>
           <!-- External AI assistants (Perplexity, ChatGPT, Claude,
                Mistral Le Chat, Euria), each opened in a new tab with a
                query ("Faire 5 propositions de définitions pour les mots
@@ -776,7 +763,16 @@
                 data-i18n-aria="dictionaryCloseBtn">✕</button>
       </div>
       <div id="dictionary-stats" hidden></div>
-      <div id="dictionary-results"></div>
+      <!-- .clearable-results: a tool's answer zone with its sponge button at its
+           top right, shown only while the zone holds something
+           (script.js's watchClearableResults). -->
+      <div class="clearable-results">
+        <button type="button" id="dictionary-clear-btn" class="nav-btn clear-icon-btn results-clear-btn" hidden
+                data-i18n-aria="dictionaryClearBtn" data-i18n-title="dictionaryClearBtn">
+          <span class="clear-icon" aria-hidden="true">🧽</span>
+        </button>
+        <div id="dictionary-results"></div>
+      </div>
     </section>
 
     <!-- "Paraphraseur" panel: asks the LLM for 5 rewordings of the typed
@@ -801,13 +797,6 @@
                  data-i18n-placeholder="paraphraseInputPlaceholder">
           <button type="submit" id="paraphrase-generate-btn"
                   data-i18n="paraphraseGenerateBtn">Paraphraser</button>
-          <!-- Sponge character (see the note on #dictionary-clear-btn
-               earlier in this file) — same character, same i18n key
-               as accessible name/tooltip. -->
-          <button type="button" id="paraphrase-clear-btn" class="nav-btn clear-icon-btn"
-                  data-i18n-aria="paraphraseClearBtn" data-i18n-title="paraphraseClearBtn">
-            <span class="clear-icon" aria-hidden="true">🧽</span>
-          </button>
           <!-- The same external AI assistant buttons as #dictionary-ai-buttons
                (see its note above), sending the paraphrase request ("Donner
                5 paraphrases en <langue> : <texte>") instead of the
@@ -883,7 +872,13 @@
         <button type="button" id="paraphrase-close-btn" class="nav-btn"
                 data-i18n-aria="paraphraseCloseBtn">✕</button>
       </div>
-      <div id="paraphrase-results"></div>
+      <div class="clearable-results">
+        <button type="button" id="paraphrase-clear-btn" class="nav-btn clear-icon-btn results-clear-btn" hidden
+                data-i18n-aria="paraphraseClearBtn" data-i18n-title="paraphraseClearBtn">
+          <span class="clear-icon" aria-hidden="true">🧽</span>
+        </button>
+        <div id="paraphrase-results"></div>
+      </div>
     </section>
 
     <!-- "Qdrant (admin)" panel: read-only state of the vector store +
@@ -1181,21 +1176,6 @@
                         data-i18n="interactiveStartBtn">Début</button>
                 <button type="button" id="interactive-end-btn"
                         data-i18n="interactiveEndBtn">Fin</button>
-                <!-- Clears the display area right below (status message,
-                     "Vérifier" report, "Mots" proposals) without recomputing
-                     anything — at the user's explicit request, placed right
-                     after "Fin" (the last of the "Mots"/"Croisés"/"Début"/
-                     "Fin" answer-producing buttons), not at the very end of
-                     the button rows. Also clears the matching highlight on
-                     the grid (impossible/low-option/invalid slots), since
-                     it comes from the same diagnostics. Sponge character
-                     (see the note on #dictionary-clear-btn earlier in this
-                     file) — same character, same i18n key as accessible
-                     name/tooltip. -->
-                <button type="button" id="interactive-results-clear-btn" class="nav-btn clear-icon-btn"
-                        data-i18n-aria="interactiveProposeClearBtn" data-i18n-title="interactiveProposeClearBtn">
-                  <span class="clear-icon" aria-hidden="true">🧽</span>
-                </button>
                 <button type="button" id="interactive-dir-across-btn" class="toggle-btn active"
                         data-i18n-aria="virtualKeyboardAcrossBtn">→</button>
                 <button type="button" id="interactive-dir-down-btn" class="toggle-btn"
@@ -1407,6 +1387,11 @@
            #board-main, that height stays bounded to the grid + button
            rows alone, instead of ballooning with every click. -->
       <div id="interactive-results" hidden>
+        <div id="interactive-answers-zone" class="clearable-results">
+        <button type="button" id="interactive-results-clear-btn" class="nav-btn clear-icon-btn results-clear-btn" hidden
+                data-i18n-aria="interactiveProposeClearBtn" data-i18n-title="interactiveProposeClearBtn">
+          <span class="clear-icon" aria-hidden="true">🧽</span>
+        </button>
         <span id="interactive-message" role="status"></span>
         <div id="interactive-verify-report" hidden></div>
         <!-- Combined "Mots"/"Croisés" answer zone, at the user's explicit
@@ -1418,9 +1403,10 @@
              (POST /api/interactive/crossing) both prepend their own new
              block here (most recent first — see renderInteractiveWords()/
              renderInteractiveCrossing()), instead of two separate lists.
-             Cleared by the sponge button below
+             Cleared by the sponge button above
              (#interactive-results-clear-btn). -->
         <div id="interactive-answers" hidden></div>
+        </div>
         <div id="interactive-definition-row">
           <input type="text" id="interactive-definition-input" autocomplete="off"
                  data-i18n-placeholder="interactiveDefinitionPlaceholder">
@@ -1431,18 +1417,14 @@
                   data-i18n="interactiveCorrectBtn">Corriger</button>
           <button type="button" id="interactive-propose-btn"
                   data-i18n="interactiveProposeBtn">Proposer une définition</button>
-          <!-- Resets #interactive-propose-results without re-running a
-               request — at the user's explicit request. Same styling
-               as the Dictionary's own "Effacer" button
-               (#dictionary-clear-btn, class .nav-btn), including its
-               sponge character (see the note on #dictionary-clear-btn
-               earlier in this file). -->
-          <button type="button" id="interactive-propose-clear-btn" class="nav-btn clear-icon-btn"
-                  data-i18n-aria="interactiveProposeClearBtn" data-i18n-title="interactiveProposeClearBtn">
-            <span class="clear-icon" aria-hidden="true">🧽</span>
-          </button>
         </div>
+        <div class="clearable-results">
+        <button type="button" id="interactive-propose-clear-btn" class="nav-btn clear-icon-btn results-clear-btn" hidden
+                data-i18n-aria="interactiveProposeClearBtn" data-i18n-title="interactiveProposeClearBtn">
+          <span class="clear-icon" aria-hidden="true">🧽</span>
+        </button>
         <div id="interactive-propose-results" hidden></div>
+        </div>
         <div id="interactive-title-row" hidden>
           <label for="interactive-title-input" data-i18n="interactiveTitleLabel">Titre</label>
           <input type="text" id="interactive-title-input" autocomplete="off">
@@ -1452,14 +1434,6 @@
                   data-i18n="interactiveCorrectBtn">Corriger</button>
           <button type="button" id="interactive-title-propose-btn"
                   data-i18n="interactiveTitleProposeBtn">Proposer un titre</button>
-          <!-- Resets #interactive-title-propose-results without
-               re-running a request — at the user's explicit request,
-               the same button (sponge character included) as
-               "Proposer une définition"'s own "Effacer". -->
-          <button type="button" id="interactive-title-propose-clear-btn" class="nav-btn clear-icon-btn"
-                  data-i18n-aria="interactiveProposeClearBtn" data-i18n-title="interactiveProposeClearBtn">
-            <span class="clear-icon" aria-hidden="true">🧽</span>
-          </button>
         </div>
         <!-- 10 title proposals shown here, like
              #interactive-propose-results (one line per proposal,
@@ -1467,7 +1441,13 @@
              user's explicit request: "The 'Proposer un titre' button
              should generate 10 proposals shown below (like 'Proposer
              une définition')." See renderInteractiveTitleProposals(). -->
+        <div class="clearable-results">
+        <button type="button" id="interactive-title-propose-clear-btn" class="nav-btn clear-icon-btn results-clear-btn" hidden
+                data-i18n-aria="interactiveProposeClearBtn" data-i18n-title="interactiveProposeClearBtn">
+          <span class="clear-icon" aria-hidden="true">🧽</span>
+        </button>
         <div id="interactive-title-propose-results" hidden></div>
+        </div>
         <div id="interactive-save-row">
           <!-- "Sauvegarder": saves the grid's entire state to GRID_WORK
                ("Créations" draft) WITHOUT publishing it — at the

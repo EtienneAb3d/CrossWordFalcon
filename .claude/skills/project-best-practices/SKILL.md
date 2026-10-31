@@ -870,7 +870,13 @@ project's engineering language.
   left out, so static files and the 2-second status polls of a running
   generation are traced; one file for both instances, each line naming its
   scheme; bodies are never logged; emptied by the launchers at each restart,
-  like the other logs. The user's rule: the pseudo follows the IP. Choices
+  like the other logs. The user's rule: this file follows real users' actions,
+  so an HTTP error is listed only when it belongs to a user who properly
+  registered a pseudo (`_action_log_registered`). Choices made with it, to
+  revisit with the user: an error is a status of 400 or above; "registered"
+  means the cookie holds a pseudo and a secret word and `SECRET/` holds that
+  pseudo's file, the secret word not being hashed (200 000 PBKDF2 rounds per
+  error, on a file a forged cookie gains nothing from). The user's rule: the pseudo follows the IP. Choices
   made with it, to revisit with the user: it comes from the `cwf-prefs` cookie
   (sent with every request, static files included), so it is what the browser
   declares, unverified, and `-` for a client with no cookie (Populate
@@ -1103,7 +1109,7 @@ the current defaults/behavior to know before touching this code.
   revisit with the user: "every case" includes "Suivant", decided at each click
   from the letters of the posted grid, and Populate; "filled" is the share of white
   cells holding a placed word's letter or a locked letter, compared strictly;
-  so black cells only move for a priority word while the grid is at most 15 % filled,
+  so, repairs aside, black cells only move for a priority word while the grid is at most 15 % filled,
   a "Mots Défi" word needing a change later staying unplaced, and "Finir la grille"
   on a fuller grid is Ingrid-like from the start; per attempt, a palier whose
   cleanup brings the grid back under the threshold going back to Falcon; every word
@@ -1113,6 +1119,22 @@ the current defaults/behavior to know before touching this code.
   words): "auto" 4/8 filled in 7 s, 14 of 16 words placed, Falcon alone 3/8 in 507 s,
   14, Ingrid-like alone 3/8 in 11 s, 13; with no such word, 3/8 in 6 s, 3/8 in 312 s,
   4/8 in 10 s.
+- **A blocked automatic fill goes back to Falcon** — the user's rule: when the
+  automatic fill reaches a blockage, go back to Falcon to try and resolve it, with
+  the techniques removing entries and questioning black cells; once no blockage
+  seems detected, back to Ingrid-like (`_auto_fill`, `IngridSolver.solve(stop_when_
+  blocked=)`, `Filler._repair_blockage`, `_ingrid_handoff_due`; Java mirror). Choices
+  made with it, to revisit with the user: inside the attempt, in the three automatic
+  fills, not "Suivant"; "blockage" is an open slot with no word, a wipe-out of the
+  initial propagation, a root proved unfillable or 10 restarts in a row with no new
+  record; "no blockage" is that test of Ingrid-like, so an arc-consistency blockage
+  counts though Falcon sees none; the repair is the end-of-palier one
+  (`_clean_continue_candidate`) on the slots named, the hard clean alone in "Finir la
+  zone"; Falcon gets at most 5000 checks per blockage; a repair repeating a state ends
+  the attempt; a repair may remove a placed "Mots Défi" word. Measured (try_fill,
+  French, 4 patterns, 200 000 checks, 2 "Mots Défi" words): 21x21, 4/4 filled in 31 s
+  against 3/4 in 28 s for Ingrid-like alone; 15x15, 4/4 in 147 s (one grid 139 s, 8
+  repairs, both words lost) against 4/4 in 10 s.
 - **Two fill methods: "Ingrid-like" and "Falcon"** — the user's
   rules: "Ingrid-like" a fill similar to
   the Ingrid crossword filler (github.com/rf-/ingrid_core) using the
@@ -1372,15 +1394,14 @@ the current defaults/behavior to know before touching this code.
   no candidate building a line of more than 4 adjacent black cells,
   across or down, while the pattern is generated (`GROUPED_MAX_BLACK_LINE`,
   `_makes_long_black_line`; choice made with that rule, to revisit with
-  the user: the ratio draw and pre-fill both apply it, the later
-  cross-palier repairs and reshapes do not);
+  the user: the ratio draw, pre-fill, reshapes and every cleanup apply it);
   no two side-by-side black cells parallel to a border less than 3 letters
   from it — across in the first/last 3 rows, down in the first/last 3
   columns (`BORDER_PARALLEL_MIN_DISTANCE`, `_near_border_parallel_pair`;
   the user's rule, American style only; choice made with it, to revisit
   with the user: "less than 3 letters" means rows/columns 0-2 from each
-  border, and like the 4-cell line rule it binds the ratio draw, pre-fill and
-  black-cell reshapes, not the later repairs); no black cell leaving a
+  border, and like the 4-cell line rule it binds the ratio draw, pre-fill,
+  black-cell reshapes and every cleanup); no black cell leaving a
   single-cell white run, i.e. a cell belonging to one word only (the
   user's rule: forbid black cells creating 1-cell slots, on top of the
   2-letter ones; `_leaves_short_run`, `_short_runs`, `_run_through` checks
@@ -1409,9 +1430,15 @@ the current defaults/behavior to know before touching this code.
   it, to revisit with the user: the cleanup's black/white changes touching
   such a slot are undone afterwards (cell + images, then the block of
   adjacent changes, then all of them) rather than refused one by one
-  inside each cleanup step; a cell holding a confirmed letter is never
-  blackened back; an undo is kept when it lowers the number of 2-letter
-  slots without making a valid grid invalid. De-clumping — the user's rule: once the grouped
+  inside each cleanup step; an undo is kept when it lowers the number of
+  2-letter slots without making a valid grid invalid. The user's rule: a
+  cleanup cannot create a non-conforming grid, mid-cycle repairs included
+  (`_undo_short_run_changes`, `_letters_after_pattern_change`; Java mirror).
+  Choices made with it, to revisit with the user: a cell may be blackened back
+  under a confirmed letter, the words it breaks being removed; a too-long black
+  line or a near-border parallel pair the cleanup creates is undone too; as a
+  last resort the pattern before the cleanup is restored; a fault already in
+  that pattern is not blamed on the cleanup. De-clumping — the user's rule: once the grouped
   draw reaches its target, take off the black cells adjacent on 3 sides
   or more to other black cells (`GROUPED_MAX_BLACK_NEIGHBORS` 2), open any
   zone this closes by taking off more black cells, then redraw to the
@@ -1756,7 +1783,7 @@ the current defaults/behavior to know before touching this code.
   megatron=20,000,000, gridzilla=100,000,000 — Ultra, Megatron and
   GridZilla offered by the UI on localhost only, except Ultra with the
   Java back end, offered everywhere there; the form selects the effort
-  from the grid size — up to 10 "fast", up to 15 "medium", above
+  from the grid size — up to 10 "fast", up to 21 "medium", above
   "strong" — at page load and on every size change, the user's rule) instead sends
   an explicit value, threaded through `generate_grid(deadline_checks=...)`
   → `_pattern_attempt`/`_pattern_continue` → `try_fill`, overriding the
@@ -2929,7 +2956,11 @@ the current defaults/behavior to know before touching this code.
   callback right before "minimizing", from the last non-empty
   `live_preview` snapshot, since `live_preview` is cleared as the search
   ends): the successful attempts show there framed in gold, next to the
-  failed/interrupted ones. Every history entry also stores the job's
+  failed/interrupted ones. The user's rule: "Stop" records it too, as the
+  history's last entry, so the last known grids stay on screen. Choices made
+  with it, to revisit with the user: same entry and status text; the attempts
+  still running are framed as interrupted; the STOP_DUMP history does not
+  repeat its `live_preview`. Every history entry also stores the job's
   `success_count`, so the gold-medal badge follows the navigated entry.
 - **Hardclean** (`HARD_CLEAN_ENABLED` in `backend/crossword_gen.py`,
   `Cleanup.HARD_CLEAN_ENABLED` in Java; on by default "pour le moment", in
@@ -3067,7 +3098,15 @@ the current defaults/behavior to know before touching this code.
   starts from a blank grid; the objective is `max(round(rows*cols*
   black_ratio), round(black_enrichment_fraction*rows*cols))`; the rule is
   off when it is 0 or when the permanent black cells alone exceed the
-  limit. Every worker left without a distinct pool grid of its own starts
+  limit. The user's rule: a grid exceeding the threshold after a Falcon
+  repair of a blockage is declared failed (`Filler._repair_blockage`, reason
+  `black_overflow`; Java mirror). Choices made with it, to revisit with the
+  user: the repair is measured before being applied and is not applied, the
+  failed grid being the state before it; only the repair is checked, not an
+  in-search reshape; it gets no second chance, its process moving on to a new
+  grid while the palier races; at the end of the palier it follows the failed
+  grids' usual path, so it can be resumed if its cleanup stays under the limit.
+  Every worker left without a distinct pool grid of its own starts
   from a new grid — the user's rule: when several grids fail, new grids
   are generated so there are always as many grids as processors (a pool
   grid is never resumed by two workers once a pool was built).

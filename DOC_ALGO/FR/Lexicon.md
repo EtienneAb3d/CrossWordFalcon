@@ -293,7 +293,9 @@ plusieurs signaux) :
   son motif. « Automatique », « Finir la grille », « Finir la zone » et le bouton
   **Suivant** emploient Falcon jusqu'à ce que plus de 15 % des cases blanches
   portent une lettre, puis Ingrid-like sur la grille atteinte
-  (`falcon_phase_over`, `Filler._falcon_phase_over`, `resolve_fill_method`). **Ingrid-like** et **Falcon**, la recherche avec retour en arrière décrite dans ce
+  (`falcon_phase_over`, `Filler._falcon_phase_over`, `resolve_fill_method`) ; un
+  remplissage automatique bloqué en Ingrid-like est réparé puis repasse en Falcon
+  jusqu'à ce que le blocage disparaisse (`_auto_fill`). **Ingrid-like** et **Falcon**, la recherche avec retour en arrière décrite dans ce
   document, qui peut modifier les cases noires pour placer un mot prioritaire. **Ingrid-like** est une
   recherche inspirée du remplisseur Ingrid : cohérence d'arc maintenue sur
   tous les domaines, emplacement choisi par *dom/wdeg*, ordre des mots
@@ -751,7 +753,10 @@ plusieurs signaux) :
   ne verrouille aucune lettre (les mots gardés repartent non verrouillés). La
   tentative n'est réellement déclarée échouée que lorsqu'elle reproduit un
   état bloqué (motif et lettres placées) déjà produit au cours de ses
-  secondes chances ; son processus passe alors à une grille vierge.
+  secondes chances ; son processus passe alors à une grille vierge. Une
+  tentative dont la réparation d'un blocage dépasserait 1,5 fois l'objectif
+  « Taux noir » en cases noires n'y a pas droit : elle est aussitôt déclarée
+  échouée (`Filler._repair_blockage`).
   (`backend/crossword_gen.py`, `generate_grid`, `_second_chance_seed`,
   `_blocked_state_key`.)
 

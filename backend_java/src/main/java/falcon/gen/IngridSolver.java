@@ -32,6 +32,13 @@ public final class IngridSolver {
     public static final List<String> FILL_METHODS = List.of("falcon", "ingrid", "auto");
     public static final String FILL_METHOD_DEFAULT = "auto";
     public static final int FALCON_PHASE_MAX_FILL_PERCENT = 15;
+    /** "auto" method: restarts in a row with no new record after which solve(true) calls the search blocked. */
+    public static final int STALL_RESTARTS = 10;
+    /** "auto" method: checks between two tests of whether a blockage Falcon repairs is left (mirrors
+     * FALCON_REPAIR_CHECK_INTERVAL). */
+    public static final int FALCON_REPAIR_CHECK_INTERVAL = 1000;
+    /** "auto" method: checks Falcon gets to repair one blockage (mirrors FALCON_REPAIR_MAX_CHECKS). */
+    public static final int FALCON_REPAIR_MAX_CHECKS = 5000;
 
     /** Mirrors falcon_phase_over. */
     public static boolean falconPhaseOver(int filledCells, int whiteCells) {
@@ -93,6 +100,8 @@ public final class IngridSolver {
      * "Suivant" clicks (loadWeights/exportWeights). */
     private final Map<Integer, String> crossingKey = new HashMap<>();
     private int wiped = -1;
+    /** What blocks the search after solve(true); empty when it ended for any other reason. */
+    public List<Integer> blockedSlots = new ArrayList<>();
     /** The best 3 slots of the last chooseSlot. */
     List<Integer> lastWindow = new ArrayList<>();
     private final Map<String, Set<String>> blockerCache = new HashMap<>();
@@ -398,6 +407,30 @@ public final class IngridSolver {
         Map<String, Double> out = new HashMap<>();
         for (Map.Entry<Integer, Double> e : cellWeight.entrySet()) out.put(crossingKey.get(e.getKey()), e.getValue());
         return out;
+    }
+
+    /** The open slots outside the CSP for having no word at all (mirrors _dry_slots). */
+    private List<Integer> drySlots() {
+        List<Integer> out = new ArrayList<>();
+        Set<Integer> excluded = f.excludedSlots == null ? Set.of() : f.excludedSlots;
+        for (int i = 0; i < n; i++) {
+            if (f.assignment[i] == null && !excluded.contains(i) && !active[i]) out.add(i);
+        }
+        return out;
+    }
+
+    /** Whether this grid is blocked for the search: a slot with no word, or an initial propagation wiping a domain
+     * out (mirrors root_blocked). */
+    boolean rootBlocked() {
+        if (!drySlots().isEmpty()) return true;
+        List<Integer> act = new ArrayList<>();
+        List<Integer> singletons = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            if (!active[i]) continue;
+            act.add(i);
+            if (size[i] == 1) singletons.add(i);
+        }
+        return propagate(act, singletons) != null;
     }
 
     /** Initial propagation that sets aside every slot it would leave with no word, until the remaining slots agree
@@ -738,6 +771,12 @@ public final class IngridSolver {
     /** Fills the grid (mirrors IngridSolver.solve); leaves the Filler's bestAssignment and ingridBlockedSlots. */
     @SuppressWarnings("unchecked")
     public boolean solve() {
+        return solve(false);
+    }
+
+    /** stopWhenBlocked (the "auto" method): the search also ends on a slot with no word before it starts and after
+     * STALL_RESTARTS restarts in a row with no new record, blockedSlots naming what blocks it. */
+    public boolean solve(boolean stopWhenBlocked) {
         f.bestAssignment = initial.clone();
         int assigned = 0;
         for (String w : initial) if (w != null) assigned++;
@@ -754,25 +793,38 @@ public final class IngridSolver {
             if (size[i] == 1) singletons.add(i);
         }
         boolean solved = false;
-        Map<Integer, Double> updates = propagate(act, singletons);
-        if (updates == null) {
+        boolean stuck = false;
+        blockedSlots = stopWhenBlocked ? drySlots() : new ArrayList<>();
+        Map<Integer, Double> updates = blockedSlots.isEmpty() ? propagate(act, singletons) : null;
+        if (!blockedSlots.isEmpty()) {
+            // Nothing to search: a slot has no word at all.
+        } else if (updates == null) {
             freezeInitial();
             record();
             int root = trail.size();
             int maxBacktracks = INITIAL_MAX_BACKTRACKS;
+            int stalled = 0;
             while (true) {
+                int count = bestCount;
                 String outcome = run(maxBacktracks);
                 if (outcome.equals("solved")) {
                     record();
                     solved = true;
                     break;
                 }
+                if (outcome.equals("hard")) stuck = stopWhenBlocked;
                 if (!outcome.equals("limit")) break;
+                stalled = bestCount == count ? stalled + 1 : 0;
+                if (stopWhenBlocked && stalled >= STALL_RESTARTS) {
+                    stuck = true;
+                    break;
+                }
                 undoTo(root);
                 maxBacktracks = Math.max(maxBacktracks + 1, (int) (maxBacktracks * RETRY_GROWTH_FACTOR));
             }
         } else {
             learn(updates);
+            if (stopWhenBlocked) blockedSlots = new ArrayList<>(List.of(wiped));
         }
         f.assignment = f.bestAssignment.clone();
         f.usedWords = f.usedOf(f.bestAssignment);
@@ -790,6 +842,7 @@ public final class IngridSolver {
             }
             if (worst >= 0 && worstWeight > 0) f.ingridBlockedSlots = new ArrayList<>(List.of(worst));
         }
+        if (stuck) blockedSlots = new ArrayList<>(f.ingridBlockedSlots);
         return solved;
     }
 }

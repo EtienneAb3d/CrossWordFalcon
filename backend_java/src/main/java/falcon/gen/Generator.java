@@ -78,7 +78,9 @@ public final class Generator {
      * A grid holding more than this factor times the "Taux noir" objective of black cells at the end of a palier is a
      * failed grid (mirrors BLACK_OVERFLOW_FACTOR): a success holding that many is not counted, a failed grid still
      * holding that many after its end-of-palier cleanup is dropped (its place going to a blank-grid worker after a
-     * full cleanup). Off when the objective is 0 or the permanent black cells alone exceed the limit.
+     * full cleanup). An attempt whose repair of a blockage would hold that many fails at once
+     * (Filler.repairBlockage, reason "black_overflow"), with no second chance. Off when the objective is 0 or the
+     * permanent black cells alone exceed the limit.
      */
     public static final double BLACK_OVERFLOW_FACTOR = 1.5;
     public static final int FULL_RESET_ATTEMPT_COUNT = 1;
@@ -460,6 +462,8 @@ public final class Generator {
         int multiWordPercent = Filler.MULTI_WORD_PERCENT;
         /** Fill method of the attempts' search (Params.fillMethod, mirrors _worker_fill_method). */
         String fillMethod = IngridSolver.FILL_METHOD_DEFAULT;
+        /** The most black cells a repair may leave in an attempt (mirrors _worker_black_overflow_limit). */
+        Double blackOverflowLimit;
         /** Black-cell symmetry of the ratio draw (Params.blackSymmetry, mirrors _worker_black_symmetry). */
         String blackSymmetry = null;
         /** Black-cell pattern style of the ratio draw (Params.patternStyle, mirrors _worker_pattern_style). */
@@ -498,6 +502,7 @@ public final class Generator {
         a.wordsPerNode = ctx.wordsPerNode;
         a.multiWordPercent = ctx.multiWordPercent;
         a.fillMethod = ctx.fillMethod;
+        a.blackOverflowLimit = ctx.blackOverflowLimit;
         return a;
     }
 
@@ -1125,6 +1130,7 @@ public final class Generator {
         ctx.wordsPerNode = p.wordsPerNode;
         ctx.multiWordPercent = p.multiWordPercent;
         ctx.fillMethod = p.fillMethod;
+        ctx.blackOverflowLimit = blackOverflowLimit;
         ctx.blackSymmetry = p.blackSymmetry;
         ctx.patternStyle = p.patternStyle;
         ctx.patternMix = p.patternMix;
@@ -1468,9 +1474,11 @@ public final class Generator {
                         // A failure while the palier still runs gets a second chance unless its chain already
                         // produced this blocked state (or the isolated-cell plug completes it): it is then not
                         // declared failed and stays out of outcomes, its continuation's result taking its place.
+                        // One holding too many black cells after a repair (BLACK_OVERFLOW_FACTOR) is failed for good.
                         Set<String> chainKeys = secondChanceKeys.remove(seed);
                         Set<String> secondChance = null;
-                        if (res.result() == null && !attemptDoneEvent.get()
+                        if (res.result() == null && !"black_overflow".equals(res.diag().reason)
+                                && !attemptDoneEvent.get()
                                 && Cleanup.plugIsolatedCells(res.grid(), rows, cols,
                                         Grids.extractSlots(res.grid(), rows, cols), res.diag().assignment, index,
                                         permanentLocked, ctx.blackSymmetry) == null) {
@@ -2098,13 +2106,16 @@ public final class Generator {
         Object[] seed = Cleanup.buildRetrySeed(cg, rows, cols, slots, cd.assignment, cd.impossibleSlots, locked, deep,
                 carrySeed, index, rng, permanentLocked, permanentBlack, deep, symmetry);
         char[][] seedGrid = (char[][]) seed[0];
+        Object confirmed = seed[1];
         if (grouped) {
-            // "Grouped" style: the cleanup may leave no 2-letter slot.
+            // "Grouped" style: the cleanup must leave a conforming pattern.
             @SuppressWarnings("unchecked")
             Map<Integer, Character> conf = (Map<Integer, Character>) seed[1];
-            seedGrid = Grids.undoShortRunChanges(cg, seedGrid, rows, cols, conf, symmetry);
+            char[][] guarded = Grids.undoShortRunChanges(cg, seedGrid, rows, cols, symmetry);
+            confirmed = Cleanup.lettersAfterPatternChange(seedGrid, guarded, rows, cols, conf, permanentLocked);
+            seedGrid = guarded;
         }
-        return new Object[]{seedGrid, seed[1], slots, cd.processNumber};
+        return new Object[]{seedGrid, confirmed, slots, cd.processNumber};
     }
 
     static List<Object[]> sortCleaned(List<Object[]> cands, PW pw, Set<String> challenge, DualIndex index,

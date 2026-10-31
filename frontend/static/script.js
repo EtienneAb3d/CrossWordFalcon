@@ -4571,7 +4571,7 @@ for (const input of [widthInput, heightInput, blackEnrichmentInput]) {
 
 // Choosing a grid size selects the "Effort" fitting it, by its larger
 // side: up to 10 "fast", up to 15 "medium", above "strong".
-const SIZE_EFFORT_STEPS = [[10, "fast"], [15, "medium"], [Infinity, "strong"]];
+const SIZE_EFFORT_STEPS = [[10, "fast"], [21, "medium"], [Infinity, "strong"]];
 
 function applySizeEffort() {
   const side = Math.max(Number(widthInput.value) || 0, Number(heightInput.value) || 0);
@@ -12078,6 +12078,27 @@ interactiveTitleProposeBtn.addEventListener("click", async () => {
 interactiveTitleProposeClearBtn.addEventListener("click", () => {
   renderInteractiveTitleProposals([]);
 });
+
+// Each tool's sponge button (.results-clear-btn, at the top right of its
+// .clearable-results zone) only shows while that zone holds something.
+function watchClearableResults() {
+  document.querySelectorAll(".clearable-results").forEach((wrapper) => {
+    const button = wrapper.querySelector(":scope > .results-clear-btn");
+    const zones = [...wrapper.children].filter((el) => el !== button);
+    const sync = () => {
+      const filled = zones.some((zone) => !zone.hidden
+        && (zone.children.length > 0 || zone.textContent.trim() !== ""));
+      wrapper.classList.toggle("has-results", filled);
+      button.hidden = !filled;
+    };
+    const observer = new MutationObserver(sync);
+    zones.forEach((zone) => observer.observe(zone, {
+      childList: true, characterData: true, attributes: true, attributeFilter: ["hidden"],
+    }));
+    sync();
+  });
+}
+watchClearableResults();
 
 // "Sauvegarder" — writes the whole current grid + definitions + title to
 // GRID_WORK (the "Créations" draft) WITHOUT publishing to the Library, at

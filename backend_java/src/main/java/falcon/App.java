@@ -1213,21 +1213,7 @@ public final class App {
             List<Object> finalLive = step.equals("minimizing") ? lastLivePreview.getAndSet(null) : null;
             job.update(d -> {
                 if (finalLive != null && !finalLive.isEmpty()) {
-                    // Each tile's "previous" field is a STOP_DUMP-only diagnostic, never shown.
-                    List<Object> tiles = new ArrayList<>();
-                    for (Object t : finalLive) {
-                        Map<String, Object> tm = new LinkedHashMap<>(Json.asMap(t));
-                        tm.remove("previous");
-                        tiles.add(tm);
-                    }
-                    Map<String, Object> fs = new LinkedHashMap<>();
-                    fs.put("code", "search_final");
-                    fs.put("count", d.get("success_count"));
-                    Map<String, Object> fe = new LinkedHashMap<>();
-                    fe.put("step", fs);
-                    fe.put("examples", tiles);
-                    fe.put("success_count", d.get("success_count"));
-                    Json.asList(d.get("examples_history")).add(fe);
+                    Json.asList(d.get("examples_history")).add(searchFinalEntry(finalLive, d.get("success_count"), false));
                 }
                 d.put("step", newStep);
                 Object ex = data.get("examples");
@@ -1523,11 +1509,20 @@ public final class App {
             });
             Log.info("[%s] done", shortId);
         } catch (GenerationCancelled e) {
-            job.put("status", "cancelled");
+            // The last known grids become the history's last entry with the status change, so the client's final
+            // poll shows them; the dump keeps its own live_preview, not a second copy in its history.
+            Object dumpHistory = job.copyOf("examples_history");
+            List<Object> finalLive = lastLivePreview.getAndSet(null);
+            job.update(d -> {
+                if (finalLive != null && !finalLive.isEmpty()) {
+                    Json.asList(d.get("examples_history")).add(searchFinalEntry(finalLive, d.get("success_count"), true));
+                }
+                d.put("status", "cancelled");
+            });
             Log.info("[%s] cancelled by user", shortId);
             try {
                 String dumpId = GridStore.saveStopDump(jobId, req.pseudo, job.copyOf("request"), job.copyOf("step"),
-                        job.copyOf("live_preview"), job.copyOf("examples_history"), job.copyOf("resume_state"),
+                        job.copyOf("live_preview"), dumpHistory, job.copyOf("resume_state"),
                         job.copyOf("success_count"));
                 Log.info("[%s] stop dump saved: %s", shortId, dumpId);
             } catch (Exception ex) {
@@ -3286,6 +3281,27 @@ public final class App {
             runInBackground("finish-" + id.substring(0, 8), () -> runGenerateJob(id, genreq, a));
             return Json.obj("job_id", id);
         });
+    }
+
+    /** The "search_final" history entry of a live-preview snapshot (mirrors _record_search_final): each tile's
+     * "previous" field is a STOP_DUMP-only diagnostic, never shown; stopped (the "Stop" button): the attempts still
+     * running end "interrupted". */
+    static Map<String, Object> searchFinalEntry(List<Object> live, Object successCount, boolean stopped) {
+        List<Object> tiles = new ArrayList<>();
+        for (Object t : live) {
+            Map<String, Object> tm = new LinkedHashMap<>(Json.asMap(t));
+            tm.remove("previous");
+            if (stopped && "computing".equals(tm.get("live_status"))) tm.put("live_status", "interrupted");
+            tiles.add(tm);
+        }
+        Map<String, Object> fs = new LinkedHashMap<>();
+        fs.put("code", "search_final");
+        fs.put("count", successCount);
+        Map<String, Object> fe = new LinkedHashMap<>();
+        fe.put("step", fs);
+        fe.put("examples", tiles);
+        fe.put("success_count", successCount);
+        return fe;
     }
 
     // ================================================================== main
