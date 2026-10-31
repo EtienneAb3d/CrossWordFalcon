@@ -181,6 +181,30 @@ def grid_form(form):
     return "".join(c for c in _norm(form.replace("ß", "ss")).upper() if "A" <= c <= "Z")
 
 
+def _wordlist_holds(path, mot):
+    """Whether the wordlist TSV `path` has a row whose MOT column is `mot`."""
+    if not path.exists():
+        return False
+    prefix = f"{mot}\t".encode("ascii")
+    with path.open("rb") as f:
+        return any(line.startswith(prefix) for line in f)
+
+
+def word_sources(query, language):
+    """The Falcon wordlists holding `query`'s grid form, among "freq",
+    "scrabble", "hunspell" and "multi" (`wordlist_<lang>_multi.tsv` or its
+    `_freq_multi` companion), in that order. The files are read on each call:
+    the question only arises for a word the search found no definition for."""
+    mot = grid_form(query or "")
+    if not mot:
+        return []
+    found = [name for name, _column in WORDLIST_SOURCES
+             if _wordlist_holds(WORDLIST_DIR / f"wordlist_{language}_{name}.tsv", mot)]
+    if "multi" not in found and _wordlist_holds(WORDLIST_DIR / f"wordlist_{language}_freq_multi.tsv", mot):
+        found.append("multi")
+    return found
+
+
 def search(query, language):
     """Returns {"query", "language", "rows": [...], "truncated": bool}.
 

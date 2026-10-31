@@ -27,9 +27,31 @@ import java.util.function.ToIntFunction;
  * it ({@code extras} when outside the lexicon).
  */
 public final class IngridSolver {
-    /** The generation form's "Méthode" selector (mirrors FILL_METHODS / FILL_METHOD_DEFAULT). */
-    public static final List<String> FILL_METHODS = List.of("falcon", "ingrid");
-    public static final String FILL_METHOD_DEFAULT = "ingrid";
+    /** The fill methods (mirrors FILL_METHODS / FILL_METHOD_DEFAULT): "auto", the default, is "falcon" until more
+     * than FALCON_PHASE_MAX_FILL_PERCENT % of the white cells hold a letter, then "ingrid". */
+    public static final List<String> FILL_METHODS = List.of("falcon", "ingrid", "auto");
+    public static final String FILL_METHOD_DEFAULT = "auto";
+    public static final int FALCON_PHASE_MAX_FILL_PERCENT = 15;
+
+    /** Mirrors falcon_phase_over. */
+    public static boolean falconPhaseOver(int filledCells, int whiteCells) {
+        return filledCells * 100 > FALCON_PHASE_MAX_FILL_PERCENT * whiteCells;
+    }
+
+    /** The method of one "Suivant" click on the posted grid (mirrors resolve_fill_method). */
+    public static String resolveFillMethod(String fillMethod, char[][] grid) {
+        if (!"auto".equals(fillMethod)) return fillMethod;
+        int white = 0;
+        int filled = 0;
+        for (char[] row : grid) {
+            for (char cell : row) {
+                if (cell == Grids.BLACK) continue;
+                white++;
+                if (cell != Grids.WHITE && cell != '.') filled++;
+            }
+        }
+        return falconPhaseOver(filled, white) ? "ingrid" : "falcon";
+    }
     public static final double ADAPTIVE_BRANCHING_THRESHOLD = 0.15;
     public static final double WEIGHT_AGE_FACTOR = 0.99;
     public static final int[] RANDOM_SLOT_WEIGHTS = {4, 2, 1};

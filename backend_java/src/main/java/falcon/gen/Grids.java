@@ -764,6 +764,20 @@ public final class Grids {
      * True when one of {@code cells} — black in {@code grid} — belongs to a straight line of adjacent black cells,
      * across or down, longer than {@link #GROUPED_MAX_BLACK_LINE}.
      */
+    /** Whether a black-cell reshape turning {@code before} into {@code after} ({@code blackened}: the cells it blackens)
+     * satisfies {@code patternStyle}: under "grouped", no new white run of 1 or 2 cells, no line of too many black cells
+     * and no black pair parallel to a border too close to it (mirrors _reshape_keeps_style). */
+    static boolean reshapeKeepsStyle(char[][] before, char[][] after, int rows, int cols, List<Integer> blackened,
+                                     String patternStyle) {
+        if (!"grouped".equals(patternStyle)) return true;
+        java.util.Set<String> existing = new java.util.HashSet<>();
+        for (int[][] run : shortRuns(before, rows, cols)) existing.add(java.util.Arrays.toString(run[0]));
+        for (int[][] run : shortRuns(after, rows, cols)) {
+            if (!existing.contains(java.util.Arrays.toString(run[0]))) return false;
+        }
+        return !makesLongBlackLine(after, rows, cols, blackened) && !nearBorderParallelPair(after, rows, cols, blackened);
+    }
+
     static boolean makesLongBlackLine(char[][] grid, int rows, int cols, List<Integer> cells) {
         for (int cell : cells) {
             if (blackLineLength(grid, rows, cols, Cells.r(cell), Cells.c(cell)) > GROUPED_MAX_BLACK_LINE) return true;

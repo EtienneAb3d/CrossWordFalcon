@@ -337,7 +337,6 @@ const chatbotInput = document.getElementById("chatbot-input");
 const widthInput = document.getElementById("width");
 const heightInput = document.getElementById("height");
 const blackEnrichmentInput = document.getElementById("black-enrichment");
-const wordsPerNodeInput = document.getElementById("words-per-node");
 // "Multi-mots" (GenerateRequest.multi_word_percent): maximum share of
 // multi-word expressions among the words placed, read by readMultiWordPercent.
 const multiWordPercentInput = document.getElementById("multi-word-percent");
@@ -1754,7 +1753,6 @@ function renderAttemptPreview(examples) {
     budget_percent: budgetPercent,
     stat_letters: statLetters,
     attention_zone: attentionZone,
-    words_per_pose: wordsPerPose,
     choice_index: choiceIndex,
     score,
   } of examples) {
@@ -2036,14 +2034,6 @@ function renderAttemptPreview(examples) {
     if (typeof budgetPercent === "number") {
       statsText.appendChild(
         document.createTextNode(I18N[uiLanguage].attemptPreviewBudgetPercent(budgetPercent))
-      );
-    }
-    // Words per node ("mots par pose", backend/crossword_gen.py's
-    // `words_per_pose`): how many words the search places at once in the
-    // attention zone shown, on the previews that carry an attention zone.
-    if (typeof wordsPerPose === "number") {
-      statsText.appendChild(
-        document.createTextNode(I18N[uiLanguage].attemptPreviewWordsPerPose(wordsPerPose))
       );
     }
     // Content score of a finished grid offered for the player's choice
@@ -4451,37 +4441,6 @@ const modeSelect = document.getElementById("mode");
   if (LOCALHOST_ONLY_MODES.includes(modeSelect.value)) modeSelect.value = "medium";
 })();
 
-// "Méthode" selector (#fill-method, GenerateRequest.fill_method): shown on
-// localhost only; elsewhere every request sends the default, "ingrid"
-// (`readFillMethod`).
-const fillMethodField = document.getElementById("fill-method-field");
-const fillMethodSelect = document.getElementById("fill-method");
-(function showFillMethodOnLocalhost() {
-  if (isLocalhostOrigin()) fillMethodField.hidden = false;
-})();
-
-// "Mots par pose" (#words-per-node-field) only applies to the Falcon
-// method: shown right of "Méthode" while it is selected.
-const wordsPerNodeField = document.getElementById("words-per-node-field");
-
-function syncWordsPerNodeVisibility() {
-  wordsPerNodeField.hidden = readFillMethod() !== "falcon";
-}
-
-fillMethodSelect.addEventListener("change", syncWordsPerNodeVisibility);
-syncWordsPerNodeVisibility();
-
-function readFillMethod() {
-  return isLocalhostOrigin() ? fillMethodSelect.value : "ingrid";
-}
-
-function restoreFillMethod(fillMethod) {
-  if (fillMethod && fillMethodSelect.querySelector(`option[value="${fillMethod}"]`)) {
-    fillMethodSelect.value = fillMethod;
-  }
-  syncWordsPerNodeVisibility();
-}
-
 function applyBackendModeDefaults(info) {
   if (!info || info.backend !== "java") return;
   const option = modeSelect.querySelector(`option[value="${JAVA_BACKEND_UNLOCKED_MODE}"]`);
@@ -6186,7 +6145,7 @@ function hideDictionaryPanel() {
 // one of the two columns of a bilingual result instead of standing alone
 // in the stack) — the form handler further below decides itself whether
 // to stack it alone or inside a bilingual block.
-function buildDictionaryResultNode(query, data) {
+function buildDictionaryResultNode(query, data, sources) {
   const t = I18N[uiLanguage];
   const block = document.createElement("div");
   block.className = "dictionary-result";
@@ -6196,6 +6155,12 @@ function buildDictionaryResultNode(query, data) {
   block.appendChild(heading);
 
   const rows = (data && data.rows) || [];
+  if (sources && sources.length) {
+    const line = document.createElement("p");
+    line.className = "dictionary-sources";
+    line.textContent = t.dictionarySources(sources.join(", "));
+    block.appendChild(line);
+  }
   if (!rows.length) {
     const empty = document.createElement("p");
     empty.className = "dictionary-empty";
@@ -6422,7 +6387,39 @@ async function fetchDictionaryResultNode(query, lang) {
   );
   if (!response.ok) throw new Error(t.dictionaryError);
   const data = await response.json();
-  return buildDictionaryResultNode(query, data);
+  return buildDictionaryResultNode(query, data, await dictionaryWordSources(query, lang, data));
+}
+
+// When the search found no definition for the word itself, the names of the
+// dictionaries and glossaries holding it (empty otherwise): the "Mots Défi"
+// list, then POST /api/dictionary/sources. A failure only loses this line.
+async function dictionaryWordSources(query, lang, data) {
+  const t = I18N[uiLanguage];
+  const mot = challengeWordGridForm(query);
+  const defined = ((data && data.rows) || []).some((row) => challengeWordGridForm(row.form) === mot
+    && row.definitions && row.definitions.length);
+  if (!mot || defined) return [];
+  const names = generateChallengeWords.some((w) => challengeWordGridForm(w) === mot)
+    ? [t.glossaryChallenge] : [];
+  const labels = {
+    freq: t.dictionarySourceFreq, scrabble: t.glossaryScrabble,
+    hunspell: t.dictionarySourceHunspell, multi: t.dictionarySourceMulti,
+  };
+  try {
+    const response = await fetchWithTimeout("/api/dictionary/sources", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ q: query, lang, pseudo: userPseudo, secret: userSecret }),
+    }, FETCH_TIMEOUT_MS);
+    if (response.ok) {
+      for (const source of (await response.json()).sources || []) {
+        names.push(source.name || labels[source.id] || source.id);
+      }
+    }
+  } catch (err) {
+    // The search result itself still shows.
+  }
+  return names;
 }
 
 dictionaryForm.addEventListener("submit", async (event) => {
@@ -7843,13 +7840,12 @@ function setInteractiveDiagnostics(data) {
   interactiveDiagnosticsKey = interactiveDiagnosticsStateKey();
 }
 
-// What the impossible/low/deadlock cells depend on: the grid, the "Mots Défi"
-// list and the fill method.
+// What the impossible/low/deadlock cells depend on: the grid and the "Mots Défi"
+// list.
 function interactiveDiagnosticsStateKey() {
   return JSON.stringify([
     interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch))),
     interactiveChallengeWords,
-    readFillMethod(),
   ]);
 }
 
@@ -7872,7 +7868,6 @@ function scheduleInteractiveDiagnosticsRefresh() {
           job_id: interactiveJobId,
           grid: interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch))),
           challenge_words: interactiveChallengeWords,
-          fill_method: readFillMethod(),
         }),
       }, FETCH_TIMEOUT_MS);
       if (!resp.ok || !interactiveMode || sent !== interactiveDiagnosticsStateKey()) return;
@@ -10316,13 +10311,9 @@ function enterInteractiveMode(state) {
     if (gp.mode && modeSelect.querySelector(`option[value="${gp.mode}"]`)) {
       modeSelect.value = gp.mode;
     }
-    restoreFillMethod(gp.fill_method);
     if (gp.black_enrichment_percent !== undefined && gp.black_enrichment_percent !== null) {
       blackEnrichmentInput.value = gp.black_enrichment_percent;
       syncGridPresetSelection();
-    }
-    if (gp.words_per_node !== undefined && gp.words_per_node !== null) {
-      wordsPerNodeInput.value = gp.words_per_node;
     }
     if (gp.multi_word_percent !== undefined && gp.multi_word_percent !== null) {
       multiWordPercentInput.value = gp.multi_word_percent;
@@ -10357,6 +10348,15 @@ function enterInteractiveMode(state) {
   interactiveUserCells = new Map();
   if (state.placed && state.placed.glossary && state.placed.cells) {
     for (const [r, c] of state.placed.cells) interactiveUserCells.set(`${r},${c}`, state.placed.glossary);
+  }
+  // A reloaded grid: each complete word's glossary, for its colour (backend/
+  // app.py's _reload_word_cells); a fresh start's result carries none.
+  const wordCells = state.word_cells || {};
+  for (const [r, c] of wordCells.challenge || []) interactiveChallengeCells.add(`${r},${c}`);
+  for (const [r, c] of wordCells.theme || []) interactiveThemeCells.add(`${r},${c}`);
+  for (const [r, c] of wordCells.scrabble || []) interactiveScrabbleCells.add(`${r},${c}`);
+  for (const [id, cells] of Object.entries(wordCells.user || {})) {
+    for (const [r, c] of cells) interactiveUserCells.set(`${r},${c}`, id);
   }
   // "Mots Défi" list restore, at the user's explicit request — only ever
   // set on a resumed session's own result (backend/app.py's _run_
@@ -10889,9 +10889,7 @@ function applyStopDumpRequest(req) {
   if (req.height) heightInput.value = String(req.height);
   if (req.difficulty) document.getElementById("difficulty").value = req.difficulty;
   if (req.mode && modeSelect.querySelector(`option[value="${req.mode}"]`)) modeSelect.value = req.mode;
-  restoreFillMethod(req.fill_method);
   if (req.black_enrichment_percent != null) blackEnrichmentInput.value = req.black_enrichment_percent;
-  if (req.words_per_node != null) wordsPerNodeInput.value = req.words_per_node;
   if (req.multi_word_percent != null) multiWordPercentInput.value = req.multi_word_percent;
   if (req.symmetry) symmetrySelect.value = req.symmetry;
   restorePatternMix(req);
@@ -11133,7 +11131,8 @@ interactiveNextBtn.addEventListener("click", async () => {
         selected_cells: selectedCells,
         zone_cells: zoneCells,
         multi_word_percent: readMultiWordPercent(),
-        fill_method: readFillMethod(),
+        symmetry: symmetrySelect.value,
+        pattern_style: interactivePatternStyle,
       }),
     }, STEP_FETCH_TIMEOUT_MS);
     if (resp.status === 404) {
@@ -11600,7 +11599,6 @@ async function fetchInteractiveImpossible(t) {
       body: JSON.stringify({
         job_id: interactiveJobId, grid: wireGrid,
         challenge_words: interactiveChallengeWords,
-        fill_method: readFillMethod(),
       }),
     }, FETCH_TIMEOUT_MS);
     if (resp.status === 404) {
@@ -12013,9 +12011,7 @@ async function runInteractiveFinish(zoneCells) {
           grid: wireGrid,
           definitions: interactiveDefinitionsPayload(),
           mode: finishMode,
-          fill_method: readFillMethod(),
           black_enrichment_percent: Number(blackEnrichmentInput.value),
-          words_per_node: Number(wordsPerNodeInput.value),
           multi_word_percent: readMultiWordPercent(),
           symmetry: symmetrySelect.value,
           pattern_style: patternStyle(),
@@ -12331,7 +12327,6 @@ form.addEventListener("submit", async (event) => {
   const difficulty = document.getElementById("difficulty").value;
   const mode = document.getElementById("mode").value;
   const blackEnrichmentPercent = Number(blackEnrichmentInput.value);
-  const wordsPerNode = Number(wordsPerNodeInput.value);
   const multiWordPercent = readMultiWordPercent();
   // Optional Thématique (word list, "+/-" chip list — see themeKeywords/
   // renderThemeList() above) — joined back into one space-separated
@@ -12390,10 +12385,8 @@ form.addEventListener("submit", async (event) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           language, width, height, difficulty, mode,
-          fill_method: readFillMethod(),
           bilingual_language: bilingualLanguage !== language ? bilingualLanguage : undefined,
           black_enrichment_percent: blackEnrichmentPercent,
-          words_per_node: wordsPerNode,
           multi_word_percent: multiWordPercent,
           symmetry: symmetrySelect.value,
           pattern_style: patternStyle(),

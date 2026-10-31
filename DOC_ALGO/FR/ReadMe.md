@@ -70,7 +70,9 @@ précédents.
 ### La fin de la recherche
 
 Il faut au moins **4** tentatives réussies sur l'ensemble de la recherche
-(`MIN_SUCCESSFUL_ATTEMPTS`). La meilleure est alors retenue, une dernière
+(`MIN_SUCCESSFUL_ATTEMPTS`), constatées en fin de palier, et la recherche
+s'arrête aussitôt qu'elle en compte **15**, sans attendre la fin du palier
+(`MAX_SUCCESSFUL_ATTEMPTS`). La meilleure est alors retenue, une dernière
 passe (chapitre 6) lui retire le plus de cases noires possible, les
 définitions sont écrites par le modèle de langage (`backend/clues.py`) et
 la grille est enregistrée.
@@ -95,9 +97,9 @@ et tout le moteur décrit ici.
 2. Choisir un **Effort** parmi Flash/Turbo/Rapide/Moyen/Fort/Ultra/Megatron/GridZilla
    (Ultra, Megatron et GridZilla seulement quand la page est ouverte en local) — ce choix ne
    fixe qu'un budget de recherche par tentative (« Limites de la
-   recherche », chapitre 4), pas la qualité du résultat. En local, le
-   sélecteur **Méthode** choisit en plus la recherche de remplissage :
-   Falcon ou Ingrid-like (« La méthode de remplissage Ingrid-like »,
+   recherche », chapitre 4), pas la qualité du résultat. Le remplissage
+   emploie Falcon jusqu'à ce que plus de 15 % des cases blanches portent une
+   lettre, puis Ingrid-like (« La méthode de remplissage Ingrid-like »,
    chapitre 4).
 3. Facultatif : lister des mots dans le champ **Thématique** pour orienter
    le choix des mots, et/ou dans le champ **Mots Défi
@@ -232,7 +234,10 @@ n'entre pas si la note est sous le seuil du niveau,
 `USAGE_DIFFICULTY_MIN_SCORE`) et une fréquence relevée au moins à
 `NOISE_FREQUENCY_THRESHOLD` ; un mot déjà présent garde sa ligne et prend
 la note du dictionnaire utilisateur quand celui-ci est classé avant tous
-les glossaires Falcon qui le contiennent. Les deux glossaires Falcon
+les glossaires Falcon qui le contiennent. Une entrée d'un dictionnaire
+utilisateur est toujours valide : présente ou non dans les listes Falcon,
+elle ne compte jamais dans les quotas de noms propres et de mots sans
+définition (`generate_grid`, `_user_lexicon_words`). Les deux glossaires Falcon
 décochés, le lexique ne contient que les mots des dictionnaires
 utilisateur. Chaque mot reçoit une clé de glossaire (colonne `gloss`) :
 le plus petit rang des glossaires qui le contiennent ; cette clé ordonne
@@ -368,6 +373,14 @@ trouvée (même motif, mêmes mots) n'est ni comptée ni gardée
 différentes à choisir. Quand le budget de paliers s'épuise avant ce seuil,
 le dernier palier compare et propose les réussites trouvées s'il y en a au
 moins deux, et une réussite unique est acceptée telle quelle.
+
+**Arrêt à 15 grilles.** Dès que **15** solutions distinctes sont trouvées,
+la recherche n'en cherche pas d'autre, pour la génération automatique comme
+pour « Finir la grille » et « Finir la zone » : les tentatives encore en
+cours sont interrompues, aucune nouvelle tentative n'est lancée, et les
+réussites sont comparées sans attendre la fin du palier (`generate_grid`,
+`MAX_SUCCESSFUL_ATTEMPTS`, `_count_live_success`). Une réussite qui dépasse
+la limite de cases noires n'est pas comptée.
 
 **Seconde chance.** Une tentative qui échoue alors qu'une tentative
 **d'origine** du palier est encore en course n'est pas aussitôt déclarée
@@ -809,6 +822,14 @@ noires respecte la même symétrie :
   mêmes règles (aucune lettre connue noircie, aucun mot posé modifié,
   aucune case noire permanente libérée) ; sinon l'option est écartée
   (`Filler._symmetric_reshape_changes`, `Filler._reshape_options`).
+- **Réaménagement de « Suivant »** en mode Interactif, avec la « Symétrie » du
+  formulaire : chaque case noire libérée ou ajoutée pour le mot entraîne ses
+  images. La transformation est refusée, et l'option suivante essayée, si deux
+  cases exigent des états opposés, si une image à noircir porte une lettre
+  (celles du mot comprises), si la grille devient invalide, si le mot n'occupe
+  plus exactement un emplacement, ou si un emplacement modifié par une image
+  n'a plus aucun candidat (`_apply_interactive_reshape`,
+  `_image_slots_stay_valid`).
 
 La grille finale est donc symétrique, sauf si elle part d'une grille
 Interactive qui ne l'est pas (« Finir la grille ») ou dans le cas rare où
@@ -833,6 +854,15 @@ reprise entre paliers et la résolution des zones impossibles
 (`_clean_blocked_slots`, `_build_retry_seed`, `_shorten_impossible_zones`/
 `_lengthen_impossible_zones`, le réaménagement d'une case noire flottante)
 peuvent poser ou déplacer une case noire adjacente à une autre.
+
+**Style Groupé/aligné et réaménagement.** Un réaménagement d'une case noire
+flottante, dans la recherche comme avec **Suivant**, images de symétrie comprises,
+n'est retenu que si la grille obtenue respecte le style : aucune nouvelle suite de
+1 ou 2 cases blanches, aucune case noircie formant une ligne de plus de
+`GROUPED_MAX_BLACK_LINE` cases noires ni une paire noire parallèle à un bord trop
+proche. Une suite courte déjà présente avant le réaménagement ne lui est pas
+imputée (`_reshape_keeps_style`, `Filler._reshape_options`,
+`_apply_interactive_reshape`).
 
 ### Le pré-remplissage
 
@@ -909,9 +939,12 @@ façonner un en modifiant des **cases noires flottantes** — toute case
 noire absente de `permanent_black_cells`. Les mots du glossaire
 **thématique** y ont droit après les Mots Défi, tant que moins de
 `THEME_RESHAPE_MAX_PLACED_WORDS` (**5**) mots thématiques distincts sont
-posés (`_placed_theme_words`, `_theme_reshape_allowed`). Un mot est jugé
-sans emplacement si aucun emplacement vide de sa longueur n'a des lettres
-connues compatibles.
+posés (`_placed_theme_words`, `_theme_reshape_allowed`) : ce plafond ne porte
+que sur la manipulation des cases noires, car déplacer beaucoup de cases noires
+placées pour optimiser leur répartition rend la grille très difficile à
+remplir. Un Mot Défi est jugé sans emplacement si aucun emplacement vide de sa
+longueur n'a des lettres connues compatibles ; un mot thématique n'a pas à
+l'être : il peut en profiter même si un emplacement libre existe ailleurs.
 
 Un **réaménagement** est toujours lié à un seul mot et ne lui survit
 jamais :
@@ -968,10 +1001,14 @@ affiché : **Précédent** annule le mot et son réaménagement.
 
 ## Chapitre 4 — Phase 2 : remplir la grille avec de vrais mots
 
-Deux méthodes de remplissage existent : **Ingrid-like**, la méthode par
-défaut, décrite en fin de chapitre (« La méthode de remplissage
-Ingrid-like »), et **Falcon (expérimental)**, décrite dans tout le reste
-de ce chapitre, que le sélecteur **Méthode** permet de choisir en local.
+Deux méthodes de remplissage existent : **Falcon**, décrite dans tout le reste
+de ce chapitre, et **Ingrid-like**, décrite en fin de chapitre (« La méthode de
+remplissage Ingrid-like »). « Automatique », « Finir la grille », « Finir la zone »
+et le bouton **Suivant** du mode Interactif emploient Falcon jusqu'à ce que plus de
+15 % des cases blanches portent une lettre, puis Ingrid-like (`backend/
+crossword_gen.py`, `falcon_phase_over`, `resolve_fill_method`). L'interface
+n'offre aucun choix ; l'API et la ligne de commande acceptent aussi « falcon » ou
+« ingrid » seuls (`FILL_METHODS`).
 
 Chaque suite d'au moins 2 cases blanches est un emplacement à remplir
 (`extract_slots`). Le remplissage se fait par **essais successifs avec
@@ -1088,11 +1125,12 @@ La recherche est une fonction récursive, un emplacement à la fois
    recours, ceux qu'un mot de dernier recours a vidés. Les emplacements
    qui croisent un emplacement toléré restent sélectionnables, mais aucun
    de leurs candidats n'est retenu tant qu'il reste bloqué.
-3. **Choisir un emplacement** par la cascade à 9 niveaux, parmi les
+3. **Choisir un emplacement** (« Choisir quel emplacement remplir »), parmi les
    sélectionnables (« Les emplacements écartés »).
 4. **Essayer les candidats un par un** :
-   - **chaque candidat compte pour le budget de vérifications**, qu'il
-     mène ou non à une descente ; le budget et un éventuel signal d'abandon
+   - **chaque candidat essayé compte pour le budget de vérifications**,
+     qu'il mène ou non à une descente (un mot élagué, voir « Choisir quel
+     mot essayer », n'est pas essayé) ; le budget et un éventuel signal d'abandon
      sont consultés à ce moment, si bien qu'un emplacement dont presque
      tous les candidats cassent un croisement ne peut pas enchaîner des
      milliers de rejets sans contrôle ;
@@ -1104,10 +1142,10 @@ La recherche est une fonction récursive, un emplacement à la fois
    - sinon le nœud **complète son groupe** (point 4 bis), puis le
      programme s'appelle récursivement ; un succès remonte tel quel, un
      échec fait retirer le groupe entier et essayer le candidat suivant.
-4 bis. **Un nœud pose plusieurs mots d'un coup**, au plus
-   `WORDS_PER_NODE` (2) (`Filler._descend_group`,
-   `Filler._extra_group_words`). Ce maximum est réglable pour chaque
-   génération par le champ « Mots par pose » du formulaire (de 1 à 50 ;
+4 bis. **Un nœud peut poser plusieurs mots d'un coup**, au plus
+   `WORDS_PER_NODE`, réglé à 1 (`Filler._descend_group`,
+   `Filler._extra_group_words`), de sorte qu'il n'en pose qu'un. L'API permet une
+   autre valeur pour une génération (de 1 à 50 ;
    `backend/app.py`, `GenerateRequest.words_per_node` ;
    `backend/crossword_gen.py`, `generate_grid`, `try_fill`,
    `Filler.words_per_node`). La taille du groupe décroît avec le **taux de
@@ -1120,16 +1158,14 @@ La recherche est une fonction récursive, un emplacement à la fois
    `GROUP_SIZE_MIN_FILL_PERCENT` (75 %), linéairement, puis 1 au-delà, soit
    max(1, M − ⌊(M − 1) × taux / 75 %⌋) mots, celui du nœud compris
    (`Filler._group_size`). Chaque aperçu porteur d'une zone d'attention
-   affiche cette valeur (`words_per_pose`, « N m/p » sur sa ligne
-   d'information, `frontend/static/script.js`, `renderAttemptPreview`) :
+   transporte cette valeur (`words_per_pose`), que l'interface n'affiche pas :
    pour le record, celle de sa zone au moment du record
    (`Filler.best_words_per_pose`) ; pour un état courant, celle de la zone
    du nœud en cours. Une fois son mot accepté, le nœud pose donc
    jusqu'à ce nombre moins un d'autres mots avant de descendre :
-   chacun sur un emplacement encore ouvert de la **fenêtre géométrique**
-   d'où son emplacement a été tiré (les « emplacements candidats », niveau
-   6 de la cascade), ayant une case libre dans la zone d'attention, choisi
-   par la cascade ; à défaut d'un tel emplacement ayant encore un
+   chacun sur un emplacement encore ouvert des **3 meilleurs** d'où son
+   emplacement a été tiré (les « emplacements candidats »), ayant une case
+   libre dans la zone d'attention, choisi de la même manière ; à défaut d'un tel emplacement ayant encore un
    candidat, sur les autres emplacements sélectionnables du nœud. Le mot
    retenu est le premier de l'ordre habituel des candidats (Mots Défi,
    thématiques, Scrabble, autres ; sans réaménagement) qui ne laisse aucun
@@ -1293,8 +1329,8 @@ déprioritisation ne veuille plus rien dire.
 
 Chaque nœud se déroule en quatre temps :
 
-1. poser un mot sur un emplacement **non écarté**, dans l'ordre de la
-   cascade ;
+1. poser un mot sur un emplacement **non écarté**, dans l'ordre du choix
+   d'emplacement ;
 2. à défaut, **libérer** les emplacements écartés, qui redeviennent
    ordinaires ;
 3. à défaut, et seulement dans la seconde passe de la recherche, accepter
@@ -1384,12 +1420,57 @@ qui construit sa propre liste d'emplacements sélectionnables.
 
 ### Choisir quel emplacement remplir
 
-Le choix suit une cascade de **niveaux de priorité**
-(`Filler._select_target_slot`, réutilisé tel quel par
-`interactive_place_word`), appliquée aux emplacements que les temps du
-nœud rendent sélectionnables — au premier palier, ceux de la zone
-d'attention du remplissage incrémental (voir « Les emplacements
-écartés ») :
+Le choix suit celui d'Ingrid (`Filler._select_fill_slot`, réutilisé par
+`interactive_place_word`). Il s'applique aux emplacements que les temps du
+nœud rendent sélectionnables, donc à ceux de la **zone d'attention** du
+remplissage incrémental, qui reste seule à décider quelle partie d'une grande
+grille est remplie (voir « Les emplacements écartés ») :
+
+1. **Mots Défi** : s'il existe un emplacement où un mot de la liste (ni
+   posé, ni abandonné) tient, le choix se limite à ces emplacements ;
+2. **glossaire thématique** : de même, parmi ceux qui restent, pour un mot
+   thématique encore utilisable ;
+3. **priorité `dom/wdeg`** : pour chaque emplacement, le **nombre de candidats
+   restant après l'élagage** (`Filler._slot_candidate_count` : voir « Choisir
+   quel mot essayer », moins les mots déjà utilisés, plus les Mots Défi
+   compatibles) divisé par la **somme des poids de ses croisements** avec un
+   emplacement encore ouvert (`Filler._slot_weight`). Un emplacement sans
+   croisement ouvert a une priorité infinie et passe en dernier. La plus
+   petite valeur l'emporte : un emplacement à peu de candidats ou dont les
+   croisements ont souvent causé des échecs est traité tôt ;
+4. l'emplacement choisi au tour précédent est **conservé** tant qu'il reste à
+   moins de `INGRID_ADAPTIVE_BRANCHING_THRESHOLD` (0,15) de la meilleure
+   priorité ; sinon, le choix est tiré **au hasard parmi les 3 meilleurs**, de
+   poids `INGRID_RANDOM_SLOT_WEIGHTS` (4, 2, 1), les ex æquo étant dans un
+   ordre aléatoire. Ces 3 emplacements sont les « emplacements candidats »
+   (`Filler.last_selection_window`).
+
+**Les poids** sont attachés aux **cases** de croisement
+(`Filler._cell_weights`, 1 par défaut) et durent toute la tentative, à travers
+les redémarrages à plat et les réaménagements de cases noires, qui renumérotent
+les emplacements sans changer les cases ; une case qui n'est plus un croisement
+ne compte simplement pas. Le dernier emplacement choisi est lui aussi retenu par
+ses cases. À chaque échec, tous les poids vieillissent
+(`poids = 1 + (poids - 1) × INGRID_WEIGHT_AGE_FACTOR` (0,99),
+`Filler._learn_cell_weights`), puis une unité est répartie :
+
+- **emplacement trouvé sans candidat** par la vérification d'un nœud (hors
+  emplacements tolérés) : entre ses croisements avec un mot posé, chacun en
+  proportion des mots de la longueur que sa lettre exclut
+  (`Filler._learn_dry_slot`) ;
+- **tous les candidats refusés** parce qu'ils bloquaient un croisement sain,
+  élagage compris : à parts égales entre les croisements responsables
+  (`Filler._learn_rejected_slot`).
+
+Le mode Interactif construit un moteur neuf à chaque clic : ses poids valent
+toujours 1.
+
+#### La cascade du premier mot de la méthode Ingrid-like
+
+La méthode Ingrid-like pose le premier mot d'une grille vide à la manière
+historique de Falcon, pour la diversité (`IngridSolver._falcon_pick`). Ce seul
+choix suit une cascade de **niveaux de priorité**
+(`Filler._select_target_slot`) :
 
 1. **désactivé** (`ALTERNATE_DIRECTION_ENABLED`) : activé, il tire d'abord
    la direction, avec une probabilité proportionnelle au nombre
@@ -1484,7 +1565,31 @@ d'attention du remplissage incrémental (voir « Les emplacements
 
 ### Choisir quel mot essayer
 
-Les candidats de l'emplacement sont **mélangés**, puis soumis au
+Les candidats de l'emplacement sont d'abord **élagués**, comme le fait
+Ingrid par cohérence d'arc (`Filler._crossing_letter_counts`,
+`Filler._prune_candidates`, `CANDIDATE_PRUNING_ENABLED`) : pour chaque case
+croisant un emplacement encore ouvert, le moteur compte les candidats de cet
+emplacement (son domaine plus les Mots Défi compatibles, les mots déjà utilisés
+restant comptés : une lettre portée par eux seuls est laissée au contrôle de
+croisement) qui portent chaque lettre à la case partagée, comptage mémorisé
+selon les lettres connues de l'emplacement (`Filler._slot_letter_logs`,
+`LETTER_LOGS_MEMO_MAX`), donc valable à travers un réaménagement et son
+annulation. Un mot dont une
+lettre n'est portée par aucun de ces candidats est retiré. Il aurait bloqué
+ce croisement : le contrôle de croisement l'aurait de toute façon refusé.
+L'élagage ne coûte donc aucune vérification sur le budget, et il garde les
+mêmes conséquences qu'un tel refus : si tous les candidats sont refusés, il
+compte comme une cause de retour en arrière et ses croisements entrent dans
+l'ensemble de conflit. Un croisement déjà sans candidat n'élague rien : il
+ne serait pas imputable au mot. L'élagage ne touche ni les Mots Défi ni les
+mots thématiques, qui passent par le contrôle de croisement pour alimenter
+leur budget d'abandon, et il ne s'applique ni à la passe de dernier recours
+(`allow_breaking`), qui doit pouvoir accepter ces mots, ni au mode
+Interactif, qui les refuse un par un à chaque niveau d'acceptation. Il
+s'applique aussi aux mots supplémentaires d'un groupe
+(`Filler._extra_group_words`).
+
+Les candidats restants sont **mélangés**, puis soumis au
 **plafond « Multi-mots max »** (`Filler._multi_words_blocked`, champ du
 formulaire, `MULTI_WORD_PERCENT` = 15 % par défaut) : tant que les
 expressions de plusieurs mots (mots issus de `data/wordlist_<langue>_
@@ -1510,21 +1615,25 @@ le score d'usage est connu (`data/usage_score_<langue>_scrabble.tsv`, voir
 départagés par le mélange ; un candidat sans score connu est toujours
 gardé, et une langue sans fichier de scores n'est pas filtrée. Un mot
 écarté par ce filtre n'est pas essayé par ce nœud, mais il reste dans le
-domaine de l'emplacement. Les candidats restants sont ensuite classés par leur
-accord avec le consensus statistique des cases non déterminées
-(`_candidate_score`, racine de la somme des carrés des scores par case),
-score **divisé par (1 + le nombre de fois où ce mot a déjà été posé sur
-cet emplacement)** (`Filler.ordered_candidates`, `Filler._tried_words`) :
-un mot qui colle au consensus sur plusieurs cases est essayé avant un mot
-qui n'y colle pas, et un mot déjà souvent retenté cède la place à un mot
-neuf. En mode Interactif, ce compte est toujours nul.
+domaine de l'emplacement. Les candidats restants sont ensuite classés par
+leur **score de cases**, celui d'Ingrid (`_candidate_score`) : la moyenne,
+sur les lettres du mot, du log10 du nombre de candidats que le croisement
+garde avec cette lettre, comptés comme pour l'élagage. Une case sans
+croisement ouvert compte 0, et une lettre que le croisement ne peut pas
+prendre compte `CANDIDATE_UNSUPPORTED_LETTER_SCORE` (-1e9), ce qui place
+ce mot après tous les autres. Ce score est **divisé par (1 + le nombre de
+fois où ce mot a déjà été posé sur cet emplacement)**
+(`Filler.ordered_candidates`, `Filler._tried_words`) : un mot qui laisse
+plus de choix à ses croisements est essayé avant un autre, et un mot déjà
+souvent retenté cède la place à un mot neuf. En mode Interactif, ce compte
+est toujours nul.
 
 À chaque tirage, seuls les `CANDIDATE_SCORE_WINDOW` (200) meilleurs
 candidats **restants** sont considérés — une fenêtre glissante bien plus
 étroite qu'un domaine de plusieurs milliers de mots, pour que le
-classement statistique garde la main. Ils sont **retriés par fréquence**
+classement garde la main. Ils sont **retriés par fréquence**
 dans `data/wordlist_<langue>_freq.tsv` (un mot absent comptant 0, les
-ex æquo gardant l'ordre statistique), et le mot essayé est pioché au
+ex æquo gardant l'ordre du score), et le mot essayé est pioché au
 hasard parmi les `CANDIDATE_FREQ_WINDOW` plus fréquents
 (2 × `MAX_DESCENTS_PER_NODE`, soit 100) : un mot courant passe avant un mot
 rare, avec assez de jeu pour que deux tentatives parallèles, ou deux
@@ -1553,7 +1662,7 @@ stables :
   sont thématiques.
 - **Dictionnaire Scrabble** — parmi le reste, les mots du dictionnaire
   Scrabble de la langue de l'emplacement (une liste par direction sur une
-  grille bilingue) avant les autres, l'ordre statistique étant conservé
+  grille bilingue) avant les autres, l'ordre du score étant conservé
   dans chaque bloc (`Filler.scrabble_first`, appliqué juste après
   `Filler.ordered_candidates` et avant le bloc thématique). Étape sautée
   si tous — ou aucun — des candidats sont dans la liste.
@@ -1848,7 +1957,7 @@ graines comme « cases forcées », seules à porter le liseré bleu.
 ### Le mode Interactif : poser un seul mot
 
 Le bouton **Suivant** (`interactive_place_word`) pose exactement un mot de
-plus. Il réutilise la même cascade à 9 niveaux et la même précédence à
+plus. Il réutilise le même choix d'emplacement et la même précédence à
 trois familles (Mots Défi, puis glossaire thématique, puis dictionnaire
 général), mais sans recherche récursive : une seule décision est prise, et
 elle doit être bonne du premier coup, puisqu'il n'y a pas de palier suivant
@@ -1858,9 +1967,15 @@ pour réparer.
 incomplet est sélectionné dans la grille (le mot qui passe par la case
 sélectionnée, dans le sens de saisie), **Suivant** essaie d'abord de le
 remplir : les trois familles et les trois niveaux de tolérance décrits
-plus bas sont appliqués à cet emplacement seul, sans remodelage de cases
-noires, et le mot y est posé dès qu'un candidat est accepté
-(`_selected_slot_index`, bloc `focus` d'`interactive_place_word`). Ce
+plus bas sont appliqués à cet emplacement seul, et le mot y est posé dès
+qu'un candidat est accepté (`_selected_slot_index`, bloc `focus`
+d'`interactive_place_word`). Avec la méthode Falcon, un Mot Défi, ou un mot du
+glossaire thématique tant que moins de 5 sont placés, peut y être posé en
+changeant ses cases noires, même s'il a un emplacement libre ailleurs : un mot
+plus long retire la case noire qui borde l'une de ses extrémités et doit
+couvrir tout l'emplacement, un mot plus court y reçoit une nouvelle case noire
+(`_reshape_selected_slot`), avec les images de la symétrie et les règles du
+style de motif. Rien de tel dans une zone sélectionnée. Ce
 n'est que si aucun mot ne peut y aller que les règles ci-dessous
 choisissent l'emplacement. Le contour bleu montre alors cet emplacement
 seul.
@@ -1880,8 +1995,8 @@ Ingrid-like applique la même borne à ses emplacements candidats.
 jamais posé **sur** un emplacement bloqué tant qu'un autre emplacement peut
 en recevoir un : la liste des emplacements bloqués est calculée une fois par
 clic, au sens rouge du terme — blocages par case croisée bloquée compris
-(`_impossible_indices`) — et ces emplacements sortent du tirage de la
-cascade ; ils n'y reviennent que si plus rien d'autre n'est sélectionnable,
+(`_impossible_indices`) — et ces emplacements sortent du choix
+d'emplacement ; ils n'y reviennent que si plus rien d'autre n'est sélectionnable,
 pour que **Suivant** ne reste jamais coincé.
 
 **Une vérification de sécurité élargie.** Un candidat est écarté dès qu'il
@@ -1986,10 +2101,10 @@ utilisés pour lequel elle a été calculée, et est recalculée, jamais
 réutilisée, s'il ne correspond plus.
 
 **Un emplacement cible par famille.** Chaque famille désigne son propre
-emplacement cible, par la cascade de choix d'emplacement évaluée par
-rapport au seul glossaire qu'elle applique (`Filler._select_target_slot`,
+emplacement cible, par le choix d'emplacement évalué par
+rapport au seul glossaire qu'elle applique (`Filler._select_fill_slot`,
 paramètres `challenge_level`/`theme_level`) : la famille Mots Défi avec le
-niveau 2 seul, la famille thématique avec le niveau 5 seul, le dictionnaire
+filtre Mots Défi seul, la famille thématique avec le filtre thématique seul, le dictionnaire
 général sans aucun des deux. Quand une famille échoue, la suivante réévalue
 donc les emplacements candidats au lieu d'hériter d'emplacements choisis
 pour un glossaire qu'elle n'applique pas. Chaque cible est calculée une
@@ -2002,7 +2117,7 @@ par la famille Mots Défi et la famille thématique) :
 1. toutes les combinaisons (mot, emplacement encore ouvert) géométriquement
    possibles sont d'abord essayées sur le motif de base **intact**, en ne
    considérant que les emplacements déjà existants et déjà viables pour le
-   dictionnaire — celles de l'emplacement désigné par la cascade d'abord,
+   dictionnaire — celles de l'emplacement désigné par le choix d'abord,
    puis celles de tout autre emplacement ouvert (les emplacements suivant
    leur meilleur mot, et les mots de chacun tirés par la règle unique de
    tirage, `Filler.ordered_candidates` — voir « Choisir quel mot
@@ -2011,7 +2126,8 @@ par la famille Mots Défi et la famille thématique) :
 2. seulement ensuite, pour la famille Mots Défi, et pour la famille
    thématique tant que moins de 5 mots thématiques sont posés sur la
    grille (au-delà, elle s'arrête à la phase 1), un mot qui ne correspond à **aucun**
-   emplacement existant de sa longueur reçoit sa propre tentative de
+   emplacement existant de sa longueur (pour la famille thématique, n'importe
+   quel mot de son glossaire) reçoit sa propre tentative de
    remaniement de
    case noire (`_try_reshape_for_word`, élargissement puis
    raccourcissement — voir chapitre 3), **entièrement isolée sur sa propre
@@ -2040,9 +2156,9 @@ un emplacement que ce candidat casserait) est toujours tirée du vivier Mots
 Défi courant de la grille, quelle que soit la famille en cours.
 
 **Le repli final** se fait sur le dictionnaire général, en balayant tous les
-emplacements encore ouverts dans l'ordre de la cascade, rejouée sans les
-niveaux 2 et 5 — sa propre cible d'abord, puis les autres
-(`_cascade_slot_order`) — et non ce seul emplacement : un
+emplacements encore ouverts dans l'ordre du choix d'emplacement, rejoué sans
+les filtres Mots Défi et thématique — sa propre cible d'abord, puis les autres
+(`_slot_choice_order`) — et non ce seul emplacement : un
 emplacement où aucun candidat n'est acceptable au niveau en cours est
 écarté (voir « emplacement écarté » dans `DOC_ALGO/FR/Lexicon.md`) et la
 recherche passe au suivant. La grille n'est déclarée impossible qu'une fois
@@ -2061,20 +2177,18 @@ Les emplacements écartés pendant ce balayage — au plus les
 prévisualisations de la génération automatique. Chaque clic renvoie aussi
 les **emplacements candidats** de la sélection qui a fourni l'emplacement
 posé — pour le dictionnaire général, celle du balayage qui a fourni cet
-emplacement (`_cascade_slot_order` renvoie chaque emplacement avec sa
+emplacement (`_slot_choice_order` renvoie chaque emplacement avec sa
 fenêtre), et non la cible initiale quand le balayage a dû la dépasser ;
 pour les Mots Défi et le glossaire thématique, la cible de la famille qui a
 posé le mot (de la dernière famille essayée si rien n'est
-posé) : la fenêtre géométrique du niveau 6 de la cascade (au plus
-`SLOT_SELECTION_WINDOW_SIZE` emplacements, mémorisée par
-`Filler._select_target_slot` dans `Filler.last_selection_window`), chacun
-représenté par sa ou ses cases les plus proches de l'origine du niveau 6 —
-celles qui lui donnent son score (`window_cells`,
-`backend/crossword_gen.py`, `_origin_closest_cells`) —, entourées en bleu
+posé) : les 3 meilleurs emplacements du choix (mémorisés par
+`Filler._select_fill_slot` dans `Filler.last_selection_window`), chacun
+représenté par sa première case (`window_cells`,
+`backend/crossword_gen.py`, `_slot_first_cells`), entourée en bleu
 dans le panneau. Sur chaque emplacement
 balayé, les candidats sont tirés par la même règle unique de tirage que la
 recherche automatique (`Filler.ordered_candidates` — mélange, classement
-statistique, fenêtre glissante retriée par fréquence, tirage, voir « Choisir quel mot
+par score de cases, fenêtre glissante retriée par fréquence, tirage, voir « Choisir quel mot
 essayer ») et le premier acceptable est retenu.
 
 Une fois un gagnant désigné, son propre motif (le motif de base intact pour
@@ -2155,13 +2269,27 @@ machineries de tentatives parallèles :
 
 ### La méthode de remplissage « Ingrid-like »
 
-Le sélecteur **Méthode** du formulaire, à droite d'**Effort** (visible
-seulement quand la page est ouverte en local), choisit la recherche que
-chaque tentative applique à son motif : **Ingrid-like** (par défaut), une recherche
+**Le passage de Falcon à Ingrid-like** (méthode « auto », `FILL_METHOD_DEFAULT`).
+Une tentative commence avec Falcon tant que les cases portant la lettre d'un mot
+posé ou une lettre verrouillée ne dépassent pas `FALCON_PHASE_MAX_FILL_PERCENT`
+(15 %) des cases blanches. Ce test est refait à l'entrée de chaque nœud
+(`backend/crossword_gen.py`, `Filler._falcon_phase_over`, `Filler._backtrack`).
+Dès qu'il est franchi, la recherche s'arrête sans rien défaire (`_IngridHandoff`) et
+Ingrid-like continue sur la grille atteinte, ses cases noires et tous ses mots, avec
+le budget restant de la tentative (`try_fill`) ; Ingrid-like ne peut pas retirer
+les mots ainsi posés. Une tentative partant d'une grille déjà au-delà du seuil est
+Ingrid-like dès le départ. La décision vaut par tentative : un palier dont le
+nettoyage a ramené la grille sous le seuil repart avec Falcon. Le bouton **Suivant**
+applique le même seuil à chaque clic, aux lettres de la grille affichée
+(`resolve_fill_method`). Les cases noires ne sont donc réaménagées pour un Mot Défi
+ou un mot thématique que tant que la grille est remplie à 15 % au plus.
+
+Les deux recherches qu'une tentative peut appliquer à son motif sont
+**Ingrid-like**, une recherche
 inspirée du remplisseur de grilles Ingrid (`github.com/rf-/ingrid_core`)
 (`backend/crossword_gen.py`, `IngridSolver` ; `try_fill(fill_method=)`,
 `generate_grid(fill_method=)`, `FILL_METHODS`, `FILL_METHOD_DEFAULT`), ou
-**Falcon (expérimental)**, la recherche décrite dans le reste de ce
+**Falcon**, la recherche décrite dans le reste de ce
 chapitre. Seule la recherche d'une
 tentative change : le lexique de la grille (sélection par niveau selon
 l'usage et la fréquence), les familles de candidats (Mots Défi, glossaire
@@ -2255,8 +2383,7 @@ le plus vidé de domaines est déclaré impossible, pour que le nettoyage
 entre paliers retire les mots qui le croisent (`ingrid_blocked_slots`,
 `try_fill`).
 
-**« Suivant » en mode Ingrid-like.** Quand le sélecteur Méthode est sur
-Ingrid-like, le bouton **Suivant** du mode Interactif pose son mot par une
+**« Suivant » en mode Ingrid-like.** Au-delà du seuil de remplissage, le bouton **Suivant** du mode Interactif pose son mot par une
 seule décision de cette recherche (`interactive_place_word_ingrid`). Tout
 est recalculé à chaque clic à partir de la grille affichée — emplacements,
 domaines, cohérence d'arc, ordre des mots —, si bien qu'une lettre ou une
@@ -2984,11 +3111,15 @@ intéressante à résoudre (`minimize_black_squares`).
 
 Le principe : pour chaque case noire encore présente, prise
 individuellement — avec ses images quand une symétrie est réglée, le
-groupe entier étant retiré d'un coup (chapitre 3, « Symétrie ») —, on la retire temporairement et on relance un remplissage
-complet à cet endroit (`try_fill`, avec un budget propre à cette phase,
-`deadline_checks=6_000` — nettement plus petit que celui de la recherche
-principale, puisqu'il ne s'agit que de reconfirmer une grille déjà
-quasiment remplissable). Deux issues :
+groupe entier étant retiré d'un coup (chapitre 3, « Symétrie ») —, on la
+retire temporairement et on fait une **réparation locale** : seuls les
+emplacements qui passent par la case retirée et ceux qui les croisent
+peuvent changer, toutes les autres lettres restant verrouillées
+(`_minimize_free_cells`). Le remplissage emploie toujours la méthode
+Ingrid-like, quelle que soit celle qui a rempli la grille (`try_fill`,
+`fill_method="ingrid"`), avec un budget propre à cette phase,
+`deadline_checks=6_000`. Cette passe peut descendre sous le **Taux noir**
+demandé. Deux issues :
 
 - si la grille reste structurellement valide (mêmes règles qu'au
   chapitre 3, mais avec la variante la plus permissive,
@@ -3004,11 +3135,17 @@ quasiment remplissable). Deux issues :
 
 L'ordre dans lequel les cases noires sont essayées est mélangé à chaque
 passage, pour ne jamais favoriser systématiquement une case parce qu'elle
-apparaît plus tôt dans la grille. Toute la grille est repassée en revue en
-boucle tant qu'au moins un retrait a réussi au dernier tour complet — un
+apparaît plus tôt dans la grille. La grille est repassée en revue en
+boucle tant qu'au moins un retrait a réussi au dernier tour — un
 retrait peut en effet rendre réalisable un autre retrait auparavant
-impossible (une case noire qui bloquait un allongement d'emplacement peut
-elle-même disparaître une fois une voisine retirée).
+impossible. Une case noire refusée n'est donc essayée à nouveau qu'après
+un retrait accepté ayant changé une lettre des suites de cases blanches
+qu'elle borde (`_black_cell_runs`) ; les autres restent écartées de
+l'essai.
+
+Toute la passe est limitée à `MINIMIZE_TIME_LIMIT_S` (30 secondes), partagées
+par les grilles optimisées en parallèle : à l'échéance, chaque grille garde
+les retraits déjà acceptés (`minimize_black_squares`, `time_limit_at`).
 
 Cette étape ne peut donc **jamais dégrader** une grille déjà valide : à tout
 moment la dernière solution connue et valide est conservée, et une tentative
@@ -3017,8 +3154,9 @@ place. Un mot **Mots Défi** déjà posé bénéficie d'une protection
 supplémentaire : ses cases sont verrouillées et pré-remplies dans chaque
 essai, et exemptées du contrôle final « chaque mot doit être une vraie
 entrée du dictionnaire », pour qu'optimiser une grille ne puisse jamais
-remplacer ni rejeter un mot Défi déjà en place. Le bouton **Stop** de
-l'interface reste actif pendant cette phase : un point de contrôle
+remplacer ni rejeter un mot Défi déjà en place. Les lettres permanentes
+de « Finir la grille » et « Finir la zone » restent verrouillées de même.
+Le bouton **Stop** de l'interface reste actif pendant cette phase : un point de contrôle
 (`cancel_event`) est vérifié entre deux cases noires candidates.
 
 ---

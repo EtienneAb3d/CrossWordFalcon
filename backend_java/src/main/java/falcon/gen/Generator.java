@@ -56,6 +56,10 @@ public final class Generator {
     /** Only distinct solutions count (successKey): a success ending on a grid already found is neither counted —
      * here nor by the live "success_count" — nor kept (mirrors MIN_SUCCESSFUL_ATTEMPTS). */
     public static final int MIN_SUCCESSFUL_ATTEMPTS = 4;
+    /** The search stops as soon as this many distinct solutions are found, without waiting for the end of the
+     * palier: attemptDoneEvent interrupts every attempt still running and no further solution is counted or kept
+     * (mirrors MAX_SUCCESSFUL_ATTEMPTS). */
+    public static final int MAX_SUCCESSFUL_ATTEMPTS = 15;
 
     /** A successful attempt's solution: its pattern and its words (mirrors _success_key). */
     static String successKey(char[][] grid, Fill.Result result) {
@@ -594,6 +598,7 @@ public final class Generator {
         a.lockedLetters = locked;
         a.reshapeBlackCells = true;
         a.reshapeSymmetry = ctx.blackSymmetry;
+        a.reshapePatternStyle = ctx.patternStyle;
         a.earlyHardcleanPercent = Filler.EARLY_HARDCLEAN_PERCENT;
         a.sameWordLimit = Filler.MAX_SAME_WORD_PLACEMENTS;
         a.permanentLocked = permanentLocked;
@@ -700,6 +705,7 @@ public final class Generator {
         }
         a.reshapeBlackCells = true;
         a.reshapeSymmetry = ctx.blackSymmetry;
+        a.reshapePatternStyle = ctx.patternStyle;
         a.earlyHardcleanPercent = Filler.EARLY_HARDCLEAN_PERCENT;
         a.sameWordLimit = Filler.MAX_SAME_WORD_PLACEMENTS;
         a.permanentLocked = permanentLocked;
@@ -992,6 +998,11 @@ public final class Generator {
             nonGloss.removeAll(scrabbleAcross);
             nonGloss.removeAll(down.scrabbleWords());
         }
+        // An entry of the player's own dictionaries is never counted against either quota.
+        Set<String> quotaExempt = Words.userLexiconWords(p.userLexicon);
+        if (bilingual) quotaExempt.addAll(Words.userLexiconWords(p.bilingualUserLexicon));
+        properNouns.removeAll(quotaExempt);
+        nonGloss.removeAll(quotaExempt);
         Set<String> challenge = new LinkedHashSet<>(Words.challengeSet(p.challengeWords));
         // Under the "grouped" style, a "Mots Défi" word shorter than Grids.GROUPED_MIN_SLOT_LENGTH is ignored.
         if ("grouped".equals(p.patternStyle)) challenge.removeIf(w -> w.length() < Grids.GROUPED_MIN_SLOT_LENGTH);
@@ -1025,7 +1036,8 @@ public final class Generator {
         // Their solutions (successKey): a success ending on one of them is not kept again.
         Set<String> accumulatedKeys = new HashSet<>();
         // Distinct solutions found so far (successKey), counted the moment each attempt finishes, their number
-        // published live as the "success_count" progress event.
+        // published live as the "success_count" progress event. A success holding too many black cells
+        // (BLACK_OVERFLOW_FACTOR) is not one, and at most MAX_SUCCESSFUL_ATTEMPTS count.
         Set<String> liveSuccessKeys = java.util.Collections.synchronizedSet(new HashSet<>());
         // See BLACK_OVERFLOW_FACTOR: the most black cells a grid may hold at the end of a palier, null when off.
         long blackObjective = (long) Math.max(Math.rint(rows * cols * p.blackRatio),
@@ -1393,6 +1405,15 @@ public final class Generator {
                 // reproduces one of them; supersededChecks keeps the replaced failures' checks in the total.
                 Map<Long, Set<String>> secondChanceKeys = new HashMap<>();
                 long supersededChecks = 0;
+                java.util.function.Consumer<Outcome> countLiveSuccess = o -> {
+                    if (o.result() == null || blackOverflow.test(o.grid())
+                            || liveSuccessKeys.size() >= MAX_SUCCESSFUL_ATTEMPTS
+                            || !liveSuccessKeys.add(successKey(o.grid(), o.result()))) {
+                        return;
+                    }
+                    progress.on("success_count", data("count", liveSuccessKeys.size()));
+                    if (liveSuccessKeys.size() >= MAX_SUCCESSFUL_ATTEMPTS) attemptDoneEvent.set(true);
+                };
                 while (!pending.isEmpty()) {
                     List<Future<Outcome>> done = new ArrayList<>();
                     Future<Outcome> first;
@@ -1437,9 +1458,7 @@ public final class Generator {
                             Thread.currentThread().interrupt();
                             throw new GenerationCancelled();
                         }
-                        if (res.result() != null && liveSuccessKeys.add(successKey(res.grid(), res.result()))) {
-                            progress.on("success_count", data("count", liveSuccessKeys.size()));
-                        }
+                        countLiveSuccess.accept(res);
                         if (origFutures.contains(f)) {
                             origDone++;
                             if (origDone == interruptThreshold) attemptDoneEvent.set(true);
@@ -1547,9 +1566,7 @@ public final class Generator {
                     List<int[]> ps = (List<int[]>) plugged[1];
                     Outcome po = new Outcome((char[][]) plugged[0], new Fill.Result(ps, (String[]) plugged[2]), o.diag());
                     outcomes.set(k, po);
-                    if (liveSuccessKeys.add(successKey(po.grid(), po.result()))) {
-                        progress.on("success_count", data("count", liveSuccessKeys.size()));
-                    }
+                    countLiveSuccess.accept(po);
                 }
                 // A success holding too many black cells (BLACK_OVERFLOW_FACTOR) is a failed grid: not counted,
                 // and dropped like a discarded one (its diagnostics carry no partial state to clean).
@@ -1559,17 +1576,18 @@ public final class Generator {
                     if (o.result() != null && blackOverflow.test(o.grid())) {
                         it.remove();
                         overflowSuccesses++;
-                        liveSuccessKeys.remove(successKey(o.grid(), o.result()));
                         supersededChecks += o.diag().checks == null ? 0 : o.diag().checks;
                     }
                 }
-                if (overflowSuccesses > 0) progress.on("success_count", data("count", liveSuccessKeys.size()));
                 List<Outcome> successes = new ArrayList<>();
                 List<Outcome> failedAll = new ArrayList<>();
                 for (Outcome o : outcomes) (o.result() != null ? successes : failedAll).add(o);
                 // Cumulative across the whole search, one per distinct solution (MIN_SUCCESSFUL_ATTEMPTS).
                 for (Outcome o : successes) {
-                    if (accumulatedKeys.add(successKey(o.grid(), o.result()))) accumulatedSuccesses.add(o);
+                    if (accumulatedSuccesses.size() < MAX_SUCCESSFUL_ATTEMPTS
+                            && accumulatedKeys.add(successKey(o.grid(), o.result()))) {
+                        accumulatedSuccesses.add(o);
+                    }
                 }
                 Set<String> seenKeys = new HashSet<>();
                 List<Outcome> failedUnique = new ArrayList<>();
@@ -1591,13 +1609,14 @@ public final class Generator {
                     }
                     progress.on("minimizing", data("count", accumulatedSuccesses.size(), "examples", new ArrayList<Object>(exs)));
                     List<Future<Object[]>> trials = new ArrayList<>();
+                    final long minimizeLimit = System.nanoTime() + Fill.MINIMIZE_TIME_LIMIT_S * 1_000_000_000L;
                     for (Outcome o : accumulatedSuccesses) {
                         final char[][] gcopy = Grids.copy(o.grid());
                         final long ts = rng.seed31();
                         trials.add(executor.submit(() -> Fill.minimizeBlackSquares(gcopy, o.result(), rows, cols, index,
                                 new Rng(ts), 6000, p.cancelEvent, properNouns, maxProperNouns, nonGloss, maxNonGloss,
                                 priority, permanentLocked, permanentBlack, challenge, ctx.blackSymmetry,
-                                ctx.multiWordPercent)));
+                                ctx.multiWordPercent, minimizeLimit)));
                     }
                     Object[] bestScored = null;
                     for (int k = 0; k < accumulatedSuccesses.size(); k++) {
@@ -1967,7 +1986,7 @@ public final class Generator {
                     Fill.challengeWordCellsFromAssignment(bs, ba, challenge), winningProcess, true))));
             Object[] m = Fill.minimizeBlackSquares(best, bestResult, rows, cols, index, rng, 6000, p.cancelEvent,
                     properNouns, maxProperNouns, nonGloss, maxNonGloss, priority, permanentLocked, permanentBlack,
-                    challenge, ctx.blackSymmetry, ctx.multiWordPercent);
+                    challenge, ctx.blackSymmetry, ctx.multiWordPercent, null);
             grid = (char[][]) m[0];
             @SuppressWarnings("unchecked")
             List<int[]> s = (List<int[]>) m[1];

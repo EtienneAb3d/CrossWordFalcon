@@ -525,6 +525,13 @@ json`. Holds all server-side state in plain module dicts/lists:
   Scrabble dictionary's runs plus, in a direction without player
   glossaries, the plain Scrabble-set runs; `user_cells` {user dictionary
   id: cells}, ids sorted; the "others" runs uncoloured);
+  `_run_interactive_resume_job` (a reloaded draft, library grid or attempt)
+  gives its result `word_cells` (`_reload_word_cells` over crossword_gen's
+  `reload_word_cells`, Java `App.reloadWordCells`/`Words.reloadWordCells`:
+  `{challenge, theme, scrabble, user: {id: cells}}`, each complete run going to
+  the first glossary holding it, "Mots Défi", theme, then the player's order or
+  the plain Scrabble set, a shared cell to the higher-priority one, "others"
+  left plain), which `enterInteractiveMode` loads into the colour sets;
   `_load_interactive_index(..., pseudo)` merges them into an Interactive
   session's lexicon (the start request's pseudo, a resumed record's, or
   `InteractiveFromLibraryRequest`/`InteractiveFromAttemptRequest.pseudo` —
@@ -579,7 +586,14 @@ json`. Holds all server-side state in plain module dicts/lists:
   `ipuz_export.py`/`jpz_export.py`),
   `POST /api/game/save` (autosave play state to `GRID_GAME`), `GET
   /api/game/leaderboard/{grid_id}` (players' ranking on that grid).
-- *Dictionary/paraphrase*: `GET /api/dictionary` (root-family search;
+- *Dictionary/paraphrase*: `POST /api/dictionary/sources` (`{q, lang, pseudo,
+  secret}`: `{sources}`, the wordlists holding the word's grid form —
+  `dictionary_lookup.word_sources`, ids freq/scrabble/hunspell/multi, Java
+  `DictionaryLookup.wordSources` — then, when the credentials match, the
+  player's dictionaries of that language, `{id, name}`, `user_profiles.
+  dictionaries_holding`, Java `UserProfiles.dictionariesHolding`; the panel asks
+  it only when the search found no definition for the word itself,
+  `dictionaryWordSources`), `GET /api/dictionary` (root-family search;
   each row also carries `levels`, the difficulties whose lexicon holds its
   grid form — `app._dictionary_search_with_levels`, `dictionary_lookup.
   grid_form`, `crossword_gen.lexicon_words`; Java `DictionaryLookup.
@@ -616,7 +630,7 @@ json`. Holds all server-side state in plain module dicts/lists:
   `/boundary` (dictionary words that can start or end a slot, even
   shorter than its full length), `/stats` (read-only statistical letter
   preview for every still-empty cell), `/impossible` (read-only diagnostic
-  recompute; `fill_method` "ingrid" adds `interactive_ingrid_blocked_cells`), `/verify` (dictionary-
+  recompute; `resolve_fill_method` giving "ingrid" adds `interactive_ingrid_blocked_cells`), `/verify` (dictionary-
   membership check), `/title` (LLM proposals), `/save` (publish),
   `/save_work` (autosave draft), `GET /work` + `/work/delete` (drafts
   list/delete), `/resume` (relaunch a draft), `/from-library` (reopen a
@@ -715,7 +729,7 @@ aligned percentages, three integers of 0-100 summing to 100, 400
 otherwise; when given, `pattern_style` is derived from it —
 `_apply_pattern_mix`, Java `App.applyPatternMix`; also taken by
 `InteractiveFinishRequest`, kept in `generation_params`], `fill_method`
-[`FILL_METHODS`: falcon/ingrid, default "ingrid", 400 otherwise —
+[`FILL_METHODS`: falcon/ingrid/auto, default "auto", 400 otherwise —
 `_validate_fill_method`, Java `App.validateFillMethod`; also taken by
 `InteractiveFinishRequest`, kept in `generation_params`], `mode` [flash/turbo/fast/
 medium/ultra/megatron/gridzilla, default medium], `pseudo`, `theme`, `theme_precision`
@@ -723,7 +737,7 @@ medium/ultra/megatron/gridzilla, default medium], `pseudo`, `theme`, `theme_prec
 [list of free-form "Mots Défi" strings, default empty]); `RecomputeRequest`;
 the `Interactive*Request` family (`Step`, `Clean`, `Candidates`,
 `Crossing`, `Impossible`, `Verify`, `Title`, `Save`, `SaveWork`, `Finish`
-— `Step` carries `fill_method` (400 when unknown) —
+— `Step` and `Impossible` carry `fill_method` (400 when unknown) —
 — `Finish` additionally carries an optional `zone_cells` to scope
 automatic completion to a selected region instead of the whole grid,
 `WorkId`, `FromLibrary`, `FromAttempt` — the last two with an optional
@@ -1030,9 +1044,31 @@ own rng drawn from the parent's in candidate order:
    slot not entirely covered by `permanent_locked_letters` folded into
    `impossible_slots`/`impossible_cells` (`_canonical_conflict_slot_
    indices`, Java `Fill.canonicalConflictSlotIndices`).
-   Slot selection (`_select_target_slot`,
-   also reused verbatim by `interactive_place_word`) is a fixed 9-level
-   cascade: (1) optional, currently disabled
+   Slot selection (`Filler._select_fill_slot`, Java `selectFillSlot`, also used
+   by `interactive_place_word`) follows `IngridSolver._choose_slot`, among the
+   slots the node's stages and attention zone make selectable: those holding an
+   unused "Mots Défi" word when some do (`challenge_level`), then those holding
+   a theme word (`theme_level`), then the lowest `dom/wdeg` priority — the
+   candidates kept after the pruning (`_slot_candidate_count`, minus used words,
+   plus fitting "Mots Défi") over the summed crossing weights with a still-open
+   slot (`_slot_weight`, infinite with none). The slot chosen last
+   (`_last_chosen_cells`, by cells) is kept within
+   `INGRID_ADAPTIVE_BRANCHING_THRESHOLD`, else a pick among the best 3 with
+   `INGRID_RANDOM_SLOT_WEIGHTS`, ties in random order; those 3 are
+   `last_selection_window`. Each selection also keeps a `crossing_cache` by slot
+   index, never kept across a child, so a reshape or a backghost cannot stale it.
+   Weights are per cell
+   (`_cell_weights`, Java `cellWeights`, default 1), kept for the whole attempt,
+   across flat restarts and reshapes: every learning ages all by
+   `INGRID_WEIGHT_AGE_FACTOR` (`_learn_cell_weights`), then one unit goes to a
+   non-tolerated dry slot's crossings with a placed word, in proportion to the
+   words of the length each letter excludes (`_learn_dry_slot`), or evenly to
+   the crossings blocked when every candidate of the chosen slot was refused
+   blameably (`_learn_rejected_slot`). Interactive mode's fresh `Filler` keeps
+   weights at 1.
+   The 9-level cascade (`_select_target_slot`) now only serves
+   `IngridSolver._falcon_pick`, the first word of an Ingrid-like empty grid:
+   (1) optional, currently disabled
    (`ALTERNATE_DIRECTION_ENABLED=False`) — when enabled, draw across-vs-
    down weighted by remaining open-slot count; while disabled, this level
    is a no-op and the cascade starts from the whole unassigned pool, both
@@ -1092,8 +1128,8 @@ own rng drawn from the parent's in candidate order:
    measure) against that slot's own current `_domain`, replacing only
    that slot's own direction entry in `letter_scores_by_dir`, the other
    direction's left as it stands, then recomputing each of its cells'
-   combined tally (`letter_scores`, what `_candidate_score`/`_slot_
-   letter_frequency_score` read) as the crossing of the two directions
+   combined tally (`letter_scores`, what `_slot_
+   letter_frequency_score` reads) as the crossing of the two directions
    (`_crossed_letter_counts`: common letters, each at its lower count —
    the same view level 7 and the "Stats" letters read);
    `_restore_letter_scores` undoes it as the placement is reverted, so a
@@ -1114,7 +1150,24 @@ own rng drawn from the parent's in candidate order:
    renumbering keeps every unchanged slot's history. Interactive mode builds
    a fresh `Filler` per click, so its count is always 0.
    Candidate word order
-   within the chosen slot is `Filler.ordered_candidates` — this engine's
+   within the chosen slot starts with candidate pruning
+   (`CANDIDATE_PRUNING_ENABLED`, modelled on Ingrid's arc consistency;
+   `Filler._crossing_letter_counts`, Java `crossingLetterCounts`, gives per
+   cell the crossing open slot and log10 of its candidates per letter at the
+   shared cell — domain, used words included (a letter only they carry is left
+   to the per-candidate check), plus fitting "Mots Défi", `None` when it has no
+   candidate; `Filler._slot_letter_logs`, Java `slotLetterLogs`, kept per known
+   letters, so a reshape cannot stale it, `LETTER_LOGS_MEMO_MAX` 4000 entries;
+   `_slot_candidate_count`'s part before the used words likewise,
+   `CANDIDATE_COUNT_MEMO_MAX` 50000; `Filler._prune_candidates`, Java
+   `pruneCandidates`, drops a word carrying a letter none of them has, and
+   reports the slots responsible): such a word costs no check and counts as
+   a `crossing_broken` rejection for the node's `blameable_rejection`/
+   `slot_conflict`. In `_backtrack` only a slot in `domains` prunes; it is
+   skipped in the `allow_breaking` stage; a "Mots Défi" or theme-glossary word
+   is never pruned (its rejections feed its give-up budget); it also applies
+   to `_extra_group_words`, not to Interactive mode. The rest of the order
+   is `Filler.ordered_candidates` — this engine's
    single candidate-ordering rule, shared verbatim with Interactive
    mode's own "Suivant" (see "Priority-tier search in Interactive mode"
    below): shuffled, then held to the "Multi-mots max" cap (`Filler._multi_
@@ -1141,13 +1194,14 @@ own rng drawn from the parent's in candidate order:
    (60) % with the highest score are kept — `ceil`, at least one, ties at
    the cut settled by the shuffle, order kept; a candidate with no known
    score is always kept; no filtering for a language without a
-   usage-score file), then ranked by `_candidate_score`
-   (square root of the sum of squared per-cell statistical letter scores
-   from `sample_letter_biases`, which draws `LETTER_BIAS_SAMPLE_SIZE=10`
-   words per slot) divided by (1 + the number of times the search already
+   usage-score file), then ranked by `_candidate_score` (the Ingrid fill
+   score: the mean over the word's letters of log10 of the candidates the
+   crossing slot keeps with that letter, 0 for a cell with no open crossing,
+   `CANDIDATE_UNSUPPORTED_LETTER_SCORE` -1e9 for a letter it cannot take)
+   divided by (1 + the number of times the search already
    placed that word on this slot during the attempt, `_tried_words`) with each pick taken from a `CANDIDATE_SCORE_
    WINDOW=200`-word sliding window of the best remaining words —
-   deliberately far narrower than a slot's own domain, so the statistical
+   deliberately far narrower than a slot's own domain, so the
    ranking stays in charge — re-sorted by frequency in the freq wordlist
    (`index[length]["dict_freq"]`, float32, built by `build_index` from
    `load_dictionary_frequencies(path)`: the file's own FREQUENCE whatever
@@ -1188,13 +1242,13 @@ own rng drawn from the parent's in candidate order:
    ENABLED` is true (optional, currently disabled), self-abandons
    (`UNFILLABLE_ABANDON_SLOT_COUNT=3`) once more than that many
    still-unassigned slots belong to an already-impossible zone. Before
-   handing `unassigned` to the 9-level cascade, `_backtrack` also
+   handing `unassigned` to the slot choice, `_backtrack` also
    deprioritizes every slot already in `Filler._impossible_this_attempt` —
    slots observed as impossible earlier in this same attempt, excluded
    from `unassigned` unless doing so would leave nothing selectable (in
-   which case the cascade runs over the full, unfiltered list instead, as
+   which case the choice runs over the full, unfiltered list instead, as
    a last resort). Fed for free, whenever the ordinary per-node domain
-   check (right above the cascade) finds an unassigned slot dry — never by
+   check (right above the choice) finds an unassigned slot dry — never by
    a dedicated, proactive `_crossing_deadlock_slots` scan run on every
    node (the other way a slot can be impossible: non-empty domain in
    isolation, yet jointly unfillable with a slot it crosses): that scan's
@@ -1233,11 +1287,22 @@ own rng drawn from the parent's in candidate order:
    whichever of the two gave way — leaving both open keeps
    `_clean_blocked_slots` able to repair real empty cells instead of a
    sealed run of garbage).
-3. **Minimization** (`minimize_black_squares`) — once a fill succeeds,
-   iteratively removes black cells one at a time, keeping a removal only
-   if the grid stays fillable (at the loosest structural bound,
-   `min_interior_free=1`, since this phase only ever lengthens slots) and
-   every resulting word is a genuine dictionary entry.
+3. **Minimization** (`minimize_black_squares`, Java `Fill.
+   minimizeBlackSquares`) — once a fill succeeds, iteratively removes black
+   cells one at a time, even below the "Taux noir" objective, keeping a
+   removal only if the grid stays valid (at the loosest structural bound,
+   `min_interior_free=1`, since this phase only ever lengthens slots), a
+   local repair fills it and every resulting word is a genuine dictionary
+   entry. The repair is a `try_fill(fill_method="ingrid")` of 6,000 checks,
+   whatever method filled the grid, where only the slots through the removed
+   cell and the slots crossing them may change (`_minimize_free_cells`, Java
+   `minimizeFreeCells`), every other letter, `permanent_locked_letters` and a
+   placed "Mots Défi" word being locked and preseeded. A refused cell (`refused`)
+   is tried again only after an accepted removal changed a letter of the runs
+   it bounds (`_black_cell_runs`, Java `blackCellRuns`). The pass stops at
+   `time_limit_at`, `MINIMIZE_TIME_LIMIT_S` (30) after it starts, one
+   `time.monotonic()` deadline shared by the parallel trials (Java
+   `timeLimitNanos`), each grid keeping the removals already accepted.
 
 **Minimum successful attempts, with worker reassignment** — a single
 successful grid is never enough to conclude the search: `generate_grid`
@@ -1249,7 +1314,15 @@ count: a success whose pattern and words (`_success_key`, Java
 the live `success_count`) nor kept in `accumulated_successes`
 (`accumulated_keys`), so the grid choice has at least four grids to offer
 (fewer only when the palier budget runs out first: its last palier compares
-and offers the 2 or 3 successes found). A failure while some ORIGINAL attempt of the palier is still racing is
+and offers the 2 or 3 successes found). A success counts live when its
+attempt finishes, unless it holds too many black cells (see "Black
+overflow"). At `MAX_SUCCESSFUL_ATTEMPTS` (15; Java `Generator.
+MAX_SUCCESSFUL_ATTEMPTS`) distinct solutions the search stops at once,
+whatever the palier's progress: `_count_live_success` (Java
+`countLiveSuccess`) sets `attempt_done_event`, which interrupts every
+attempt still running and dispatches nothing more, no further solution is
+counted or kept, and the palier goes straight to the comparison. Automatic
+generation, "Finir la grille" and "Finir la zone" all share this. A failure while some ORIGINAL attempt of the palier is still racing is
 not declared failed at once: it gets a **second chance**
 (`_second_chance_seed`) — a hard clean of its blocked slots
 (`_clean_blocked_slots` given no `grid`, so no black cell is added, moved
@@ -1561,7 +1634,7 @@ the all-rejected case never backtracks, so the node can still reach its
 flagged in an earlier configuration may be viable again, and stays
 selectable in the node's released stage. `_backtrack` runs each node in three
 ordered stages: (1) try to place a word on a NON-écarté slot, taking them
-in cascade order until one accepts a candidate; (2) if none does, release
+in slot-choice order until one accepts a candidate; (2) if none does, release
 the écarté slots and carry on, still without backtracking; (3) only once
 nothing can be placed even on those does the node fail and ordinary
 backtracking resume. `released` is a plain `_backtrack` parameter, so it
@@ -1627,11 +1700,10 @@ clipped by the grid, `None` = whole grid;
 "failed" live-tile whitelist and `last_examples`; Java
 `Diag.attentionZone`); `renderAttemptPreview()` draws the zone's outline as bold dashed `.attention-edge` overlays, one per straight run
 (`attentionZoneEdges`).
-**Words per node** (`WORDS_PER_NODE` = 2, `<= 1` = one word; Java
+**Words per node** (`WORDS_PER_NODE` = 1, `<= 1` = one word; Java
 `Filler.WORDS_PER_NODE`) is the default of `generate_grid(words_per_node=)`
-(the web UI's "Mots par pose" field, right of "Méthode" and shown only while
-"Falcon (expérimental)" is selected, `syncWordsPerNodeVisibility`; default 2, `GenerateRequest.words_per_node`
-[1-`MAX_WORDS_PER_NODE`=50]), passed to the workers through the pool
+(`GenerateRequest.words_per_node` [1-`MAX_WORDS_PER_NODE`=50], which the web UI
+does not send), passed to the workers through the pool
 initializer (`_worker_words_per_node`) and on to `try_fill(words_per_node=)`
 -> `Filler.words_per_node` (Java `Generator.Params`/`Ctx.wordsPerNode`,
 `Fill.FillArgs.wordsPerNode`, `Filler.wordsPerNode`); every other `try_fill`
@@ -1652,20 +1724,20 @@ is filled, and above; integer arithmetic, identical in both back ends; Java
 `Filler.GROUP_SIZE_MIN_FILL_PERCENT`). Every preview carrying `attention_zone` also carries
 `words_per_pose` (`Filler.best_words_per_pose`, set with the record; the
 current node's `_group_size` on a heartbeat; Java `bestWordsPerPose`/
-`Diag.wordsPerPose`), shown as "N m/p" on the tile's stats line
-(`renderAttemptPreview`, i18n `attemptPreviewWordsPerPose`). Each step
+`Diag.wordsPerPose`), which the web UI does not show. Each step
 (`_extra_group_words`) each step takes the still-open slots of the
 selection's level-6 window (`last_selection_window`, read right after
 `_select_target_slot`; the "emplacements candidats") holding a free cell in
 the attention zone, or, when none has a candidate, those of the node's
 current stage pool (`primary`; both mapped through `forward` for a reshape),
-picks one by the cascade, and places the first word of its candidate order
+picks one by `_select_fill_slot`, and places the first word of its candidate order
 (`ordered_candidates`, Scrabble/theme/"Mots Défi" blocks; no reshape) that
 leaves no crossing slot blocked (`slot_is_blocked`, strict: never creating
 nor crossing an impossible slot, whatever the node's stage; a per-slot
 `options_cache`). It stops at the first slot with no such word, at a dry
 open slot, or on a budget/abandon/stop signal (the node then fails with an
-unknown conflict). Every word tried costs one check. Each extra word gets
+unknown conflict). Candidates are pruned like the node's own. Every word
+tried costs one check. Each extra word gets
 its own `_placement_seq` and letter re-tally; a failure below undoes the
 extras together, last first (`_undo_group`, skipping one a backghost or a
 hardclean already removed), before the node takes its own word off; a
@@ -2206,7 +2278,7 @@ broadened version of this exemption (`_word_breaks_open_slot`), but runs
 no search of its own to draw a `deadline_checks`-shaped budget from: it
 instead builds every geometrically-fitting (word, open slot) combination
 for the whole "Mots Défi" pool up front (`target`'s own slot tried first,
-then every other open slot, all ranked by the same statistical score/
+then every other open slot, all ranked by the same fill score/
 frequency the final word draw already used), sets `Filler._challenge_
 word_budget` accordingly, and walks the ranked list skipping any
 combination that would break a slot, reusing `Filler._register_
@@ -2260,9 +2332,11 @@ same domain-iteration cost that keeps `_crossing_deadlock_slots` out of
 **Floating black cells and reshapes**: a "Mots Défi" word — and a
 theme-glossary word while fewer than `THEME_RESHAPE_MAX_PLACED_WORDS` (5)
 distinct theme words are placed (`_placed_theme_words`/`_theme_reshape_
-allowed`) — that no empty slot of its own length can take (known letters
-incompatible everywhere) may get one carved out by changing "floating"
-black cells, i.e. any black cell not in `permanent_black_cells`. A
+allowed`), a cap on these black-cell changes only, since many moved black
+cells make a grid very hard to fill — may get a slot carved out by changing
+"floating" black cells (a "Mots Défi" word only when no empty slot of its own
+length can take it, known letters incompatible everywhere; a theme word even
+when one could), i.e. any black cell not in `permanent_black_cells`. A
 reshape is always tied to exactly one word and never outlives it; the
 pattern is never reshaped ahead of the search.
 
@@ -2274,7 +2348,7 @@ whenever `excluded_slots` is given).
 challenge words, challenge reshapes, theme words, theme reshapes, then the
 rest; `_reshape_candidates` picks at most `RESHAPE_WORDS_PER_NODE` (5)
 eligible words per family (other length than the slot, unused, still
-active, fitting no empty slot), and `_reshape_geometries`/`_reshape_
+active, and for "Mots Défi" fitting no empty slot), and `_reshape_geometries`/`_reshape_
 options` build each `_Reshape`: a shorter word gets a new black cell right
 past it, flush against either end of the slot; a longer word frees the
 black cell bounding one end, runs on into the white cells beyond it and
@@ -2322,7 +2396,19 @@ would leave a PERPENDICULAR slot with no real dictionary candidate
 (`_perpendicular_slot_stays_valid`/`_slot_has_domain`: freeing a cell
 merges it into the perpendicular slot(s) next to it, checked with its
 about-to-be-written letter applied; blackening one splits its
-perpendicular slot, each piece checked with the letters known there). The
+perpendicular slot, each piece checked with the letters known there). Both
+apply their change through `_apply_interactive_reshape` (Java `Cleanup.
+applyInteractiveReshape`), which, under `InteractiveStepRequest.symmetry` (the
+form's `#symmetry`, `interactive_place_word(symmetry=)`), extends it to every
+changed cell's images and refuses the option when two cells need opposite
+values, an image to blacken holds a letter (the word's included), the grid is
+no longer valid, or `_image_slots_stay_valid` fails: the word's span is no
+longer exactly a slot, or a slot an image altered has no candidate. Under
+`InteractiveStepRequest.pattern_style` "grouped" a reshape, here as in
+`Filler._reshape_options` (`try_fill(reshape_pattern_style=)`), must also pass
+`_reshape_keeps_style` (Java `Grids.reshapeKeepsStyle`): no new white run of 1 or
+2 cells, no blackened cell in a too-long black line or a pair parallel to a near
+border. An Interactive session's `generation_params` keeps `symmetry`. The
 theme tier passes `allow_reshape` from the theme words already on the
 grid and a `fits_reshaped` check keeping a reshaped theme word on a slot
 of its own glossary's direction. `WIDEN_PRIORITY_WORDS_LIMIT` caps the
@@ -2352,7 +2438,8 @@ the "Mots Défi" tier, and for the theme tier while fewer than
 `THEME_RESHAPE_MAX_PLACED_WORDS` theme words are placed (otherwise it
 passes `allow_reshape=False` and stops here), and only
 once every ordinary combo has failed, does it give each remaining word
-with no natural or ordinary slot anywhere its own, fully ISOLATED
+with no natural or ordinary slot anywhere (for the theme tier,
+`reshape_any_word`, any word of its pool) its own, fully ISOLATED
 widen-then-shorten attempt (`_try_reshape_for_word`, one independent copy
 of the base pattern per word, discarded immediately if unused — never a
 shared one), builds a brand-new, throwaway `Filler` from that ONE copy
@@ -2377,19 +2464,19 @@ one isolated reshape copy, for a "Mots Défi"/theme pick that needed one)
 straight into the real letter grid and writes the word's own letters in
 — no revert-unused-reshapes pass is needed any more, since nothing but
 the eventual winner's own single reshape (if any) was ever applied to
-begin with. Each tier has its own `target`, selected by the cascade
+begin with. Each tier has its own `target`, selected by the slot choice
 against that tier's own glossary only (`_tier_target`, through
-`_select_target_slot`'s `challenge_level`/`theme_level` switches): the
-"Mots Défi" tier with level 2 alone, the theme tier with level 5 alone,
+`_select_fill_slot`'s `challenge_level`/`theme_level` switches): the
+"Mots Défi" tier with the first alone, the theme tier with the second alone,
 the general dictionary with neither — so once a glossary tier fails, the
 next one re-evaluates the candidate slots instead of inheriting slots
 chosen for a glossary it does not apply. Each is resolved once per call,
 on first use, and reused at every acceptance level. The general-dictionary
-tier sweeps every still-open slot in the cascade's own order, levels 2
-and 5 off (`_cascade_slot_order`, its own target yielded first), not its
+tier sweeps every still-open slot in the slot choice's order, both switches
+off (`_slot_choice_order`, its own target yielded first), not its
 target alone; each swept slot
 orders its own candidates through `Filler.ordered_candidates` — the same
-shuffle/statistical-sort/sliding-window draw the automatic search uses,
+shuffle/fill-score-sort/sliding-window draw the automatic search uses,
 never a strict argmax, which would make "Suivant" return the same word on
 every click for a given grid state — and keeps the first acceptable one.
 A slot whose every
@@ -2418,19 +2505,15 @@ colour, automatic generation's own previews already use.
 
 Each "Suivant" also reports the slots the placed slot was drawn from —
 for the general-dictionary tier, the window of the sweep selection that
-yielded the slot actually placed on (`_cascade_slot_order` yields each
+yielded the slot actually placed on (`_slot_choice_order` yields each
 slot with its window), not the tier's first target when the sweep moved
 past it; for the "Mots Défi"/theme tiers, their target's (the last tier
 tried when nothing is placed):
-`Filler._select_target_slot` keeps its level-6 geometric window in
+`Filler._select_fill_slot` keeps its best 3 slots in
 `Filler.last_selection_window` (a plain attribute assignment, overwritten
 by every call), which `_tier_target` reads right after resolving that
-tier's target — before the tier-3 sweep re-runs the cascade — and turns into
-`window_cells` (`_origin_closest_cells`: for each window slot, its cell(s)
-closest to `_selection_origin` — in Interactive mode, the midpoint of
-the top-left corner and the center of the last word "Suivant" placed,
-see below — i.e. the cell that gives it its
-level-6 score, ties included). Threaded through `POST /api/interactive/step` (and
+tier's target — before the tier-3 sweep re-runs the choice — and turns into
+`window_cells` (`_slot_first_cells`: each slot's first cell). Threaded through `POST /api/interactive/step` (and
 the start job's result; empty on a resume) into `script.js`'s
 `interactiveWindowCells`, rendered as a blue outline
 (`.cell.white.interactive-window`, `outline` so it composes with every
@@ -2444,10 +2527,19 @@ incomplete; Java `App`'s step route). `_selected_slot_index` (Java
 `Interactive.selectedSlotIndex`) maps it to the slot with those exact
 cells when it still holds an empty cell. `interactive_place_word(selected_
 cells=)` (Java `placeWord(..., selectedCells)`) then first runs the three
-tiers on that slot alone (`viable` restricted to it, target = it,
-`allow_reshape=False`, then `_general_dictionary_pick` on it), at each
-acceptance level in turn, before the normal search; a word accepted there
-is placed, `window_cells` being that slot's origin-closest cell(s).
+tiers on that slot alone (`viable` restricted to it, target = it, then
+`_general_dictionary_pick` on it), at each acceptance level in turn, before
+the normal search; a word accepted there is placed, `window_cells` being
+that slot's origin-closest cell(s). In the "Mots Défi" tier, and the theme
+tier while `theme_reshape` holds (never inside a zone),
+`_find_priority_word_placement(reshape_slot=)` then tries every pool word of
+another length on that slot, even one with a free slot elsewhere, a refusal
+not counting against its budget and `WIDEN_PRIORITY_WORDS_LIMIT` only bounding
+the words a reshape fits: `_reshape_selected_slot` (Java `Cleanup.
+reshapeSelectedSlot`) frees the black cell bounding one end for a longer word,
+which must cover the whole slot, or casts a new black cell inside it for a
+shorter one (`_try_widen_black_cell`/`_try_shorten_slot`, symmetry and style
+checks included).
 `interactive_place_word_ingrid(selected_cells=)` (Java `placeWordIngrid(...,
 selectedCells)`), when the slot is a candidate slot, draws its words with
 `_pick_word` until one keeps arc consistency (refuting the others), then
@@ -2667,15 +2759,30 @@ always did (confirmed live: an early version without the sticky flag let
 an attempt with no racing sibling run to full, unconstrained completion
 instead of stopping within a handful of checks past its own deadline).
 
-**Fill method ("Méthode")**: `generate_grid(fill_method=)` (`FILL_METHODS`,
-default `FILL_METHOD_DEFAULT` "falcon"; `_worker_fill_method` through the
-pool initializer; `try_fill(fill_method=)`, passed only by `_pattern_
-attempt`/`_pattern_continue`, every other `try_fill` caller keeping
-"falcon"; Java `Generator.Params`/`Ctx.fillMethod`, `Fill.FillArgs.
-fillMethod`; CLI `--fill-method`; "ingrid" by default, the web UI's
-"Falcon (expérimental)" option being "falcon") picks the search a generation attempt
-fills its pattern with; Interactive "Suivant" follows the same selector
-(`InteractiveStepRequest.fill_method`, see "Ingrid-like Suivant" below). "ingrid" runs `IngridSolver(filler, deadline_
+**Fill method**: `generate_grid(fill_method=)` (`FILL_METHODS`,
+default `FILL_METHOD_DEFAULT` "auto"; `_worker_fill_method` through the
+pool initializer; `try_fill(fill_method=)`, passed by `_pattern_
+attempt`/`_pattern_continue`, `minimize_black_squares` always passing
+"ingrid", every other `try_fill` caller keeping "falcon"; Java `Generator.Params`/`Ctx.fillMethod`, `Fill.FillArgs.
+fillMethod`; CLI `--fill-method`) picks the search a generation attempt
+fills its pattern with; Interactive "Suivant" takes the method too
+(`InteractiveStepRequest.fill_method`, see "Ingrid-like Suivant" below). The web
+UI offers no choice and sends no method, so every fill is "auto", which is Falcon
+until more than `FALCON_PHASE_MAX_FILL_PERCENT` (15) % of the grid's white cells
+hold a letter, then Ingrid-like (`falcon_phase_over`, Java `IngridSolver.
+falconPhaseOver`). "Suivant" and `POST /api/interactive/impossible` decide per
+request from the letters of the posted grid (`resolve_fill_method`, Java
+`IngridSolver.resolveFillMethod`), and "falcon" and "ingrid" stay accepted by the
+API and the CLI. An attempt: `try_fill` goes straight to `IngridSolver` when
+`Filler._falcon_phase_over` (Java `falconPhaseOver`: its placed words' and locked
+letters' cells, `_known_cells`, over the pattern's white cells) is already true,
+otherwise runs `Filler.solve` with `ingrid_handoff`; that test, at every
+`_backtrack` entry, raises `_IngridHandoff` (Java `Filler.IngridHandoff`) once
+true, which unwinds with no undo: the Filler keeps the current slots, pattern,
+words and locked letters, every word placed so far staying placed for
+`IngridSolver`, which goes on with the attempt's `checks` and budget. The test runs
+again on each attempt, so a palier whose cleanup brought the grid back under the
+threshold goes back to Falcon. "ingrid" runs `IngridSolver(filler, deadline_
 checks).solve()` (Java `IngridSolver`) on the `Filler` `try_fill` built,
 instead of `mark_immediately_impossible_slots` + `Filler.solve`, with
 reshapes off; it reports through the Filler's own fields (`checks`,
@@ -2739,7 +2846,7 @@ removes its crossing words.
 
 **Ingrid-like "Suivant"** (`interactive_place_word_ingrid`, Java
 `Interactive.placeWordIngrid`, called by `POST /api/interactive/step` when
-its `fill_method` is "ingrid"): one `IngridSolver` decision per click,
+`resolve_fill_method` gives "ingrid"): one `IngridSolver` decision per click,
 everything recomputed from the posted grid (so letters and black cells
 changed by hand are always taken into account): `_build_interactive_
 filler` (fully lettered slots preassigned, the other letters locked),
@@ -2776,8 +2883,7 @@ direction's Scrabble set.
 "Interactif" word-by-word mode, all operating on a plain `grid`/`rows`/
 `cols`/`index` without any of the parallel-attempt machinery above):
 `interactive_place_word` (places exactly one more word — no backtracking
-for an ordinary candidate, reusing the same 9-level slot-selection
-cascade, except for the bounded "Mots Défi" crossing-safety retry
+for an ordinary candidate, reusing the same slot choice, except for the bounded "Mots Défi" crossing-safety retry
 described above, the one case where several (word, slot) combinations
 genuinely are tried in sequence before this call commits to one; it can
 carve out a right-sized slot for a "Mots Défi" word (or theme word, under
@@ -3495,7 +3601,10 @@ belongs to is disabled; a merged-file word not selected joins with
 score as usage, unless the lexicon is usage-selected and the score is
 below `USAGE_DIFFICULTY_MIN_SCORE`; a selected word keeps its row and
 takes the user score when its rank is below its Falcon glossaries' ranks.
-Glossary key: the lowest rank of the glossaries holding the word. A user word is no multi-word expression for the
+Glossary key: the lowest rank of the glossaries holding the word. An entry of
+the merged file, in the Falcon wordlists too or not, never counts against the
+proper-noun and no-gloss quotas (`generate_grid` removes `_user_lexicon_words`,
+Java `Words.userLexiconWords`, of both directions from the quota sets). A user word is no multi-word expression for the
 "Multi-mots max" cap and has no word breaks.
 
 ### `system_info.py`
@@ -3754,12 +3863,7 @@ cookie also holds the secret word, which is never logged.
   `#usage-stats-btn` toggles the `#usage-stats` panel (`loadUsageStats`/
   `renderUsageStats`: one row per language, a two-row header with a "Mots simples" column group (`usageStatsColSingle`, the single words only) then a "Multi-mots" one: one column per usage score,
   then the words rated 3 or more (`USAGE_STATS_MIN_SCORE`), then the total, then one column per difficulty (`level_totals`, headed by the `difficulty*` names; "Total ≥ 3" and "Facile" bold, `.usage-stats-strong`), then the "Multi-mots" column group (two-row header, `usageStatsColMulti`: glossary size, rated, rated ≥ 3, then one column per difficulty — `multi_total`/`multi_rated`/`multi_rated_min`/`multi_level_totals`), from `GET /api/usage_stats`; below it `renderUsageLengthStats`: per word length, one row per length, longest first, a "Mots simples" column group with one column per language, "rated 3 or more / easy lexicon" (single words) in each cell, then a "Multi-mots" column group, one column per language with expressions, the same count over them — `multi_length_counts`/`multi_easy_length_counts`); `#mode` lists only the budget modes (flash … gridzilla),
-  also read by "Finir la grille"/"Finir la zone"; right of it, the
-  localhost-only "Méthode" selector (`#fill-method`, `showFillMethodOnLocalhost`,
-  `readFillMethod`: "ingrid", the default, off localhost; options
-  "Falcon (expérimental)" and "Ingrid-like", the latter selected; sent as `fill_method` by
-  "Automatique", "Suivant" and "Finir la grille"/"Finir la zone", restored from
-  `generation_params` and a STOP_DUMP's request, `restoreFillMethod`).
+  also read by "Finir la grille"/"Finir la zone".
   While a playable grid is on screen (`displayFinalGrid`), the creation
   form is folded (`#generate-form.play-collapsed`, `setGenerateFormCollapsed`
   in `script.js`) behind a `#create-grid-btn` "Créer des mots croisés" button

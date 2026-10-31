@@ -459,6 +459,8 @@ public final class Fill {
         public Set<Integer> permanentBlackCells;
         /** Black-cell symmetry a reshape follows (mirrors try_fill's reshape_symmetry). */
         public String reshapeSymmetry;
+        /** Pattern style a reshape must keep (mirrors try_fill's reshape_pattern_style). */
+        public String reshapePatternStyle;
         /** Scrabble family of the candidate order (mirrors try_fill's scrabble_words). */
         public PW scrabbleWords;
         /** The search filling the grid (IngridSolver.FILL_METHODS, mirrors try_fill's fill_method), "falcon" by
@@ -581,6 +583,7 @@ public final class Fill {
         filler.permanentLockedLetters = a.permanentLocked == null ? Map.of() : a.permanentLocked;
         filler.permanentBlackCells = a.permanentBlackCells == null ? Set.of() : a.permanentBlackCells;
         filler.reshapeSymmetry = a.reshapeSymmetry;
+        filler.reshapePatternStyle = a.reshapePatternStyle;
         if (a.checksProgress != null && a.checksSlot != null) {
             final int slot = a.checksSlot;
             filler.onChecksProgress = checks -> a.checksProgress.set(slot, checks);
@@ -653,14 +656,23 @@ public final class Fill {
             for (String w : a.preseedAssignment) if (w != null) n++;
             filler.bestAssignedCount = n;
         }
-        boolean ingrid = "ingrid".equals(a.fillMethod);
-        boolean solvedInternally;
+        boolean ingrid = "ingrid".equals(a.fillMethod) || ("auto".equals(a.fillMethod) && filler.falconPhaseOver());
+        boolean solvedInternally = false;
+        if (!ingrid) {
+            filler.markImmediatelyImpossibleSlots();
+            filler.ingridHandoff = "auto".equals(a.fillMethod);
+            try {
+                solvedInternally = filler.solve(deadline);
+            } catch (Filler.IngridHandoff handoff) {
+                ingrid = true;
+                filler.attentionStep = null;
+                filler.bestAttentionStep = null;
+                filler.impossibleThisAttempt = new Filler.RecentSlots(Filler.MAX_EXCLUDED_SLOTS);
+            }
+        }
         if (ingrid) {
             filler.reshapeEnabled = false;
             solvedInternally = new IngridSolver(filler, deadline).solve();
-        } else {
-            filler.markImmediatelyImpossibleSlots();
-            solvedInternally = filler.solve(deadline);
         }
         // A failed search has undone every reshape, but its record may have
         // been taken on a reshaped grid: carry on from that grid, and hand its
@@ -782,21 +794,67 @@ public final class Fill {
                                                 Set<String> challengeWords) {
         return minimizeBlackSquares(grid, result, rows, cols, index, rng, deadlineChecks, cancelEvent, properNounWords,
                 maxProperNouns, nonGlossWords, maxNonGloss, priorityWords, permanentLocked, permanentBlack,
-                challengeWords, null, null);
+                challengeWords, null, null, null);
+    }
+
+    /** How long the optimization of finished grids may run (mirrors MINIMIZE_TIME_LIMIT_S), in seconds: past this
+     * System.nanoTime() deadline the grids keep the black cells removed so far, each being valid at every moment.
+     * Shared by every grid of one parallel pass. */
+    public static final int MINIMIZE_TIME_LIMIT_S = 30;
+
+    /** cell and the white cells of the across and down runs it bounds: the letters a removal of this black cell has
+     * to agree with (mirrors _black_cell_runs). */
+    static Set<Integer> blackCellRuns(char[][] grid, int rows, int cols, int cell) {
+        Set<Integer> cells = new HashSet<>();
+        cells.add(cell);
+        int[][] dirs = {{0, 1}, {0, -1}, {1, 0}, {-1, 0}};
+        for (int[] d : dirs) {
+            int nr = Cells.r(cell) + d[0], nc = Cells.c(cell) + d[1];
+            while (nr >= 0 && nr < rows && nc >= 0 && nc < cols && grid[nr][nc] != BLACK) {
+                cells.add(Cells.of(nr, nc));
+                nr += d[0];
+                nc += d[1];
+            }
+        }
+        return cells;
+    }
+
+    /** The cells a removal of the black cells group (already whitened in slots) lets the fill change: the slots
+     * through them and every slot crossing one of those (mirrors _minimize_free_cells). */
+    static Set<Integer> minimizeFreeCells(List<int[]> slots, Collection<Integer> group) {
+        Set<Integer> merged = new HashSet<>();
+        for (int[] cells : slots) {
+            boolean through = false;
+            for (int c : cells) if (group.contains(c)) through = true;
+            if (through) for (int c : cells) merged.add(c);
+        }
+        Set<Integer> free = new HashSet<>(merged);
+        for (int[] cells : slots) {
+            boolean crossing = false;
+            for (int c : cells) if (merged.contains(c)) crossing = true;
+            if (crossing) for (int c : cells) free.add(c);
+        }
+        return free;
     }
 
     /** symmetry: a black cell is only removed together with every black image of it, none of them permanent, the
-     * whole group tried at once; multiWordPercent (null = no limit): the cap every trial's tryFill applies (mirrors
-     * minimize_black_squares). */
+     * whole group tried at once; multiWordPercent (null = no limit): the cap every trial's tryFill applies;
+     * timeLimitNanos (System.nanoTime() value, null = MINIMIZE_TIME_LIMIT_S from now): past it no further removal is
+     * tried and the grid is returned as it stands. Every trial is a local repair by the Ingrid-like method, whatever
+     * the grid was filled with: only the slots through the removed cell and the slots crossing them may change
+     * (minimizeFreeCells), every other letter stays locked. A refused cell is tried again only after an accepted
+     * removal changed a letter of the runs it bounds (blackCellRuns). Mirrors minimize_black_squares. */
     public static Object[] minimizeBlackSquares(char[][] grid, Result result, int rows, int cols, DualIndex index,
                                                 Rng rng, long deadlineChecks, AtomicBoolean cancelEvent,
                                                 Set<String> properNounWords, Integer maxProperNouns,
                                                 Set<String> nonGlossWords, Integer maxNonGloss, PW priorityWords,
                                                 Map<Integer, Character> permanentLocked, Set<Integer> permanentBlack,
                                                 Set<String> challengeWords, String symmetry,
-                                                Integer multiWordPercent) {
+                                                Integer multiWordPercent, Long timeLimitNanos) {
         List<int[]> slots = result.slots();
         String[] assignment = result.assignment();
+        long limit = timeLimitNanos != null ? timeLimitNanos : System.nanoTime() + MINIMIZE_TIME_LIMIT_S * 1_000_000_000L;
+        Set<Integer> refused = new HashSet<>();
         boolean improved = true;
         while (improved) {
             improved = false;
@@ -805,8 +863,9 @@ public final class Fill {
             rng.shuffle(blacks);
             for (int cell : blacks) {
                 if (cancelEvent != null && cancelEvent.get()) throw new GenerationCancelled();
+                if (System.nanoTime() - limit >= 0) return new Object[]{grid, slots, assignment};
                 int r = Cells.r(cell), c = Cells.c(cell);
-                if (grid[r][c] != BLACK) continue;
+                if (grid[r][c] != BLACK || refused.contains(cell)) continue;
                 List<Integer> group = new ArrayList<>();
                 boolean blocked = false;
                 for (int g : Grids.blackGroup(rows, cols, cell, symmetry)) {
@@ -825,11 +884,18 @@ public final class Fill {
                             for (int p = 0; p < cells.length; p++) merged.put(cells[p], w.charAt(p));
                         }
                     }
+                    List<int[]> trialSlots = Grids.extractSlots(grid, rows, cols);
+                    Set<Integer> freeCells = minimizeFreeCells(trialSlots, group);
+                    Map<Integer, Character> letters = Cleanup.knownFromAssignment(slots, assignment, null);
+                    Map<Integer, Character> trialLocked = new LinkedHashMap<>();
+                    letters.forEach((k, v) -> {
+                        if (!freeCells.contains(k)) trialLocked.put(k, v);
+                    });
+                    trialLocked.putAll(merged);
                     String[] preseed = null;
-                    if (!merged.isEmpty()) {
-                        List<int[]> trialSlots = Grids.extractSlots(grid, rows, cols);
+                    if (!trialLocked.isEmpty()) {
                         preseed = new String[trialSlots.size()];
-                        for (int k = 0; k < trialSlots.size(); k++) preseed[k] = Grids.wordAt(trialSlots.get(k), merged);
+                        for (int k = 0; k < trialSlots.size(); k++) preseed[k] = Grids.wordAt(trialSlots.get(k), trialLocked);
                     }
                     FillArgs fa = new FillArgs();
                     fa.deadlineChecks = deadlineChecks;
@@ -839,9 +905,10 @@ public final class Fill {
                     fa.nonGlossWords = nonGlossWords;
                     fa.maxNonGloss = maxNonGloss;
                     fa.priorityWords = priorityWords;
-                    fa.lockedLetters = merged.isEmpty() ? null : merged;
+                    fa.lockedLetters = trialLocked.isEmpty() ? null : trialLocked;
                     fa.preseedAssignment = preseed;
                     fa.multiWordPercent = multiWordPercent;
+                    fa.fillMethod = "ingrid";
                     Result nr = tryFill(grid, rows, cols, index, rng, fa);
                     if (nr != null) {
                         boolean allReal = true;
@@ -860,12 +927,19 @@ public final class Fill {
                             }
                         }
                         if (allReal) {
+                            Map<Integer, Character> newLetters = Cleanup.knownFromAssignment(nr.slots(), nr.assignment(), null);
+                            Set<Integer> changed = new HashSet<>();
+                            newLetters.forEach((k, v) -> {
+                                if (!v.equals(letters.get(k))) changed.add(k);
+                            });
+                            refused.removeIf(b -> !java.util.Collections.disjoint(changed, blackCellRuns(grid, rows, cols, b)));
                             slots = nr.slots();
                             assignment = nr.assignment();
                             improved = true;
                             continue;
                         }
                     }
+                    refused.addAll(group);
                 }
                 for (int g : group) grid[Cells.r(g)][Cells.c(g)] = BLACK;
             }

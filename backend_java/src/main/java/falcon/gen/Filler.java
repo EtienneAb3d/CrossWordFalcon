@@ -83,6 +83,15 @@ public final class Filler {
     public static final boolean ZONE_CLEAN_ENABLED = true;
     public static final int PALIER_ATTEMPT_DONE_CHECK_INTERVAL = 500;
     public static final int CANDIDATE_SCORE_WINDOW = 200;
+    /** A word whose letter at a crossing no candidate of the crossing open slot carries is dropped from the slot's
+     * candidates before they are ordered, and costs no check (mirrors CANDIDATE_PRUNING_ENABLED). */
+    public static final boolean CANDIDATE_PRUNING_ENABLED = true;
+    /** Entries slotLetterLogs and slotCandidateCount keep per attempt, keyed by the known letters they depend on;
+     * emptied once they hold this many (mirrors LETTER_LOGS_MEMO_MAX, CANDIDATE_COUNT_MEMO_MAX). */
+    static final int LETTER_LOGS_MEMO_MAX = 4000;
+    static final int CANDIDATE_COUNT_MEMO_MAX = 50000;
+    /** candidateScore's term for a letter a crossing slot cannot take (mirrors CANDIDATE_UNSUPPORTED_LETTER_SCORE). */
+    public static final double CANDIDATE_UNSUPPORTED_LETTER_SCORE = -1e9;
     /** Share of a slot's candidates with a known usage score kept before the statistical ranking, the highest
      * usage scores first (mirrors USAGE_KEEP_PERCENT). */
     public static final int USAGE_KEEP_PERCENT = 60;
@@ -112,7 +121,7 @@ public final class Filler {
     // with the attention zone's fill rate (groupSize): WORDS_PER_NODE on an empty zone, down to 1 on a full one.
     // <= 1 places a single word per node. The default of Generator.Params.wordsPerNode/Fill.FillArgs.wordsPerNode,
     // which the web UI's "Mots par pose" field overrides (GenReq.wordsPerNode).
-    public static final int WORDS_PER_NODE = 2;
+    public static final int WORDS_PER_NODE = 1;
     // Maximum share (percent) of multi-word expressions (rows of the multi-word wordlist, Words.ROW_SOURCE_MULTI)
     // among the words placed (mirrors MULTI_WORD_PERCENT): while the expressions placed exceed it, orderedCandidates
     // drops every expression from a slot's candidates (multiWordsBlocked); 0 forbids them, 100 (or null) sets no
@@ -236,7 +245,17 @@ public final class Filler {
     public final Map<Integer, int[]> letterScores;
     boolean[] slotAcross;
     List<Object> bestStatLetters;
-    /** Level 6's geometric window of the last selectTargetSlot call (mirrors last_selection_window). */
+    /** Crossing weights of the slot choice, by cell (1.0 when absent), kept for the whole attempt, restarts and reshapes
+     * included: a cell outlives the renumbering of the slots (mirrors _cell_weights). */
+    final Map<Integer, Double> cellWeights = new HashMap<>();
+    /** See LETTER_LOGS_MEMO_MAX. Keyed by content, never by slot index, so a reshape and its undo leave them valid. */
+    final Map<String, double[][]> letterLogsMemo = new HashMap<>();
+    final Map<String, Integer> candidateCountMemo = new HashMap<>();
+    /** Cells of the slot selectFillSlot last chose: a reshape and its undo renumber the slots (mirrors
+     * _last_chosen_cells). */
+    int[] lastChosenCells = null;
+    /** The slots the last selectFillSlot call drew from, or level 6's geometric window of the last selectTargetSlot
+     * call (mirrors last_selection_window). */
     public List<Integer> lastSelectionWindow = new ArrayList<>();
     /** Cells of the last word Interactive mode's "Suivant" placed, set by
      *  Interactive.placeWord: selectionOrigin's fallback before the top-left
@@ -254,6 +273,8 @@ public final class Filler {
     public Set<Integer> permanentBlackCells = Set.of();
     /** Black-cell symmetry a reshape follows (mirrors reshape_symmetry, {@link #symmetricReshapeChanges}). */
     public String reshapeSymmetry;
+    /** Pattern style a reshape must keep (mirrors reshape_pattern_style, Grids.reshapeKeepsStyle). */
+    public String reshapePatternStyle;
     /** The slot list and pattern bestAssignment is indexed on. */
     public List<int[]> bestSlots;
     public char[][] bestPattern;
@@ -664,9 +685,13 @@ public final class Filler {
                 if (dry || !domains.isEmpty()) break;
             }
             if (dry || domains.isEmpty()) return false;
-            int k = selectTargetSlot(new ArrayList<>(domains.keySet()), domains);
+            Map<Integer, double[][]> crossingCache = new HashMap<>();
+            int k = selectFillSlot(new ArrayList<>(domains.keySet()), domains, true, true, crossingCache);
             tried.add(k);
-            List<String> cands = orderedCandidates(k, domains.get(k).minus(usedWords));
+            Crossing[] crossing = crossingLetterCounts(k, active, crossingCache);
+            List<String> cands = pruneCandidates(k, domains.get(k).minus(usedWords), crossing, active, null,
+                    new HashSet<>());
+            cands = orderedCandidates(k, cands, crossing);
             cands = scrabbleFirst(k, cands);
             if (!priorityWords.isEmpty()) {
                 Set<String> pw = activePriorityWordsFor(slots.get(k));
@@ -907,16 +932,333 @@ public final class Filler {
         });
     }
 
-    /** Square root of the sum of the squares of the word's per-cell statistical scores. */
-    public double candidateScore(int i, String word) {
-        int[] cells = slots.get(i);
-        long total = 0;
-        for (int p = 0; p < cells.length; p++) {
-            if (cellFixedByCrosser(i, p)) continue;
-            long v = Tally.get(letterScores.get(cells[p]), word.charAt(p));
-            total += v * v;
+    /** The still-open slot crossing a cell, with log10 of its number of candidates per letter (Alpha id) at the
+     * shared cell, NaN for a letter none carries. */
+    record Crossing(int slot, int position, double[] logs) {
+        /** The letter's log10, or NaN when no candidate carries it. */
+        double logOf(char ch) {
+            int id = Alpha.idOrMinus(ch);
+            return id < 0 || id >= logs.length ? Double.NaN : logs[id];
         }
-        return Math.sqrt(total);
+    }
+
+    /** What each cell of slot {@code i} leaves its crossing slot, one entry per position; null for a cell with no
+     * still-open crossing slot, or whose slot has no candidate at all (mirrors Filler._crossing_letter_counts). */
+    public Crossing[] crossingLetterCounts(int i, Collection<String> challenge) {
+        return crossingLetterCounts(i, challenge, null);
+    }
+
+    /** {@code cache} (valid for one state of the grid) memoises each slot. */
+    Crossing[] crossingLetterCounts(int i, Collection<String> challenge, Map<Integer, double[][]> cache) {
+        int[] cells = slots.get(i);
+        Crossing[] crossing = new Crossing[cells.length];
+        for (int p = 0; p < cells.length; p++) {
+            for (int[] e : cellToSlots.get(cells[p])) {
+                int j = e[0];
+                if (j == i || assignment[j] != null || excludedSlots.contains(j)) continue;
+                double[][] byPos = cache != null ? cache.get(j) : null;
+                if (byPos == null) {
+                    byPos = slotLetterLogs(j, challenge);
+                    if (cache != null) cache.put(j, byPos);
+                }
+                if (byPos[e[1]].length > 0) crossing[p] = new Crossing(j, e[1], byPos[e[1]]);
+            }
+        }
+        return crossing;
+    }
+
+    /** The memo key of slot {@code j}'s known letters; bilingual grids use one index per direction. */
+    String knownLettersKey(int j) {
+        return (slotAcross[j] ? "A" : "D") + knownLettersSignature(j);
+    }
+
+    /** Per position of slot {@code j}, log10 of its candidates per letter (Alpha id), NaN for a letter none carries, an
+     * empty array when none has any: its domain (used words included: a letter only they carry is left to the
+     * per-candidate crossing check) plus the fitting {@code challenge} words. Without challenge words, kept per known
+     * letters (mirrors Filler._slot_letter_logs). */
+    double[][] slotLetterLogs(int j, Collection<String> challenge) {
+        boolean memoised = challenge == null || challenge.isEmpty();
+        String key = null;
+        if (memoised) {
+            key = knownLettersKey(j);
+            double[][] known = letterLogsMemo.get(key);
+            if (known != null) return known;
+        }
+        int[] cells = slots.get(j);
+        Dom d = domain(j, true);
+        LenIndex idx = index.forCells(cells).get(cells.length);
+        int[][] counts;
+        if (idx != null && d.isFull()) {
+            counts = idx.blankCounts();
+        } else {
+            counts = new int[cells.length][Alpha.size()];
+            for (String w : d) {
+                for (int p = 0; p < cells.length; p++) counts[p][Alpha.id(w.charAt(p))]++;
+            }
+        }
+        if (!memoised) {
+            int[][] copy = new int[counts.length][];
+            for (int p = 0; p < counts.length; p++) copy[p] = Arrays.copyOf(counts[p], Alpha.size());
+            counts = copy;
+            for (String cw : challenge) {
+                if (!usedWords.contains(cw) && challengeWordFits(j, cw)) {
+                    for (int p = 0; p < cw.length(); p++) {
+                        int id = Alpha.id(cw.charAt(p));
+                        if (id >= counts[p].length) counts[p] = Arrays.copyOf(counts[p], id + 1);
+                        counts[p][id]++;
+                    }
+                }
+            }
+        }
+        double[][] logs = new double[counts.length][];
+        for (int p = 0; p < counts.length; p++) {
+            double[] at = new double[counts[p].length];
+            boolean any = false;
+            for (int id = 0; id < at.length; id++) {
+                at[id] = counts[p][id] > 0 ? Math.log10(counts[p][id]) : Double.NaN;
+                any |= counts[p][id] > 0;
+            }
+            logs[p] = any ? at : new double[0];
+        }
+        if (memoised) {
+            if (letterLogsMemo.size() >= LETTER_LOGS_MEMO_MAX) {
+                letterLogsMemo.clear();
+                candidateCountMemo.clear();
+            }
+            letterLogsMemo.put(key, logs);
+        }
+        return logs;
+    }
+
+    /** {@code words} minus those carrying, at some cell, a letter no candidate of the crossing slot has, order kept;
+     * the crossing slots that pruned at least one are added to {@code blocking}. A "Mots Défi" or theme-glossary word
+     * is kept. With {@code baseline}, only a slot in it prunes (mirrors Filler._prune_candidates). */
+    List<String> pruneCandidates(int i, List<String> words, Crossing[] crossing, Collection<String> challenge,
+                                 Map<Integer, Dom> baseline, Set<Integer> blocking) {
+        if (!CANDIDATE_PRUNING_ENABLED) return words;
+        Set<String> theme = priorityWords.isEmpty() ? Set.of() : activePriorityWordsFor(slots.get(i));
+        List<String> kept = new ArrayList<>(words.size());
+        for (String w : words) {
+            boolean pruned = false;
+            if (!challenge.contains(w) && !theme.contains(w)) {
+                for (int p = 0; p < crossing.length; p++) {
+                    Crossing c = crossing[p];
+                    if (c != null && (baseline == null || baseline.containsKey(c.slot()))
+                            && Double.isNaN(c.logOf(w.charAt(p)))) {
+                        blocking.add(c.slot());
+                        pruned = true;
+                    }
+                }
+            }
+            if (!pruned) kept.add(w);
+        }
+        return kept;
+    }
+
+    /** Number of candidates slot {@code i} keeps after the pruning: {@code d} minus the words the crossings prune and
+     * the used words, plus the fitting {@code challenge} words it lacks. The part before the used words is kept per
+     * known letters of the slot and of its crossings (mirrors Filler._slot_candidate_count). */
+    int slotCandidateCount(int i, Dom d, Crossing[] crossing, Collection<String> challenge) {
+        int count = 0;
+        LenIndex idx = d.idx;
+        boolean noChallenge = challenge == null || challenge.isEmpty();
+        if (idx != null && !d.isEmpty()) {
+            String key = null;
+            Integer known = null;
+            if (noChallenge) {
+                StringBuilder sb = new StringBuilder(knownLettersKey(i));
+                for (Crossing c : crossing) {
+                    sb.append('|');
+                    if (c != null) sb.append(knownLettersKey(c.slot())).append(c.position());
+                }
+                key = sb.toString();
+                known = candidateCountMemo.get(key);
+            }
+            if (known != null) {
+                count = known;
+            } else {
+                BitSet pruned = null;
+                if (CANDIDATE_PRUNING_ENABLED) {
+                    for (int p = 0; p < crossing.length; p++) {
+                        if (crossing[p] == null) continue;
+                        double[] logs = crossing[p].logs();
+                        BitSet[] atPos = idx.pos[p];
+                        for (int a = 0; a < atPos.length; a++) {
+                            if (atPos[a] != null && (a >= logs.length || Double.isNaN(logs[a]))) {
+                                if (pruned == null) pruned = new BitSet(idx.size());
+                                pruned.or(atPos[a]);
+                            }
+                        }
+                    }
+                }
+                count = d.countOutside(pruned);
+                if (key != null) {
+                    if (candidateCountMemo.size() >= CANDIDATE_COUNT_MEMO_MAX) candidateCountMemo.clear();
+                    candidateCountMemo.put(key, count);
+                }
+            }
+            for (String u : usedWords) {
+                if (!d.contains(u)) continue;
+                boolean kept = true;
+                if (CANDIDATE_PRUNING_ENABLED) {
+                    for (int p = 0; p < crossing.length && kept; p++) {
+                        kept = crossing[p] == null || !Double.isNaN(crossing[p].logOf(u.charAt(p)));
+                    }
+                }
+                if (kept) count--;
+            }
+        }
+        if (!noChallenge) {
+            for (String cw : challenge) {
+                if (!d.contains(cw) && !usedWords.contains(cw) && challengeWordFits(i, cw)) count++;
+            }
+        }
+        return count;
+    }
+
+    /** Sum of the crossing weights of slot {@code i}'s crossings with a still-open slot (mirrors Filler._slot_weight). */
+    double slotWeight(int i) {
+        double weight = 0.0;
+        for (int cell : slots.get(i)) {
+            for (int[] e : cellToSlots.get(cell)) {
+                if (e[0] != i && assignment[e[0]] == null && !excludedSlots.contains(e[0])) {
+                    weight += cellWeights.getOrDefault(cell, 1.0);
+                }
+            }
+        }
+        return weight;
+    }
+
+    public int selectFillSlot(List<Integer> unassigned, Map<Integer, Dom> domains, boolean challengeLevel,
+                              boolean themeLevel) {
+        return selectFillSlot(unassigned, domains, challengeLevel, themeLevel, new HashMap<>());
+    }
+
+    /** The slot to fill among {@code unassigned}, chosen like IngridSolver.chooseSlot: those holding an unused "Mots
+     * Défi" word when there are some, then those holding a theme word, then the lowest dom/wdeg priority — the
+     * candidates kept after the pruning over the weights of the crossings with a still-open slot (infinite with none).
+     * The slot chosen last is kept while within the adaptive-branching threshold of the best, else a weighted random
+     * pick among the best 3, ties in random order; those 3 are left in lastSelectionWindow (mirrors
+     * Filler._select_fill_slot). */
+    int selectFillSlot(List<Integer> unassigned, Map<Integer, Dom> domains, boolean challengeLevel, boolean themeLevel,
+                       Map<Integer, double[][]> crossingCache) {
+        List<Integer> pool = new ArrayList<>(unassigned);
+        Set<String> active = activeChallengeWords();
+        if (challengeLevel && !active.isEmpty()) {
+            List<Integer> fitting = new ArrayList<>();
+            for (int i : pool) if (challengeCanFill(i, active)) fitting.add(i);
+            if (!fitting.isEmpty()) pool = fitting;
+        }
+        if (themeLevel && !priorityWords.isEmpty()) {
+            List<Integer> themed = new ArrayList<>();
+            for (int i : pool) {
+                Dom d = domains.get(i);
+                for (String w : activePriorityWordsFor(slots.get(i))) {
+                    if (!usedWords.contains(w) && d != null && d.contains(w)) {
+                        themed.add(i);
+                        break;
+                    }
+                }
+            }
+            if (!themed.isEmpty()) pool = themed;
+        }
+        Map<Integer, Double> priorities = new HashMap<>();
+        for (int i : pool) {
+            double weight = slotWeight(i);
+            Crossing[] crossing = crossingLetterCounts(i, active, crossingCache);
+            int count = slotCandidateCount(i, domains.get(i), crossing, active);
+            priorities.put(i, weight > 0 ? count / weight : Double.POSITIVE_INFINITY);
+        }
+        rng.shuffle(pool);
+        pool.sort(Comparator.comparingDouble(priorities::get));
+        int k = Math.min(pool.size(), IngridSolver.RANDOM_SLOT_WEIGHTS.length);
+        lastSelectionWindow = new ArrayList<>(pool.subList(0, k));
+        Integer chosen = null;
+        if (lastChosenCells != null) {
+            for (int i : pool) {
+                if (Arrays.equals(slots.get(i), lastChosenCells)) {
+                    if (priorities.get(i) - priorities.get(pool.get(0))
+                            < IngridSolver.ADAPTIVE_BRANCHING_THRESHOLD) chosen = i;
+                    break;
+                }
+            }
+        }
+        if (chosen == null) {
+            int total = 0;
+            for (int t = 0; t < k; t++) total += IngridSolver.RANDOM_SLOT_WEIGHTS[t];
+            int draw = rng.randrange(total), pick = 0;
+            while (draw >= IngridSolver.RANDOM_SLOT_WEIGHTS[pick]) draw -= IngridSolver.RANDOM_SLOT_WEIGHTS[pick++];
+            chosen = pool.get(pick);
+        }
+        lastChosenCells = slots.get(chosen);
+        return chosen;
+    }
+
+    /** Age every crossing weight and add {@code updates} (mirrors Filler._learn_cell_weights). */
+    void learnCellWeights(Map<Integer, Double> updates) {
+        Set<Integer> cells = new HashSet<>(cellWeights.keySet());
+        cells.addAll(updates.keySet());
+        for (int cell : cells) {
+            cellWeights.put(cell, 1.0 + (cellWeights.getOrDefault(cell, 1.0) - 1.0) * IngridSolver.WEIGHT_AGE_FACTOR
+                    + updates.getOrDefault(cell, 0.0));
+        }
+    }
+
+    /** Slot {@code i} has no candidate left: its crossings with a placed word share one unit of weight, each in
+     * proportion to the words of the length its letter excludes (mirrors Filler._learn_dry_slot). */
+    void learnDrySlot(int i) {
+        int[] cells = slots.get(i);
+        LenIndex idx = index.forCells(cells).get(cells.length);
+        if (idx == null) return;
+        Map<Integer, Double> shares = new HashMap<>();
+        double whole = 0.0;
+        for (int p = 0; p < cells.length; p++) {
+            for (int[] e : cellToSlots.get(cells[p])) {
+                if (e[0] != i && assignment[e[0]] != null) {
+                    BitSet members = idx.at(p, assignment[e[0]].charAt(e[1]));
+                    double share = 1.0 - (members == null ? 0 : members.cardinality()) / (double) idx.size();
+                    shares.put(cells[p], share);
+                    whole += share;
+                }
+            }
+        }
+        if (whole <= 0) return;
+        final double sum = whole;
+        shares.replaceAll((cell, share) -> share / sum);
+        learnCellWeights(shares);
+    }
+
+    /** Every candidate of slot {@code i} was refused for blocking {@code blocked}: their crossings with {@code i} share
+     * one unit of weight (mirrors Filler._learn_rejected_slot). */
+    void learnRejectedSlot(int i, Set<Integer> blocked) {
+        List<Integer> cells = new ArrayList<>();
+        for (int cell : slots.get(i)) {
+            for (int[] e : cellToSlots.get(cell)) {
+                if (e[0] != i && blocked.contains(e[0])) {
+                    cells.add(cell);
+                    break;
+                }
+            }
+        }
+        if (cells.isEmpty()) return;
+        Map<Integer, Double> updates = new HashMap<>();
+        for (int cell : cells) updates.put(cell, 1.0 / cells.size());
+        learnCellWeights(updates);
+    }
+
+    /** Fill score of {@code word}: the mean, over its letters, of log10 of the number of candidates the crossing slot
+     * keeps with that letter at the shared cell, 0 for a cell with no open crossing slot and
+     * CANDIDATE_UNSUPPORTED_LETTER_SCORE for a letter the crossing slot cannot take (mirrors
+     * Filler._candidate_score). */
+    public double candidateScore(String word, Crossing[] crossing) {
+        double fill = 0.0;
+        for (int p = 0; p < crossing.length; p++) {
+            if (crossing[p] != null) {
+                double log = crossing[p].logOf(word.charAt(p));
+                fill += Double.isNaN(log) ? CANDIDATE_UNSUPPORTED_LETTER_SCORE : log;
+            }
+        }
+        return fill / word.length();
     }
 
     /** {@code cands} (already ordered) stably split into the words of slot i's own Scrabble dictionary first,
@@ -971,11 +1313,15 @@ public final class Filler {
         return out;
     }
 
-    /** Shuffle, rank by statistical score divided by (1 + times the word was already placed on this
-     * slot), then take each pick from a sliding window of the CANDIDATE_SCORE_WINDOW best remaining words: the
+    public List<String> orderedCandidates(int i, Collection<String> candsIn) {
+        return orderedCandidates(i, candsIn, null);
+    }
+
+    /** Shuffle, rank by fill score ({@code crossing}, or crossingLetterCounts) divided by (1 + times the word was
+     * already placed on this slot), then take each pick from a sliding window of the CANDIDATE_SCORE_WINDOW best remaining words: the
      * window is re-sorted by frequency in the freq wordlist (highest first, 0 for a word absent from it, ties
      * keeping the score order) and the pick is drawn at random among its CANDIDATE_FREQ_WINDOW most frequent. */
-    public List<String> orderedCandidates(int i, Collection<String> candsIn) {
+    public List<String> orderedCandidates(int i, Collection<String> candsIn, Crossing[] crossingIn) {
         List<String> cands = new ArrayList<>(candsIn);
         rng.shuffle(cands);
         if (multiWordsBlocked()) {
@@ -986,13 +1332,14 @@ public final class Filler {
         }
         cands = usageFiltered(i, cands);
         if (letterScores.isEmpty()) return cands;
+        Crossing[] crossing = crossingIn != null ? crossingIn : crossingLetterCounts(i, activeChallengeWords());
         int n = cands.size();
         double[] scores = new double[n];
         Integer[] order = new Integer[n];
         Map<String, Integer> tried = triedWords.getOrDefault(Arrays.toString(slots.get(i)), Map.of());
         for (int k = 0; k < n; k++) {
             String w = cands.get(k);
-            scores[k] = candidateScore(i, w) / (1 + tried.getOrDefault(w, 0));
+            scores[k] = candidateScore(w, crossing) / (1 + tried.getOrDefault(w, 0));
             order[k] = k;
         }
         Arrays.sort(order, (a, b) -> Double.compare(scores[b], scores[a]));
@@ -1389,6 +1736,9 @@ public final class Filler {
             char[][] newPattern = Grids.copy(pattern);
             changes.forEach((cell, v) -> newPattern[Cells.r(cell)][Cells.c(cell)] = v);
             if (!Grids.isStructurallyValid(newPattern, rows, cols, 1)) continue;
+            List<Integer> blackened = new ArrayList<>();
+            for (Map.Entry<Integer, Character> e : changes.entrySet()) if (e.getValue() == Grids.BLACK) blackened.add(e.getKey());
+            if (!Grids.reshapeKeepsStyle(pattern, newPattern, rows, cols, blackened, reshapePatternStyle)) continue;
             List<int[]> newSlots = Grids.extractSlots(newPattern, rows, cols);
             Map<Cells.Key, Integer> newIndex = new HashMap<>();
             for (int j = 0; j < newSlots.size(); j++) newIndex.put(Cells.key(newSlots.get(j)), j);
@@ -1406,6 +1756,23 @@ public final class Filler {
     }
 
     /** Mirrors _reshape_candidates. */
+    /** Raised by backtrack under the "auto" fill method (mirrors _IngridHandoff): unwinds the search with no undo. */
+    public static final class IngridHandoff extends RuntimeException {
+        IngridHandoff() {
+            super(null, null, false, false);
+        }
+    }
+
+    /** "auto" fill method: backtrack hands the grid over to IngridSolver once falconPhaseOver says so. */
+    public boolean ingridHandoff = false;
+
+    /** IngridSolver.falconPhaseOver on the grid as it stands (mirrors _falcon_phase_over). */
+    public boolean falconPhaseOver() {
+        int white = 0;
+        for (char[] row : pattern) for (char cell : row) if (cell != Grids.BLACK) white++;
+        return IngridSolver.falconPhaseOver(knownCells().size(), white);
+    }
+
     List<Reshape> reshapeCandidates(int i, String family, Set<String> active) {
         List<Reshape> out = new ArrayList<>();
         Collection<String> source;
@@ -1440,7 +1807,7 @@ public final class Filler {
                     break;
                 }
             }
-            if (!fits) kept.add(w);
+            if (!fits || !family.equals("challenge")) kept.add(w);
         }
         java.util.Collections.sort(kept);
         rng.shuffle(kept);
@@ -2247,6 +2614,7 @@ public final class Filler {
             return false;
         }
         if (periodicCheckpoints()) return false;
+        if (ingridHandoff && falconPhaseOver()) throw new IngridHandoff();
         List<Integer> unassigned = new ArrayList<>();
         int assignedCount = 0;
         for (int i = 0; i < assignment.length; i++) {
@@ -2278,6 +2646,7 @@ public final class Filler {
             if (d.allIn(usedWords) && !challengeCanFill(i, active)) {
                 impossibleThisAttempt.add(i);
                 if (!toleratedDry.contains(i)) {
+                    learnDrySlot(i);
                     return failOrBackghost(drySlotConflict(i), deadlineChecks, released, entryAttention);
                 }
                 continue;
@@ -2381,12 +2750,35 @@ public final class Filler {
                 return failOrBackghost(conflictUnknown ? null : nodeConflict, deadlineChecks, entryReleased,
                         entryAttention);
             }
-            int bestI = selectTargetSlot(avail, domains);
+            // Memoises the crossing counts for this selection and this slot's pruning: a backghost below may change
+            // the grid between two selections of the node.
+            Map<Integer, double[][]> crossingCache = new HashMap<>();
+            int bestI = selectFillSlot(avail, domains, true, true, crossingCache);
             // The "emplacements candidats" the extra words of this node's group are placed on first.
             List<Integer> window = lastSelectionWindow;
             List<Integer> pool = primary;
             triedSlots.add(bestI);
-            List<String> cands = orderedCandidates(bestI, domains.get(bestI).minus(usedWords));
+            boolean placedAny = false;
+            boolean blameableRejection = false;
+            Set<Integer> slotConflict = new HashSet<>();
+            // Crossing slots the refusals of this slot's candidates blocked.
+            Set<Integer> blockedSlots = new HashSet<>();
+            Crossing[] crossing = crossingLetterCounts(bestI, active, crossingCache);
+            List<String> cands = domains.get(bestI).minus(usedWords);
+            if (!allowBreaking) {
+                // A pruned word blocks a slot that is still healthy (the domains baseline), like a crossingBroken
+                // rejection.
+                Set<Integer> blocking = new HashSet<>();
+                cands = pruneCandidates(bestI, cands, crossing, active, domains, blocking);
+                if (!blocking.isEmpty()) {
+                    blameableRejection = true;
+                    blockedSlots.addAll(blocking);
+                    slotConflict.addAll(assignedCrossers(bestI));
+                    for (int j : blocking) slotConflict.addAll(assignedCrossers(j));
+                    slotConflict.remove(bestI);
+                }
+            }
+            cands = orderedCandidates(bestI, cands, crossing);
             // Scrabble family: ahead of the rest of the general dictionary; the theme block and the "Mots Défi"
             // below are then pulled ahead of both.
             cands = scrabbleFirst(bestI, cands);
@@ -2415,9 +2807,6 @@ public final class Filler {
                     cands = merged;
                 }
             }
-            boolean placedAny = false;
-            boolean blameableRejection = false;
-            Set<Integer> slotConflict = new HashSet<>();
             int[] crossers = crossingSlots[bestI];
             // Each family's reshape candidates right after that family's own words.
             Iterator<?> stream = reshapeEnabled
@@ -2496,6 +2885,7 @@ public final class Filler {
                 boolean rejected = crossingStillImpossible || (crossingBroken && !allowBreaking);
                 if (rejected && crossingBroken) {
                     blameableRejection = true;
+                    blockedSlots.addAll(brokenSlots);
                     Set<Integer> ac = assignedCrossers(bestI);
                     ac.remove(bestI);
                     slotConflict.addAll(ac);
@@ -2555,6 +2945,7 @@ public final class Filler {
             }
             if (!placedAny) {
                 impossibleThisAttempt.add(bestI);
+                if (blameableRejection) learnRejectedSlot(bestI, blockedSlots);
                 if (blameableRejection && !breakingPermitted) {
                     return failOrBackghost(slotConflict, deadlineChecks, entryReleased, entryAttention);
                 }

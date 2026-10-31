@@ -316,30 +316,6 @@
           </select>
         </label>
 
-        <!-- "Méthode": the search the attempts fill their grid with
-             (GenerateRequest.fill_method, crossword_gen.py's FILL_METHODS:
-             Ingrid-like, IngridSolver, the default, or the experimental
-             Falcon). Shown on localhost only (script.js's
-             showFillMethodOnLocalhost); elsewhere "ingrid" is sent. -->
-        <label for="fill-method" id="fill-method-field" hidden>
-          <span data-i18n="fillMethodLabel">Méthode</span>
-          <select id="fill-method" name="fill_method">
-            <option value="falcon" data-i18n="fillMethodFalcon">Falcon (expérimental)</option>
-            <option value="ingrid" selected data-i18n="fillMethodIngrid">Ingrid-like</option>
-          </select>
-        </label>
-
-        <!-- "Mots par pose": the most words a search node places at once,
-             on an empty attention zone (GenerateRequest.words_per_node,
-             crossword_gen.py's WORDS_PER_NODE; decreasing to 1 as the zone
-             fills, Filler._group_size). Only used by the Falcon method:
-             shown right of "Méthode" while it is selected, hidden otherwise
-             (script.js's syncWordsPerNodeVisibility). -->
-        <label for="words-per-node" id="words-per-node-field" hidden>
-          <span data-i18n="wordsPerNodeLabel">Mots par pose</span>
-          <input type="number" id="words-per-node" name="words_per_node"
-                 min="1" max="50" step="1" value="2">
-        </label>
       </div>
       <!-- "Générer les mots croisés :" row, the form's last line: one button
            per way of building the grid, then the tool buttons.

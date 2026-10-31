@@ -210,12 +210,12 @@ plusieurs signaux) :
   certain nombre de mots sont possibles. Affiché en orange dans les grilles
   (`frontend/static/style.css`, `.attempt-preview-grid .cell.white.low-candidates`).
   Le seuil dépend du contexte : `PREFILL_MIN_WORD_COUNT` en mode Interactif
-  et dans la cascade de sélection d'emplacement,
+  et dans la cascade du premier mot de la méthode Ingrid-like,
   `PREFILL_LOCKED_MIN_WORD_COUNT` sur la prévisualisation du motif de cases
   noires, qui ne considère que les emplacements partiellement verrouillés.
   (`backend/crossword_gen.py`, `_low_candidate_slot_cells`,
-  `_interactive_fill_diagnostics`'s `low_candidate_cells`, cascade de
-  sélection d'emplacement.)
+  `_interactive_fill_diagnostics`'s `low_candidate_cells`,
+  `Filler._select_target_slot`.)
 
 - **Case croisée injouable** : case à l'intersection de deux emplacements
   pour laquelle aucune lettre n'est commune aux mots réellement *jouables*
@@ -282,28 +282,36 @@ plusieurs signaux) :
 
 ## Choix des mots
 
+- **Réparation locale** : le remplissage que l'optimisation finale tente après
+  avoir retiré une case noire d'une grille terminée. Seuls les emplacements
+  passant par cette case et ceux qui les croisent peuvent changer, toute autre
+  lettre restant verrouillée, et la méthode est toujours Ingrid-like
+  (`backend/crossword_gen.py`, `minimize_black_squares`,
+  `_minimize_free_cells`).
+
 - **Méthode de remplissage** : la recherche qu'une tentative applique à
-  son motif, choisie par le sélecteur **Méthode** du formulaire (visible
-  en local seulement). **Ingrid-like** (par défaut) et **Falcon
-  (expérimental)**, la recherche avec retour en arrière décrite dans ce
-  document. **Ingrid-like** est une
+  son motif. « Automatique », « Finir la grille », « Finir la zone » et le bouton
+  **Suivant** emploient Falcon jusqu'à ce que plus de 15 % des cases blanches
+  portent une lettre, puis Ingrid-like sur la grille atteinte
+  (`falcon_phase_over`, `Filler._falcon_phase_over`, `resolve_fill_method`). **Ingrid-like** et **Falcon**, la recherche avec retour en arrière décrite dans ce
+  document, qui peut modifier les cases noires pour placer un mot prioritaire. **Ingrid-like** est une
   recherche inspirée du remplisseur Ingrid : cohérence d'arc maintenue sur
   tous les domaines, emplacement choisi par *dom/wdeg*, ordre des mots
   fixé une fois par emplacement, redémarrages avec poids de croisement
-  appris. Le bouton **Suivant** du mode Interactif suit le même
-  sélecteur (`interactive_place_word_ingrid`). Les deux partagent le
+  appris (`interactive_place_word_ingrid` pour **Suivant**). Les deux partagent le
   lexique, les familles de candidats, les nettoyages entre paliers et
-  l'optimisation finale ; la fenêtre de tirage
+  l'optimisation finale, dont la **réparation locale** emploie toujours
+  Ingrid-like ; la fenêtre de tirage
   des mots ci-dessous n'existe que pour Falcon.
   (`backend/crossword_gen.py`, `FILL_METHODS`, `IngridSolver`,
   `try_fill`.)
 
 - **Fenêtre de tirage des mots** : la règle unique par laquelle le moteur
   décide dans quel ordre essayer les mots candidats d'un emplacement.
-  Les candidats sont mélangés, réduits par le filtre d'usage (voir
-  « Score d'usage » ci-dessous), puis classés par leur
-  correspondance au consensus statistique des lettres sur les cases encore
-  libres (`_candidate_score`), puis tirés un à un dans la fenêtre des
+  Les candidats, déjà élagués (voir « Élagage des candidats » ci-dessous),
+  sont mélangés, réduits par le filtre d'usage (voir
+  « Score d'usage » ci-dessous), puis classés par leur score de cases
+  (voir ci-dessous), puis tirés un à un dans la fenêtre des
   **`CANDIDATE_SCORE_WINDOW` (200) meilleurs candidats restants** — qui
   se décale à mesure que les mots en sortent, jamais un simple « meilleur
   score gagne » : cette fenêtre est retriée par fréquence dans le
@@ -319,6 +327,31 @@ plusieurs signaux) :
   (`backend/crossword_gen.py`, `Filler.ordered_candidates`,
   `Filler._backtrack`, `_general_dictionary_pick`,
   `_find_priority_word_placement`.)
+
+- **Priorité `dom/wdeg`** : critère de choix de l'emplacement à remplir, celui
+  d'Ingrid : le nombre de candidats restant à l'emplacement après élagage,
+  divisé par la somme des poids de ses croisements avec un emplacement encore
+  ouvert. La plus petite valeur passe la première. Chaque poids est attaché à
+  une case de croisement, part de 1, vieillit à chaque échec et augmente quand
+  ce croisement est tenu pour responsable d'un échec (`backend/crossword_gen.py`,
+  `Filler._select_fill_slot`, `Filler._slot_weight`,
+  `Filler._learn_cell_weights`).
+
+- **Élagage des candidats** : retrait, avant le classement, des mots d'un
+  emplacement dont une lettre n'est portée par aucun candidat de
+  l'emplacement ouvert qui la croise. Ces mots auraient bloqué ce croisement ;
+  ils ne coûtent aucune vérification. Les Mots Défi et les mots thématiques
+  ne sont pas élagués, et l'élagage ne s'applique ni à la passe de dernier
+  recours ni au mode Interactif (`backend/crossword_gen.py`,
+  `Filler._prune_candidates`, `CANDIDATE_PRUNING_ENABLED`).
+
+- **Score de cases** : score d'un mot candidat, celui d'Ingrid : la moyenne,
+  sur ses lettres, du log10 du nombre de candidats que l'emplacement croisé
+  garde avec cette lettre à la case partagée ; 0 pour une case sans croisement
+  ouvert, -1e9 pour une lettre que le croisement ne peut pas prendre. Plus il
+  est élevé, plus le mot laisse de choix à ses croisements
+  (`backend/crossword_gen.py`, `Filler._crossing_letter_counts`,
+  `Filler._candidate_score`).
 
 - **Score d'usage** : note de 0 à 5 donnée par le LLM local à chaque mot du
   dictionnaire Scrabble d'une langue (`data/usage_score_<langue>_scrabble.tsv`,
@@ -365,7 +398,9 @@ plusieurs signaux) :
   candidats, dans cet ordre de priorité, ses mots tentés tant qu'ils
   restent possibles. Chaque élément a sa couleur d'affichage (bleu pour le
   dictionnaire Scrabble, couleur ordinaire du texte pour les autres,
-  orange par défaut pour un dictionnaire utilisateur). (`backend/user_profiles.py` ; `backend/crossword_gen.py`,
+  orange par défaut pour un dictionnaire utilisateur). Ses entrées sont
+  toujours valides : elles ne comptent jamais dans les quotas de noms
+  propres et de mots sans définition. (`backend/user_profiles.py` ; `backend/crossword_gen.py`,
   `_merge_user_lexicon`, `glossary_word_cells`, `Filler.scrabble_first`,
   `IngridSolver._family_of` ; `backend/app.py`, `_glossary_cells`.)
 
@@ -468,11 +503,10 @@ plusieurs signaux) :
 - **Groupe d'un nœud** : les mots qu'un nœud de la recherche pose d'un
   coup avant de descendre — le mot de l'emplacement qu'il a choisi, puis
   d'autres, en un nombre qui décroît avec le taux de
-  remplissage de la zone d'attention : `WORDS_PER_NODE` (2, le
-  champ « Mots par pose ») pour une zone vide, jusqu'à 1 pour une zone
-  remplie à `GROUP_SIZE_MIN_FILL_PERCENT` (75 %) ou plus
-  (`Filler._group_size`) ; affiché « N m/p » sur la ligne
-  d'information des aperçus —
+  remplissage de la zone d'attention : `WORDS_PER_NODE` (réglé à 1, donc un
+  seul mot ; l'API permet une autre valeur) pour une zone vide, jusqu'à 1 pour une
+  zone remplie à `GROUP_SIZE_MIN_FILL_PERCENT` (75 %) ou plus
+  (`Filler._group_size`) —
   posés de préférence sur les
   emplacements candidats de ce choix (fenêtre géométrique du niveau 6),
   sinon sur les autres emplacements sélectionnables du nœud, le
@@ -522,20 +556,17 @@ plusieurs signaux) :
 - **Emplacements candidats** : en génération automatique, les emplacements
   de la fenêtre géométrique du niveau 6 d'où un nœud a tiré son
   emplacement ; les autres mots de son groupe y sont posés en priorité
-  (voir « Groupe d'un nœud »). En mode Interactif, les emplacements de la
-  fenêtre géométrique du niveau 6 de la cascade de choix d'emplacement —
-  les `SLOT_SELECTION_WINDOW_SIZE` (10) plus proches du milieu du segment reliant le coin haut gauche de la grille, `(0, 0)`, au centre du dernier mot posé par « Suivant » (du coin haut gauche tant qu'il n'y en a pas)
-  parmi ceux retenus par les niveaux précédents — dans laquelle a été
-  tiré, lors d'un clic sur « Suivant », l'emplacement où le mot a été posé
-  — pour le dictionnaire général, la sélection du balayage qui a fourni cet
-  emplacement ; pour les Mots Défi et le glossaire thématique, la cible de
-  la famille ; chaque famille évalue la cascade par rapport à son seul
-  glossaire. Chacun est
-  signalé par sa ou ses cases les plus proches de ce point, entourées en
-  bleu. (`backend/crossword_gen.py`, `Filler.last_selection_window`,
-  `_origin_closest_cells` ; `frontend/static/script.js`,
+  (voir « Groupe d'un nœud »). En mode Interactif, les emplacements parmi
+  lesquels a été tiré, lors d'un clic sur « Suivant », l'emplacement où le mot
+  a été posé — pour le dictionnaire général, la sélection du balayage qui a
+  fourni cet emplacement ; pour les Mots Défi et le glossaire thématique, la
+  cible de la famille ; chaque famille évalue le choix par rapport à son seul
+  glossaire. Chacun est signalé par sa première case, entourée en bleu.
+  (`backend/crossword_gen.py`, `Filler.last_selection_window`,
+  `_slot_first_cells` ; `frontend/static/script.js`,
   `interactiveWindowCells`.) Quand « Suivant » pose son mot sur
-  l'emplacement sélectionné, seul celui-ci est signalé.
+  l'emplacement sélectionné, seul celui-ci est signalé, ses cases noires
+  ayant pu changer pour un mot prioritaire (`_reshape_selected_slot`).
 
 - **Emplacement sélectionné** : en mode Interactif, l'emplacement qui
   passe par la case sélectionnée dans le sens de saisie. Tant qu'il garde

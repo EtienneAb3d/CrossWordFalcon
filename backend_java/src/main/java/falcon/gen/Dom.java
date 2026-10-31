@@ -79,6 +79,16 @@ public final class Dom implements Iterable<String> {
         return out;
     }
 
+    /** Number of members outside {@code excluded} (null: every member). */
+    public int countOutside(BitSet excluded) {
+        if (idx == null) return 0;
+        if (excluded == null) return size();
+        if (bits == null) return idx.size() - excluded.cardinality();
+        BitSet kept = (BitSet) bits.clone();
+        kept.andNot(excluded);
+        return kept.cardinality();
+    }
+
     /** Ids of every member, in order. */
     public int[] ids() {
         if (idx == null) return new int[0];

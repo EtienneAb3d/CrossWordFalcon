@@ -692,6 +692,22 @@ async def proxy_dictionary(request: Request):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+@app.post("/api/dictionary/sources")
+async def proxy_dictionary_sources(request: Request):
+    """Relays the Dictionnaire's "where does this word exist" lookup (the body
+    holds the secret word, the action log only records the path)."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/dictionary/sources", content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 # "Définir" (backend/clues.py's LLMClueGenerator.generate_definitions) makes
 # one real LLM round-trip asking for up to 10 definitions at once — a
 # meaningfully heavier single call than a quick status check, measured live

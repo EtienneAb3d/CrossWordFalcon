@@ -32,9 +32,10 @@ the grid for you.
 - Seven levels of computing effort ("Effort") for filling the grid
   automatically, from the quick "Flash" to the exhaustive "GridZilla",
   each showing how many words one attempt may try.
-- Grids are filled by a search inspired by the Ingrid crossword filler
-  ("Ingrid-like"); when the page is opened on the machine running the
-  server, a "Method" choice also offers the experimental "Falcon" search.
+- Every fill starts with the "Falcon" search, which can change black cells to
+  fit a priority word, until more than 15 % of the grid is filled, then goes on
+  with a fast search inspired by the Ingrid crossword filler ("Ingrid-like").
+- Automatic filling stops as soon as 15 different grids are found.
 - Themed grids: vocabulary and clues steered toward a subject you choose.
 - "Challenge Words": force your own words into the grid.
 

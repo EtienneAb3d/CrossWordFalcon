@@ -412,7 +412,7 @@ public final class App {
 
     static void validateFillMethod(String fillMethod) {
         if (!falcon.gen.IngridSolver.FILL_METHODS.contains(fillMethod)) {
-            throw http(400, "méthode inconnue : " + Log.repr(fillMethod) + " (attendu : ['falcon', 'ingrid'])");
+            throw http(400, "méthode inconnue : " + Log.repr(fillMethod) + " (attendu : ['falcon', 'ingrid', 'auto'])");
         }
     }
 
@@ -972,6 +972,25 @@ public final class App {
         Map<String, Object> user = new LinkedHashMap<>();
         for (String gid : new java.util.TreeSet<>(cells.keySet())) user.put(gid, cells.get(gid));
         return new Object[]{Cells.toJson(merged), user};
+    }
+
+    /** The colours of a reloaded Interactive grid: challenge, theme, scrabble cells and {user dictionary id: cells}, the
+     * "others" glossary's cells left plain (mirrors _reload_word_cells). */
+    static Map<String, Object> reloadWordCells(List<Object> grid, Set<String> challenge, Set<String> priority, PW scrabble,
+                                               Glossary glossary) {
+        Map<String, List<Object>> cells = Words.reloadWordCells(grid, challenge, PW.single(priority), scrabble,
+                glossary == null ? null : glossary.index(), glossary == null ? null : glossary.across(),
+                glossary == null ? null : glossary.down());
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (String name : List.of("challenge", "theme", UserProfiles.SCRABBLE_ID)) {
+            List<Object> list = cells.remove(name);
+            out.put(name, list == null ? List.of() : list);
+        }
+        cells.remove(UserProfiles.OTHERS_ID);
+        Map<String, Object> user = new LinkedHashMap<>();
+        for (String gid : new java.util.TreeSet<>(cells.keySet())) user.put(gid, cells.get(gid));
+        out.put("user", user);
+        return out;
     }
 
     /** Sets a placed word's "glossary" — the user dictionary id it is coloured with, null for a "Mots Défi"/theme
@@ -1629,7 +1648,8 @@ public final class App {
             meta.put("challenge_words", new ArrayList<>(req.challengeWords));
             // The "Style de motif" the session's lexicon follows (loadInteractiveIndex), saved with its drafts and
             // grids so a resumed session keeps it.
-            meta.put("generation_params", Json.obj("pattern_style", req.patternStyle, "pattern_mix", req.patternMix));
+            meta.put("generation_params", Json.obj("pattern_style", req.patternStyle, "pattern_mix", req.patternMix,
+                    "symmetry", req.symmetry));
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("width", req.width);
             result.put("height", req.height);
@@ -1738,6 +1758,8 @@ public final class App {
             result.put("grid", gridJson);
             // The draft's word breaks (GridStore.saveGridWork's breaks).
             result.put("breaks", cleanBreaks(record.get("breaks"), rows, cols));
+            // Which glossary each complete word belongs to, for its colour.
+            result.put("word_cells", reloadWordCells(gridJson, challenge, priority, session.scrabbleWords, session.glossary));
             result.put("placed", null);
             result.put("impossible", false);
             result.put("has_theme", !priority.isEmpty());
@@ -2377,6 +2399,18 @@ public final class App {
             }
             return result;
         });
+        w.post("/api/dictionary/sources", r -> {
+            Body b = new Body(r.json());
+            String q = b.required("q");
+            String lang = b.str("lang", "fr");
+            requireLang(lang);
+            List<Object> sources = new ArrayList<>();
+            for (String name : DictionaryLookup.wordSources(q, lang)) sources.add(Json.obj("id", name));
+            String mot = DictionaryLookup.gridForm(q);
+            String pseudo = profileOwner(b);
+            if (pseudo != null && !mot.isEmpty()) sources.addAll(UserProfiles.dictionariesHolding(pseudo, lang, mot));
+            return Json.obj("sources", sources);
+        });
         w.get("/api/dictionary/define", r -> {
             String q = r.qRequired("q");
             String lang = r.q("lang", "fr");
@@ -2721,16 +2755,20 @@ public final class App {
             List<int[]> zoneCells = b.cells("zone_cells", false);
             int mwp = b.integer("multi_word_percent", falcon.gen.Filler.MULTI_WORD_PERCENT, 0, 100);
             String fillMethod = b.str("fill_method", falcon.gen.IngridSolver.FILL_METHOD_DEFAULT);
+            String symmetry = b.str("symmetry", "none");
+            String patternStyle = b.str("pattern_style", "airy");
             Session s = session(jobId);
             int[] d = dims(gridJson);
             validateFillMethod(fillMethod);
+            validateSymmetry(symmetry);
+            validatePatternStyle(patternStyle);
             Map<String, Object> placed;
             synchronized (s) {
-                placed = "ingrid".equals(fillMethod)
+                placed = "ingrid".equals(falcon.gen.IngridSolver.resolveFillMethod(fillMethod, gridOf(gridJson)))
                         ? Interactive.placeWordIngrid(gridOf(gridJson), d[0], d[1], s.index, s.rng, s.pw(), cw,
                                 s.scrabbleWords, mwp, s.ingrid, selectedCells, zoneCells)
                         : Interactive.placeWord(gridOf(gridJson), d[0], d[1], s.index, s.rng, s.pw(), cw, lastPlaced,
-                                s.scrabbleWords, mwp, selectedCells, zoneCells);
+                                s.scrabbleWords, mwp, selectedCells, zoneCells, symmetry, patternStyle);
             }
             addPlacedBreaks(placed.get("placed"), s.multiBreaks);
             if (placed.get("placed") instanceof Map<?, ?> pm) {
@@ -2836,10 +2874,10 @@ public final class App {
             Set<String> cw = challengeSet(b.strList("challenge_words"));
             Session s = session(jobId);
             int[] d = dims(gridJson);
-            String fillMethod = b.str("fill_method", null);
-            if (fillMethod != null) validateFillMethod(fillMethod);
+            String fillMethod = b.str("fill_method", falcon.gen.IngridSolver.FILL_METHOD_DEFAULT);
+            validateFillMethod(fillMethod);
             List<Object>[] diag = Interactive.fillDiagnostics(gridOf(gridJson), d[0], d[1], s.index, cw);
-            List<Object> impossible = "ingrid".equals(fillMethod)
+            List<Object> impossible = "ingrid".equals(falcon.gen.IngridSolver.resolveFillMethod(fillMethod, gridOf(gridJson)))
                     ? Interactive.withCells(diag[0], Interactive.ingridBlockedCells(gridOf(gridJson), d[0], d[1], s.index, cw))
                     : diag[0];
             return Json.obj("impossible_cells", impossible, "low_candidate_cells", diag[1], "deadlock_cells", diag[2]);

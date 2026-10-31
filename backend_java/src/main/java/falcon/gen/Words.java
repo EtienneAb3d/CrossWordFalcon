@@ -81,6 +81,19 @@ public final class Words {
      * ranked glossary ids. */
     public record UserLexicon(String path, Integer scrabbleRank, Integer othersRank, List<String> ids) {}
 
+    /** The words of a user's merged lexicon (null gives none): entries the player chose, never counted against the
+     * proper-noun and no-gloss quotas (mirrors _user_lexicon_words). */
+    public static Set<String> userLexiconWords(UserLexicon user) throws IOException {
+        Set<String> words = new HashSet<>();
+        if (user == null || user.path() == null || !Files.exists(Path.of(user.path()))) return words;
+        falcon.TextLines.forEachLine(Path.of(user.path()), (offset, line) -> {
+            int tab = line.indexOf('\t');
+            String word = tab < 0 ? line : line.substring(0, tab);
+            if (isGridWord(word)) words.add(word);
+        });
+        return words;
+    }
+
     /** Row reference of a user-lexicon row starting at byte {@code offset} (mirrors _user_row_ref). */
     static int userRowRef(long offset) {
         return (int) (offset << 2 | ROW_SOURCE_USER);
@@ -814,6 +827,69 @@ public final class Words {
     /** {glossary name: cells} of the grid's fully lettered runs spelling a lexicon word carrying a glossary key
      * (LenIndex.gloss of {@code index}), the name being {@code names[direction][key]} (null for a direction
      * without player glossaries, skipped); each list sorted (mirrors glossary_word_cells). */
+    /** {glossary: cells} of the grid's fully lettered runs, each word belonging to the first glossary holding it:
+     * "challenge", "theme", then, per direction, the ranked glossary ids ({@code index}'s gloss giving the rank) or, for a
+     * direction without player glossaries, "scrabble"; a shared cell goes to the higher-priority glossary (mirrors
+     * reload_word_cells). */
+    public static Map<String, List<Object>> reloadWordCells(List<Object> grid, Set<String> challenge, PW priority, PW scrabble,
+                                                            DualIndex index, List<String> acrossNames, List<String> downNames) {
+        Map<Integer, Object[]> best = new java.util.TreeMap<>();
+        int rows = grid.size();
+        int cols = rows > 0 ? ((List<?>) grid.get(0)).size() : 0;
+        for (int dir = 0; dir < 2; dir++) {
+            List<String> ranked = dir == 0 ? acrossNames : downNames;
+            Map<Integer, LenIndex> idx = ranked == null || ranked.isEmpty() ? null : dir == 0 ? index.across : index.down;
+            Set<String> theme = priority == null ? Set.of() : dir == 0 || !priority.dual ? priority.across : priority.down;
+            Set<String> scr = scrabble == null ? Set.of() : dir == 0 || !scrabble.dual ? scrabble.across : scrabble.down;
+            int outer = dir == 0 ? rows : cols, inner = dir == 0 ? cols : rows;
+            for (int a = 0; a < outer; a++) {
+                List<Integer> run = new ArrayList<>();
+                StringBuilder word = new StringBuilder();
+                boolean complete = true;
+                for (int b = 0; b <= inner; b++) {
+                    int r = dir == 0 ? a : b, c = dir == 0 ? b : a;
+                    String ch = b < inner ? String.valueOf(((List<?>) grid.get(r)).get(c)) : "#";
+                    if (!ch.equals("#")) {
+                        run.add(Cells.of(r, c));
+                        word.append(ch);
+                        if (ch.equals(".")) complete = false;
+                        continue;
+                    }
+                    if (run.size() >= 2 && complete) {
+                        String w = word.toString();
+                        Object[] entry = null;
+                        if (challenge.contains(w)) {
+                            entry = new Object[]{0, "challenge"};
+                        } else if (theme.contains(w)) {
+                            entry = new Object[]{1, "theme"};
+                        } else if (idx != null) {
+                            LenIndex li = idx.get(w.length());
+                            if (li != null && li.gloss != null && li.contains(w)) {
+                                int key = li.glossOf(w);
+                                if (key >= 0 && key < ranked.size()) entry = new Object[]{2 + key, ranked.get(key)};
+                            }
+                        } else if (scr.contains(w)) {
+                            entry = new Object[]{2, "scrabble"};
+                        }
+                        if (entry != null) {
+                            for (int cell : run) {
+                                Object[] held = best.get(cell);
+                                if (held == null || (int) entry[0] < (int) held[0]) best.put(cell, entry);
+                            }
+                        }
+                    }
+                    run = new ArrayList<>();
+                    word = new StringBuilder();
+                    complete = true;
+                }
+            }
+        }
+        Map<String, List<Object>> found = new LinkedHashMap<>();
+        best.forEach((cell, entry) -> found.computeIfAbsent((String) entry[1], k -> new ArrayList<>())
+                .add(List.of(Cells.r(cell), Cells.c(cell))));
+        return found;
+    }
+
     public static Map<String, List<Object>> glossaryWordCells(Object grid, DualIndex index, List<String> acrossNames,
                                                               List<String> downNames) {
         Map<String, java.util.TreeSet<Integer>> found = new LinkedHashMap<>();

@@ -265,6 +265,32 @@ public final class DictionaryLookup {
         return result;
     }
 
+    /** Whether the wordlist TSV {@code path} has a row whose MOT column is {@code mot} (mirrors _wordlist_holds). */
+    static boolean wordlistHolds(Path path, String mot) throws IOException {
+        if (!Files.exists(path)) return false;
+        String prefix = mot + "\t";
+        try (var lines = Files.lines(path, java.nio.charset.StandardCharsets.UTF_8)) {
+            return lines.anyMatch(line -> line.startsWith(prefix));
+        }
+    }
+
+    /** The Falcon wordlists holding {@code query}'s grid form, among freq, scrabble, hunspell and multi, in that order
+     * (mirrors word_sources). */
+    public static List<String> wordSources(String query, String language) throws IOException {
+        List<String> found = new ArrayList<>();
+        String mot = gridForm(query == null ? "" : query);
+        if (mot.isEmpty()) return found;
+        for (Map.Entry<String, Integer> source : WORDLIST_SOURCES) {
+            if (wordlistHolds(WORDLIST_DIR.resolve("wordlist_" + language + "_" + source.getKey() + ".tsv"), mot)) {
+                found.add(source.getKey());
+            }
+        }
+        if (!found.contains("multi") && wordlistHolds(WORDLIST_DIR.resolve("wordlist_" + language + "_freq_multi.tsv"), mot)) {
+            found.add("multi");
+        }
+        return found;
+    }
+
     /** The grid form (MOT column: bare, uppercase, A-Z only — a multi-word expression's separators
      * dropped) of a row's form (mirrors grid_form). */
     public static String gridForm(String form) {

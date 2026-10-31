@@ -35,7 +35,8 @@ public final class Cleanup {
     public static final int WIDEN_PRIORITY_WORDS_LIMIT = 30;
     /** Words of each family a search node tries to reshape its slot for (mirrors RESHAPE_WORDS_PER_NODE). */
     public static final int RESHAPE_WORDS_PER_NODE = 5;
-    /** Theme words get widening/shortening only while fewer than this many are placed. */
+    /** Theme words get black-cell changes only while fewer than this many are placed: moving many black cells away
+     * from their well-spread positions makes a grid very hard to fill. */
     public static final int THEME_RESHAPE_MAX_PLACED_WORDS = 5;
 
     /** Mirrors _theme_reshape_allowed. */
@@ -1379,9 +1380,80 @@ public final class Cleanup {
                 && (after.size() < 2 || slotHasDomain(arr(after), index, locked));
     }
 
+    /** Applies {@code changes} (cell to BLACK/WHITE), the black-cell change an Interactive reshape makes so that
+     * {@code word} fits {@code span}, with every changed cell's images under {@code symmetry}; false, the grid untouched,
+     * when the transformation is not possible (mirrors _apply_interactive_reshape). */
+    static boolean applyInteractiveReshape(char[][] grid, int rows, int cols, Map<Integer, Character> changes, int[] span,
+                                           String word, Map<Integer, Character> locked, DualIndex index, String symmetry,
+                                           String patternStyle) {
+        Map<Integer, Character> written = new HashMap<>(locked);
+        for (int p = 0; p < span.length; p++) written.put(span[p], word.charAt(p));
+        Map<Integer, Character> out = new LinkedHashMap<>(changes);
+        if (Grids.isSymmetric(symmetry)) {
+            for (Map.Entry<Integer, Character> e : changes.entrySet()) {
+                char value = e.getValue();
+                for (int image : Grids.blackGroup(rows, cols, e.getKey(), symmetry)) {
+                    Character already = out.get(image);
+                    if (already != null && already != value) return false;
+                    if ((grid[Cells.r(image)][Cells.c(image)] == BLACK) == (value == BLACK)) continue;
+                    if (value == BLACK && written.containsKey(image)) return false;
+                    out.put(image, value);
+                }
+            }
+        }
+        Map<Integer, Character> saved = new HashMap<>();
+        for (int cell : out.keySet()) saved.put(cell, grid[Cells.r(cell)][Cells.c(cell)]);
+        char[][] before = "grouped".equals(patternStyle) ? Grids.copy(grid) : null;
+        out.forEach((cell, value) -> grid[Cells.r(cell)][Cells.c(cell)] = value);
+        List<Integer> images = new ArrayList<>();
+        for (int cell : out.keySet()) if (!changes.containsKey(cell)) images.add(cell);
+        List<Integer> blackened = new ArrayList<>();
+        for (Map.Entry<Integer, Character> e : out.entrySet()) if (e.getValue() == BLACK) blackened.add(e.getKey());
+        if (Grids.isStructurallyValid(grid, rows, cols, 1)
+                && Grids.reshapeKeepsStyle(before, grid, rows, cols, blackened, patternStyle)
+                && (images.isEmpty() || imageSlotsStayValid(grid, rows, cols, images, span, index, written))) return true;
+        saved.forEach((cell, value) -> grid[Cells.r(cell)][Cells.c(cell)] = value);
+        return false;
+    }
+
+    /** Whether {@code span} is still exactly a slot and every slot the changed cells {@code images} created or altered
+     * still has a candidate (mirrors _image_slots_stay_valid). */
+    static boolean imageSlotsStayValid(char[][] grid, int rows, int cols, List<Integer> images, int[] span, DualIndex index,
+                                       Map<Integer, Character> written) {
+        int dr = Cells.r(span[1]) - Cells.r(span[0]), dc = Cells.c(span[1]) - Cells.c(span[0]);
+        if (!whiteRun(grid, rows, cols, Cells.r(span[0]), Cells.c(span[0]), -dr, -dc).isEmpty()) return false;
+        int last = span[span.length - 1];
+        if (!whiteRun(grid, rows, cols, Cells.r(last), Cells.c(last), dr, dc).isEmpty()) return false;
+        for (int cell : span) if (grid[Cells.r(cell)][Cells.c(cell)] == BLACK) return false;
+        int[][] dirs = {{0, 1}, {1, 0}};
+        for (int cell : images) {
+            int r = Cells.r(cell), c = Cells.c(cell);
+            for (int[] d : dirs) {
+                List<Integer> before = whiteRun(grid, rows, cols, r, c, -d[0], -d[1]);
+                java.util.Collections.reverse(before);
+                List<Integer> after = whiteRun(grid, rows, cols, r, c, d[0], d[1]);
+                List<List<Integer>> runs = new ArrayList<>();
+                if (grid[r][c] == BLACK) {
+                    runs.add(before);
+                    runs.add(after);
+                } else {
+                    List<Integer> whole = new ArrayList<>(before);
+                    whole.add(cell);
+                    whole.addAll(after);
+                    runs.add(whole);
+                }
+                for (List<Integer> run : runs) {
+                    int[] cells = arr(run);
+                    if (cells.length >= 2 && !Arrays.equals(cells, span) && !slotHasDomain(cells, index, written)) return false;
+                }
+            }
+        }
+        return true;
+    }
+
     /** Returns the slot cells carved out, or null. */
     static int[] tryWidenBlackCell(char[][] grid, int rows, int cols, int r, int c, int dr, int dc, String word,
-                                   Map<Integer, Character> locked, DualIndex index) {
+                                   Map<Integer, Character> locked, DualIndex index, String symmetry, String patternStyle) {
         List<Integer> before = whiteRun(grid, rows, cols, r, c, -dr, -dc);
         java.util.Collections.reverse(before);
         List<Integer> after = whiteRun(grid, rows, cols, r, c, dr, dc);
@@ -1415,19 +1487,17 @@ public final class Cleanup {
             if (!perpendicularSlotStaysValid(grid, rows, cols, r, c, dr, dc, index, rcLocked)) continue;
             if (newBlack != null && !perpendicularSlotStaysValid(grid, rows, cols, Cells.r(newBlack), Cells.c(newBlack), dr,
                     dc, index, locked)) continue;
-            char savedNb = newBlack != null ? grid[Cells.r(newBlack)][Cells.c(newBlack)] : 0;
-            grid[r][c] = WHITE;
-            if (newBlack != null) grid[Cells.r(newBlack)][Cells.c(newBlack)] = BLACK;
-            if (Grids.isStructurallyValid(grid, rows, cols, 1)) return arr(span);
-            grid[r][c] = BLACK;
-            if (newBlack != null) grid[Cells.r(newBlack)][Cells.c(newBlack)] = savedNb;
+            Map<Integer, Character> changes = new LinkedHashMap<>();
+            changes.put(Cells.of(r, c), WHITE);
+            if (newBlack != null) changes.put(newBlack, BLACK);
+            if (applyInteractiveReshape(grid, rows, cols, changes, arr(span), word, locked, index, symmetry, patternStyle)) return arr(span);
         }
         return null;
     }
 
     public static int[] widenOneFloatingBlackCell(char[][] grid, int rows, int cols, Rng rng, String word,
                                                   Map<Integer, Character> locked, Set<Integer> permanentBlack,
-                                                  DualIndex index) {
+                                                  DualIndex index, String symmetry, String patternStyle) {
         List<Integer> blacks = new ArrayList<>();
         for (int r = 0; r < rows; r++) for (int c = 0; c < cols; c++) {
             if (grid[r][c] == BLACK && (permanentBlack == null || !permanentBlack.contains(Cells.of(r, c)))) blacks.add(Cells.of(r, c));
@@ -1437,15 +1507,38 @@ public final class Cleanup {
             int cell = blacks.get(k);
             int[][] dirs = {{0, 1}, {1, 0}};
             for (int[] d : dirs) {
-                int[] change = tryWidenBlackCell(grid, rows, cols, Cells.r(cell), Cells.c(cell), d[0], d[1], word, locked, index);
+                int[] change = tryWidenBlackCell(grid, rows, cols, Cells.r(cell), Cells.c(cell), d[0], d[1], word, locked, index, symmetry, patternStyle);
                 if (change != null) return change;
             }
         }
         return null;
     }
 
+    /** The reshape aimed at the emplacement selected in the grid (cells): a longer word frees the black cell bounding
+     * one of its ends and must cover the whole emplacement, a shorter one gets a new black cell inside it. Changes grid
+     * and returns the word's cells, null (grid untouched) when neither fits (mirrors _reshape_selected_slot). */
+    static int[] reshapeSelectedSlot(char[][] grid, int rows, int cols, int[] cells, String word,
+                                     Map<Integer, Character> locked, DualIndex index, String symmetry, String patternStyle) {
+        if (word.length() < cells.length) return tryShortenSlot(grid, rows, cols, cells, word, locked, index, symmetry, patternStyle);
+        int dr = Cells.r(cells[1]) - Cells.r(cells[0]), dc = Cells.c(cells[1]) - Cells.c(cells[0]);
+        int first = cells[0], last = cells[cells.length - 1];
+        int[][] ends = {{Cells.r(last) + dr, Cells.c(last) + dc}, {Cells.r(first) - dr, Cells.c(first) - dc}};
+        for (int[] e : ends) {
+            if (e[0] < 0 || e[0] >= rows || e[1] < 0 || e[1] >= cols || grid[e[0]][e[1]] != BLACK) continue;
+            char[][] trial = Grids.copy(grid);
+            int[] span = tryWidenBlackCell(trial, rows, cols, e[0], e[1], dr, dc, word, locked, index, symmetry, patternStyle);
+            if (span == null) continue;
+            Set<Integer> covered = new HashSet<>();
+            for (int cell : span) covered.add(cell);
+            if (!Grids.allIn(cells, covered)) continue;
+            for (int r = 0; r < rows; r++) System.arraycopy(trial[r], 0, grid[r], 0, cols);
+            return span;
+        }
+        return null;
+    }
+
     static int[] tryShortenSlot(char[][] grid, int rows, int cols, int[] cells, String word, Map<Integer, Character> locked,
-                                DualIndex index) {
+                                DualIndex index, String symmetry, String patternStyle) {
         int total = cells.length, wl = word.length();
         if (wl >= total || wl < 2) return null;
         int dr = Cells.r(cells[1]) - Cells.r(cells[0]);
@@ -1462,21 +1555,21 @@ public final class Cleanup {
             }
             if (clash) continue;
             if (!perpendicularSlotStaysValid(grid, rows, cols, Cells.r(newBlack), Cells.c(newBlack), dr, dc, index, locked)) continue;
-            char saved = grid[Cells.r(newBlack)][Cells.c(newBlack)];
-            grid[Cells.r(newBlack)][Cells.c(newBlack)] = BLACK;
-            if (Grids.isStructurallyValid(grid, rows, cols, 1)) return span;
-            grid[Cells.r(newBlack)][Cells.c(newBlack)] = saved;
+            Map<Integer, Character> changes = new LinkedHashMap<>();
+            changes.put(newBlack, BLACK);
+            if (applyInteractiveReshape(grid, rows, cols, changes, span, word, locked, index, symmetry, patternStyle)) return span;
         }
         return null;
     }
 
     public static int[] shortenOneSlotForWord(char[][] grid, int rows, int cols, Rng rng, String word,
-                                              Map<Integer, Character> locked, DualIndex index) {
+                                              Map<Integer, Character> locked, DualIndex index, String symmetry,
+                                              String patternStyle) {
         List<int[]> slots = new ArrayList<>();
         for (int[] cells : Grids.extractSlots(grid, rows, cols)) if (cells.length > word.length()) slots.add(cells);
         rng.shuffle(slots);
         for (int k = 0; k < Math.min(SHORTEN_SLOT_WINDOW, slots.size()); k++) {
-            int[] change = tryShortenSlot(grid, rows, cols, slots.get(k), word, locked, index);
+            int[] change = tryShortenSlot(grid, rows, cols, slots.get(k), word, locked, index, symmetry, patternStyle);
             if (change != null) return change;
         }
         return null;

@@ -210,13 +210,13 @@ full again whenever a new generation or an Interactive session starts.
   network; same out-of-range snap-back on blur as **Largeur / Width**
   above (`frontend/static/script.js`, `clampDimensionInputs`).
 - **Niveau / Level** (`#difficulty`, first field of the line
-  above "Générer les mots croisés", followed by Effort, Méthode and Mots
-  par pose)
+  above "Générer les mots croisés", followed by Effort)
   — Easy, Medium, or Hard.
   Easy and Medium use a smaller, more common vocabulary; Easy never places
   a word that looks like it could be a proper noun (a person's or place's
   name: capitalized, or defined only as a proper name), Medium at most two;
-  Hard can use the entire dictionary, with up to five proper nouns. The
+  Hard can use the entire dictionary, with up to five proper nouns. A word
+  of your own dictionaries is always valid: these limits never apply to it. The
   language's official Scrabble word list is available in full at Medium
   and Hard; at Easy, only its words with a known inflection (listed in the
   project's table of inflected forms) are used (`backend/crossword_gen.py`,
@@ -235,7 +235,8 @@ full again whenever a new generation or an Interactive session starts.
   square grids only — on any other grid it works as Bidirectional). It shapes the pattern of an automatic
   generation and of a new Interactive session, and, in Interactive mode, a
   black cell you add or remove by hand brings its empty (or black) images
-  along. In an automatic generation, every later change follows the same
+  along, and a black cell **Suivant / Next** moves to fit a "Mots Défi" or theme
+  word only moves if its images can follow, which they then do. In an automatic generation, every later change follows the same
   symmetry: a black cell added to make an unfillable slot workable or to
   repair a grid between cycles brings its images (the words they cut are
   removed), and a black cell is only removed or moved — between cycles,
@@ -277,19 +278,6 @@ full again whenever a new generation or an Interactive session starts.
   selecting the Diagonal symmetry (`frontend/static/script.js`,
   `setUiLanguage`, `setPatternMix`; `backend/crossword_gen.py`, `pattern_mix`, `PATTERN_STYLES`,
   `_place_black_cells`).
-- **Mots par pose / Words per placement** (`#words-per-node`, right of
-  **Méthode**, shown only while the **Falcon (expérimental)** method is
-  selected, `frontend/static/script.js`, `syncWordsPerNodeVisibility`; the
-  Ingrid-like method places one word per decision) — the most
-  words the search places in one go before checking how the rest of the
-  grid copes, and takes back off together when that leads nowhere (1-50,
-  2 by default). The search uses this many while the area it is currently filling (the attention zone) is
-  empty, and fewer as that area fills up, down to one word at a time once
-  it is three-quarters full. 1 is the most
-  careful, word-by-word search throughout; a higher value moves faster at
-  the start but commits to more words at once (`frontend/static/
-  script.js`, `wordsPerNodeInput`; `backend/crossword_gen.py`,
-  `Filler._group_size`, `Filler._descend_group`).
 - **Effort** (`#mode`) — how much computing effort one attempt is allowed
   before giving up and trying again; each option shows its budget as
   "(X words / cycle)", X in compact form (K = thousand, M = million),
@@ -312,21 +300,20 @@ full again whenever a new generation or an Interactive session starts.
   `applyBackendModeDefaults`). The
   same mode is used by **Finir la grille / Finish the grid** and **Finir
   la zone / Finish the zone** in Interactive mode.
-- **Méthode / Method** (`#fill-method`, right of **Effort**) — only shown
-  when the page is opened on the local machine (`frontend/static/
-  script.js`, `showFillMethodOnLocalhost`); elsewhere every generation
-  uses **Ingrid-like**. Picks how each attempt fills its black-cell pattern
-  with words: **Falcon (expérimental) / Falcon (experimental)** is the
-  search described in "How a grid is actually built" below; **Ingrid-like**
-  (the default) is a search modelled on
-  the Ingrid crossword filler, which keeps every slot's list of possible
-  words pruned against its crossings at all times and restarts with what
-  it learnt about the hardest crossings (`backend/crossword_gen.py`,
-  `IngridSolver`). Both use the same dictionary, difficulty level, theme
-  glossary, "Mots Défi" and every other setting of the form. Also used by
-  Interactive mode's **Suivant / Next**, **Finir la grille / Finish the
-  grid** and **Finir la zone / Finish the zone**, and restored with a
-  grid's other generation settings. With Ingrid-like, **Suivant / Next**
+- **Filling methods** (no setting) — **Automatique / Automatic**, **Finir la
+  grille / Finish the grid**, **Finir la zone / Finish the zone** and **Suivant /
+  Next** all use **Falcon** until more than 15 % of the grid's white cells hold a
+  letter, then **Ingrid-like** from the grid reached (`backend/crossword_gen.py`,
+  `falcon_phase_over`, `resolve_fill_method`). **Falcon** is the search described
+  in "How a grid is actually built" below, which changes black cells when a
+  priority word can be placed that way; **Ingrid-like** is a faster search
+  modelled on the Ingrid crossword filler, which never changes a black cell, keeps
+  every slot's list of possible words pruned against its crossings at all times
+  and restarts with what it learnt about the hardest crossings (`IngridSolver`).
+  Both use the same dictionary, difficulty level, theme glossary, "Mots Défi" and
+  every other setting of the form. So black cells only move for a word while the
+  grid is at most 15 % filled, including with **Finir la grille / Finish the grid**
+  on a grid already fuller than that. With Ingrid-like, **Suivant / Next**
   works the grid out again from what is on screen at every click — so
   letters or black cells changed by hand always count — and remembers
   between clicks only which crossings have been hardest so far: a slot
@@ -394,8 +381,9 @@ full again whenever a new generation or an Interactive session starts.
   once generation starts — the exact same mechanic the Interactive mode
   panel's own **Suivant / Next** button already applies one word at a
   time, including accepting a word absent from the dictionary. If no slot
-  of the right size already exists for one of these words (or a theme
-  word, until 5 theme words are placed), the generator will even try
+  of the right size already exists for one of these words (and for any theme
+  word, even with a free slot elsewhere, until 5 theme words are placed), the
+  generator will even try
   reshaping the black-cell layout
   itself to make room for it before falling back to the ordinary
   dictionary — the same reshaping **Suivant / Next** tries too (see
@@ -484,7 +472,11 @@ main form (`#run-actions`); "Continuer" sits above the "Générer les mots crois
   twice), so it matches the number of grids offered to choose from. The
   search keeps going until at least four different grids have succeeded,
   then keeps the best one, so this number tells how many finished
-  candidates it is choosing from. Hidden again once the generation ends.
+  candidates it is choosing from. It stops looking as soon as fifteen
+  different grids are found, without waiting for the attempts still
+  running, in **Finir la grille / Finish the grid** and **Finir la zone /
+  Finish the zone** too (`backend/crossword_gen.py`,
+  `MAX_SUCCESSFUL_ATTEMPTS`). Hidden again once the generation ends.
   Each recorded step of the search history keeps the count it had at
   that moment: stepping through the history (during the generation, or
   afterwards with the **◀**/**▶** buttons of the generation times) brings
@@ -649,7 +641,12 @@ those was showing.
 - Type an expression in the field (`#dictionary-input`) and use one of four buttons:
   - **Chercher / Search** (`#dictionary-search-btn`) — lists every word
     sharing the same root as what you typed (accents and case ignored),
-    each with its real definitions, in a table. Every word list the grids
+    each with its real definitions, in a table. When the word itself has no
+    definition, a line under its heading names the dictionaries and glossaries
+    holding it, when there are any: the "Mots Défi" list, the frequency list,
+    the Scrabble list, Hunspell, the multi-word expressions, your own
+    dictionaries of that language (`frontend/static/script.js`,
+    `dictionaryWordSources`). Every word list the grids
     draw from is searched (the main frequency list, the Scrabble list,
     the Hunspell list and the multi-word expressions), so a word typed as
     it appears in a grid, without accents (ETRECIT), finds its accented
@@ -798,7 +795,7 @@ generations someone interrupted with **Stop** (`#stop-dumps`,
 - Clicking a row (or Enter/Space) shows again what that player had in
   front of them at that moment (`loadStopDump`): the generation form
   takes back the settings of that generation (language, size, black
-  rate, symmetry, pattern style, difficulty, words per placement, effort,
+  rate, symmetry, pattern style, difficulty, effort,
   theme, theme precision, "Mots Défi"), and the attempt-preview panel
   opens on the attempts as they were when Stop was clicked. The ◀/▶
   buttons go back through the steps recorded before. The status line
@@ -1042,7 +1039,10 @@ of the player's own dictionaries in that dictionary's colour (orange by
 default) — a word takes the colour of the first checked list holding it
 in the Settings panel, the other words keeping the "Autres" colour;
 magenta and green win over them on a cell shared with a crossing theme or
-challenge word. Each of these colours can be changed in the Settings
+challenge word. A grid reloaded in Interactive mode (a saved draft, a Library
+grid, an attempt) gets these colours back: each complete word takes the colour of
+the first list holding it, a cell shared by two words that of the higher-placed
+list. Each of these colours can be changed in the Settings
 panel (`frontend/static/script.js`, `renderAttemptPreview`).
 A bold dashed frame marks the "attention
 zone", where the search may currently place its next word: a 21x21
@@ -1082,10 +1082,7 @@ lettered reads 100 %), and unplayable cells as a share of the whole grid
 (blue/yellow/orange-bordered), its stats line also names what percentage
 of its own search budget that specific attempt has consumed so far
 (`budget_percent`, `renderAttemptPreview`), refreshed every 2 seconds
-while it runs and frozen at whatever it reached once the attempt stops,
-followed by the number of words the search currently places at once
-("6 m/p" — words per placement, see "Mots par pose" above;
-`words_per_pose`, `renderAttemptPreview`).
+while it runs and frozen at whatever it reached once the attempt stops.
 It can go above 100%: an attempt that has used up its own budget keeps
 searching as long as another attempt of the same step is still under
 its own, so no processor core sits idle while the step waits for that
@@ -1435,9 +1432,14 @@ real letter. Both update after every edit.
 - **Suivant / Next** (`#interactive-next-btn`, `POST /api/interactive/
   step`) — places exactly one more word. When an incomplete spot is
   selected in the grid (the word through the selected cell, in the typing
-  direction), that spot is filled first whenever some word can go there
+  direction), that spot is filled first whenever some word can go there;
+  with the Falcon method, a "Mots Défi" or theme word may go there by
+  changing its black cells (a longer word removes the black cell at one of
+  its ends, a shorter one adds a black cell inside it), as long as the
+  symmetry and the pattern style allow it, outside a selected zone
   (`frontend/static/script.js`, `selectedInteractiveWord`; `backend/
-  crossword_gen.py`, `_selected_slot_index`); otherwise it chooses the spot where the
+  crossword_gen.py`, `_selected_slot_index`, `_reshape_selected_slot`);
+  otherwise it chooses the spot where the
   fewest words still fit and preferring a theme word where one does. The
   spot is picked separately for each kind of word it tries — "Mots Défi"
   first, then theme words, then any dictionary word — each looking only
@@ -1619,9 +1621,9 @@ real letter. Both update after every edit.
   best-ranked one that does once nothing safer is available anywhere in
   the grid — and only reaches for a challenge word here, as an absolute
   last resort, on the rare slot where literally nothing else, safe or
-  not, can go at all. Only once a challenge word — or a theme word, while
-  fewer than 5 theme words are on the grid — has no existing slot
-  of its own length anywhere at all does **Suivant** try reshaping the
+  not, can go at all. Only once a challenge word has no existing slot
+  of its own length anywhere at all — or, while fewer than 5 theme words are
+  on the grid, once no ordinary slot took a theme word — does **Suivant** try reshaping the
   black-cell layout for it specifically — first nudging a black cell over
   to carve out a right-sized empty slot, then, if that doesn't work,
   looking for an existing empty slot that's already longer than the word
@@ -1823,7 +1825,7 @@ real letter. Both update after every edit.
   it stays available in your "Créations" list. The grid size and the
   language(s) stay those of the session; every other setting is read from
   the generation form at the top of the page as it stands at the moment
-  you click — Niveau, Taux noir, Symétrie, Mots par pose, Multi-mots max, Mode, Thématique, Précision thématique and the "Mots Défi"
+  you click — Niveau, Taux noir, Symétrie, Multi-mots max, Mode, Thématique, Précision thématique and the "Mots Défi"
   list — so you can change any of them before finishing. The session's
   theme glossary is reused only while the form still asks for the same
   theme at the same precision; otherwise it is rebuilt from the form's
@@ -2034,9 +2036,10 @@ tiny words.
 The pattern itself is never adjusted ahead of the search. Instead, while
 filling the grid, the generator may reshape the slot it is working on for a
 "Mots Défi (personnalisation)" / "Challenge Words" word that has no slot of
-its own length anywhere — and for a theme word too, but only while fewer
-than 5 theme words are already on the grid (from 5 on, theme words only go
-into slots the pattern already offers). For a shorter word it drops a new
+its own length anywhere — and for a theme word too, even with a free slot
+elsewhere, but only while fewer than 5 theme words are already on the grid
+(from 5 on, theme words only go into slots the pattern already offers, since
+moving many well-spread black cells makes a grid very hard to fill). For a shorter word it drops a new
 black cell right past the word; for a longer one it frees the black cell at
 one end of the slot and closes the word further along. It remembers the
 black cells it changed, and the moment that word is turned down — because
@@ -2072,37 +2075,12 @@ holding an empty cell (`backend/crossword_gen.py`,
 keeps the zone where it was. A grid
 carried over from a previous cycle that loses its last locked letter to a
 cleanup starts the zone over at its starting window, once. Rather than filling slots in a
-fixed reading order, the generator picks the next slot through several
-layers of priority, starting from every still-open slot in the grid (an
-optional first step that would narrow this down to only "across" or only
-"down" slots, leaning toward whichever category still has more open
-slots, currently sits disabled): if any word from the "Mots Défi
-(personnalisation)" / "Challenge Words" field still fits somewhere, the
-choice narrows to those slots first, ahead of everything else described
-below — the same priority the Interactive mode panel's own "Suivant" /
-"Next" button gives it one word at a time; within that group, a slot with fewer than 3
-real dictionary candidates left is tackled first, on the theory that
-finishing it with a genuine word now is better than letting a later
-cleanup pass shorten it with a black cell instead; the ten slots of that
-group closest to the point halfway between the grid's top-left corner and the
-middle of the last word the search placed are then kept (so the fill keeps
-exploring one region around each new word, spreading out from that corner
-rather than wandering across the whole grid, starting from the corner
-itself while no word is placed yet); within those ten, the choice narrows to whichever long slots
-own the single most constrained cell (only slots of 4 letters or more
-are looked at first; if none has a free cell left to measure, the bar
-drops to 3 letters, then 2) — the cell with the
-fewest letters still possible on it, counted separately for its across
-and its down word and keeping only the letters both agree on, the same
-figure the interactive "Stats" button shows — since the tightest cell
-is where the fill can go wrong soonest and is best settled while there
-is still room to manoeuvre; ties are then broken by how many letters are
-already placed and, as a final
-tie-break among a handful of similarly-placed slots, by which one's
-still-open cells look statistically the most promising to fill (see the
-next paragraph), that promise being divided by one plus the number of
-words the attempt has already tried on the slot, so a slot retried again
-and again gives way to a less explored one. A slot that crosses another slot already known to be
+fixed reading order, "Falcon" chooses the next slot inside that zone the way
+the Ingrid crossword filler does: slots where a "Challenge Word" still fits come
+first, then slots where a theme word still fits; among those, it favors the slot
+with the fewest candidate words left relative to how much trouble its crossings
+have caused so far during this attempt. A small random choice among the three
+best slots keeps attempts from all converging on the same grid. A slot that crosses another slot already known to be
 unfillable is skipped entirely — a word placed there would likely just
 be removed again the moment the grid gets cleaned up. Separately, the
 generator also keeps its own running memory, within the current attempt
@@ -2122,18 +2100,15 @@ most often. A handful of these cells, where one letter dominates clearly
 enough, are picked at random to become "seeds" — soft hints that guide
 the search without being real, confirmed answers; a real crossing word
 placed later always overrides a seed the moment it reaches that cell.
-Separately, and regardless of whether any seed was actually planted, this
-same sampling is used to rank the real dictionary candidates for a slot
-before trying them (at a cell crossed by two slots, a letter only counts
-if both the across and the down sample saw it, at the lower of its two
-counts). When the language has its usage scores (how common each word
+To choose a word, "Falcon" first removes from the slot's candidates every
+word holding a letter that no candidate of a crossing slot could take at
+the shared cell, since it would block that slot. When the language has its usage scores (how common each word
 is, from everyday to practically unknown), only the 60% best-rated of a
 slot's rated candidates are tried at all — an unrated word always stays —
 and a grid's final score adds each word's usage score minus 3 to its
 length, so a grid of everyday words beats a grid of rare ones. Among the
-candidates left, one whose letters line up well with the
-statistical consensus on the slot's own still-undetermined cells is tried
-before one that doesn't (a word's rank being divided by one plus the number
+candidates left, one whose letters leave its crossing slots more words to
+choose from is tried before one that leaves them fewer (a word's rank being divided by one plus the number
 of times the attempt has already tried it on that slot, so a fresh word
 overtakes one retried again and again), though the very first word actually attempted is
 still drawn at random from among a narrow window of the best-ranked
@@ -2280,11 +2255,11 @@ past it for as long as some other attempt of the same cycle is still
 genuinely working towards its own — stopping it right away would only
 leave its own core sitting idle in the meantime for no benefit.
 
-**The default filling method: Ingrid-like.** The search described above
-(trial and backtracking) is the experimental "Falcon" method, only used
-when picked in the **Méthode / Method** selector on the local machine. By
-default, grids are filled with a different search, modelled on the Ingrid
-crossword filler. Every slot keeps
+**The second filling method: Ingrid-like.** The search described above
+(trial and backtracking) is the "Falcon" method, used until more than 15 % of the
+grid's white cells hold a letter. The rest of the grid is filled with a different
+search, modelled on the Ingrid crossword filler, which takes over the grid reached
+so far. Every slot keeps
 its full list of still-possible words, and after each decision every list
 is pruned against its crossings until they all agree (a word whose letter
 at a crossing no word of the crossing slot carries is dropped, and so is
@@ -2294,13 +2269,13 @@ far; its words are tried in an order fixed once, favoring the words that
 leave the most choice to their crossings, then the most common ones,
 within the usual families ("Mots Défi", theme words, Scrabble words, the
 rest). The very first word of an empty grid is chosen the Falcon way
-instead (the same slot choice and word draw as the experimental method),
+instead (the same slot choice and word draw as the Falcon method),
 so that two attempts — or two empty Interactive grids — start
 differently. A dead end makes it try "not this word" instead, then undo the
 previous choice; after too many dead ends it restarts from the beginning,
 keeping what it learnt about the hardest crossings. Everything else —
 black cells, cycles, clean-ups, the final optimization — is the same as
-with the default method.
+with the Falcon method.
 
 **Many attempts running in parallel, and carrying progress forward
 between cycles.** Rather than only ever trying one pattern-and-fill
@@ -2376,14 +2351,16 @@ carried-forward state, rather than starting over from nothing.
 
 **Optimizing the finished grid.** Once some cycle finally produces a
 grid where every single slot holds a real word, one last pass tries to
-remove even more black cells from it, one at a time: each black cell is
-temporarily turned back into a white cell and a fresh, smaller fill is
-attempted right there; if the grid is still structurally sound and every
-resulting word is a genuine dictionary entry, the black cell stays
-removed — otherwise it's put right back and the next one is tried. This
-whole grid is swept over and over, in a freshly shuffled order each
-time, for as long as at least one black cell keeps getting successfully
-removed on a full pass, since removing one can sometimes free up another
-that couldn't be removed before. Because a rejected removal is always
+remove even more black cells from it, one at a time, even below the
+requested black-cell rate: each black cell is temporarily turned back into
+a white cell and only the words it touches, and the words crossing those,
+are rewritten around it, with the Ingrid-like method whichever method
+filled the grid, every other letter staying in place; if the grid is still
+structurally sound and every resulting word is a genuine dictionary entry,
+the black cell stays removed — otherwise it's put right back and the next
+one is tried. The grid is swept in a freshly shuffled order for as long as
+a removal succeeds, a refused black cell being tried again only once a
+removal has changed a letter of the words next to it, and the whole step
+stops after 30 seconds at most, keeping what it has removed so far. Because a rejected removal is always
 undone immediately, this step can never make an already-valid grid
 worse — only denser, and only when that's genuinely still possible.

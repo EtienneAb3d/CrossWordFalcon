@@ -302,6 +302,31 @@ public final class UserProfiles {
         return normalized(folder, readJson(folder.resolve(PREFERENCES_FILE)));
     }
 
+    /** {id, name} of the user's dictionaries of {@code language} holding the grid form {@code mot}, checked or not, in
+     * the player's order (mirrors dictionaries_holding). */
+    @SuppressWarnings("unchecked")
+    public static List<Object> dictionariesHolding(String pseudo, String language, String mot) throws IOException {
+        Path folder = profileDir(pseudo);
+        String prefix = mot + "\t";
+        List<Object> found = new ArrayList<>();
+        for (Object o : (List<Object>) loadPreferences(pseudo).get("glossaries")) {
+            Map<String, Object> item = (Map<String, Object>) o;
+            String id = String.valueOf(item.get("id"));
+            if (FALCON_IDS.contains(id) || !language.equals(item.get("language"))) continue;
+            Path path = dictPath(folder, id);
+            if (!Files.exists(path)) continue;
+            try (var lines = Files.lines(path, java.nio.charset.StandardCharsets.UTF_8)) {
+                if (lines.anyMatch(line -> line.startsWith(prefix))) {
+                    Map<String, Object> entry = new LinkedHashMap<>();
+                    entry.put("id", id);
+                    entry.put("name", item.getOrDefault("name", ""));
+                    found.add(entry);
+                }
+            }
+        }
+        return found;
+    }
+
     /** Stores the order, on/off state and colour of the glossaries and the fixed glossaries' colours; null when
      * every item would be disabled (mirrors save_preferences). */
     @SuppressWarnings("unchecked")

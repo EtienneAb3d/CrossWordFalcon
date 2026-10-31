@@ -257,6 +257,23 @@ def load_preferences(pseudo):
     return _normalized(folder, _read_json(folder / PREFERENCES_FILE))
 
 
+def dictionaries_holding(pseudo, language, mot):
+    """`{id, name}` of the user's dictionaries of `language` holding the grid
+    form `mot`, checked or not, in the player's order."""
+    folder = profile_dir(pseudo)
+    prefix = f"{mot}\t".encode("ascii")
+    found = []
+    for item in load_preferences(pseudo)["glossaries"]:
+        if item.get("id") in FALCON_IDS or item.get("language") != language:
+            continue
+        path = _dict_path(folder, item["id"])
+        if path.exists():
+            with path.open("rb") as f:
+                if any(line.startswith(prefix) for line in f):
+                    found.append({"id": item["id"], "name": item.get("name", "")})
+    return found
+
+
 def save_preferences(pseudo, glossaries, colors=None):
     """Stores the order, on/off state and colour of the user's glossaries
     (`[{"id", "enabled", "color"}, ...]`, the reorderable list) and the

@@ -4735,6 +4735,10 @@ end through the real running API (interactive start/step/save,
   Playwright/Chromium: "aberrant (aberrant; aberrer)" over "usage : 5/5".
   Below it, same class, the levels whose lexicon holds the form ("Niveau :
   Facile, Moyen, Difficile", `gridDifficulty`; "aucun" when none).
+- **Dictionary-sources line** (`.dictionary-sources`), at the user's explicit
+  request: right under a result's heading, above the table or the "no word found"
+  line, "Sans définition, mais présent dans : …" in the same small grey italic as
+  `.dictionary-empty`/`.dictionary-truncated`. No new token.
 - **"Niveau", never "Difficulté"** — the user's rule: the difficulty is
   called "Niveau" (masculine) everywhere — form label, grid title phrase
   "Niveau : Moyen", Library column, PDF/SVG header (`svg_export.
@@ -4812,17 +4816,14 @@ end through the real running API (interactive start/step/save,
   Playwright/Chromium); "Précision thématique" (`#theme-precision`) is the
   first item of `#form-actions`, left of "Thématique", its plain
   label-above-input shape top-aligned with Thématique's label by the row's
-  `align-items: flex-start`; "Difficulté", "Effort", "Méthode" (localhost
-  only) and "Mots par pose" (only while "Méthode" is "Falcon
-  (expérimental)", `#words-per-node-field[hidden]` beating `label`'s own
-  `display`) sit on a line of their own,
+  `align-items: flex-start`; "Difficulté" and "Effort" sit on a line of their own,
   `#generate-options-row` (`flex-basis: 100%`, `gap: 1rem`,
   `align-items: end` like the option row, so the toggle lines up with the
   input boxes), right above `#generate-row`, and are hidden with the other
   fields in `.play-collapsed`. No new token. **Visually confirmed** with
   Playwright/Chromium at 1400×1000: the option row fits on one line, the
   three rows read Précision/Thématique/Mots Défi, then
-  Difficulté/Mots par pose/Mode/Voir les mots, then the generate row.
+  Difficulté/Mode/Voir les mots, then the generate row.
 
 - **Full-size black cells for an American grid** (`.full-black .cell.black
   { background-size: 100% 100% }`), at the user's explicit request: a grid
@@ -4927,7 +4928,7 @@ end through the real running API (interactive start/step/save,
 - **Integer fields of the generation form share one width**
   (`#generate-form input[type="number"] { width: 5rem }`), at the user's
   explicit request: Largeur, Hauteur, Taux noir, the three "Style de
-  motif" shares, "Multi-mots max (%)" and "Mots par pose" are all 5rem
+  motif" shares and "Multi-mots max (%)" are all 5rem
   wide, room for 3 digits next to the browser's spin buttons. This
   replaces the former `.input-with-suffix input { width: 4rem }` (and the
   generic 6rem) for those fields. **Visually confirmed** with

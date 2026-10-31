@@ -46,7 +46,7 @@ from .clues import (
     ClueGenerationError, LLMBackupWindow, LLMClueGenerator, TITLE_PROPOSALS_COUNT,
     _LANGUAGE_STOPWORDS_RAW,
 )
-from .dictionary_lookup import search as dictionary_search_impl, grid_form as dictionary_grid_form
+from .dictionary_lookup import search as dictionary_search_impl, grid_form as dictionary_grid_form, word_sources
 from .embedder import Embedder, EmbedderError
 from .qdrant_store import QdrantStore, QdrantStoreError, multi_collection_name
 from .secret_store import is_valid_pseudo
@@ -57,14 +57,14 @@ from .ipuz_export import IPUZ_MEDIA_TYPE, render_ipuz
 from .jpz_export import JPZ_MEDIA_TYPE, render_jpz
 from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, GenerationPaused,
-    BLACK_SYMMETRIES, PATTERN_STYLES, FILL_METHODS, FILL_METHOD_DEFAULT, valid_pattern_mix, pattern_style_of_mix, PREFILL_MIN_WORD_COUNT, style_index, WORDS_PER_NODE, MULTI_WORD_PERCENT, DualIndex, DualSet, build_letters_grid,
+    BLACK_SYMMETRIES, PATTERN_STYLES, FILL_METHODS, FILL_METHOD_DEFAULT, resolve_fill_method, valid_pattern_mix, pattern_style_of_mix, PREFILL_MIN_WORD_COUNT, style_index, WORDS_PER_NODE, MULTI_WORD_PERCENT, DualIndex, DualSet, build_letters_grid,
     build_word_entries, challenge_word_grid_form, extract_slots, generate_grid, slot_direction,
     glossary_word_cells,
     word_forms,
     _interactive_fill_diagnostics, _interactive_letter_stats,
     _serialize_resume_state, interactive_boundary_candidates, interactive_clean_impossible_zones,
     interactive_crossing_words, interactive_minimize_black_cells,
-    glossary_entry_counts, interactive_ingrid_blocked_cells, interactive_place_word, interactive_place_word_ingrid, interactive_slot_candidates, lexicon_length_counts, lexicon_words,
+    glossary_entry_counts, reload_word_cells, interactive_ingrid_blocked_cells, interactive_place_word, interactive_place_word_ingrid, interactive_slot_candidates, lexicon_length_counts, lexicon_words,
     multi_lexicon_length_counts, multi_only_mots,
     load_lexicon,
     make_pattern,
@@ -432,7 +432,7 @@ BUDGET_MODES = {
     "gridzilla": 100_000_000,
 }
 
-# Upper bound of the "Mots par pose" field (GenerateRequest.words_per_node).
+# Upper bound of GenerateRequest.words_per_node.
 MAX_WORDS_PER_NODE = 50
 
 # Optional "Theme" field on the generation form, at the user's explicit
@@ -1091,13 +1091,21 @@ class InteractiveStepRequest(BaseModel):
     `zone_complete: true` (nothing placed) once every such slot is lettered
     (see `interactive_place_word`'s own `zone_cells`).
 
-    `fill_method` is the generation form's current "Méthode" (crossword_
-    gen.py's FILL_METHODS): "ingrid" places the word with
+    `fill_method` (crossword_gen.py's FILL_METHODS, "auto" by default,
+    `resolve_fill_method`): "ingrid" places the word with
     `interactive_place_word_ingrid`, whose state between clicks the
-    session keeps (`INTERACTIVE_SESSIONS[job_id]["ingrid"]`)."""
+    session keeps (`INTERACTIVE_SESSIONS[job_id]["ingrid"]`).
+
+    `symmetry` is the generation form's current "Symétrie": a black-cell
+    reshape made for a word carries its images along, and is refused when
+    they cannot follow (see `interactive_place_word`'s own `symmetry`).
+    `pattern_style` is the session's "Style de motif": such a reshape must keep
+    it (see `interactive_place_word`'s own `pattern_style`)."""
     job_id: str
     grid: list[list[str]]
     challenge_words: list[str] = []
+    symmetry: str = "none"
+    pattern_style: str = "airy"
     last_placed_cells: list[list[int]] = []
     selected_cells: list[list[int]] = []
     zone_cells: list[list[int]] = []
@@ -1215,13 +1223,13 @@ class InteractiveImpossibleRequest(BaseModel):
     up red as an "impossible"/invented word here (or, by extension, via
     "Vérifier", which is built directly on top of this endpoint).
 
-    `fill_method` (`None` by default): with "ingrid", the cells of the slots
-    that method treats as blocked are added to `impossible_cells`
+    `fill_method` ("auto" by default, `resolve_fill_method`): with "ingrid", the
+    cells of the slots that method treats as blocked are added to `impossible_cells`
     (`interactive_ingrid_blocked_cells`)."""
     job_id: str
     grid: list[list[str]]
     challenge_words: list[str] = []
-    fill_method: Optional[str] = None
+    fill_method: str = FILL_METHOD_DEFAULT
 
 
 class InteractiveStatsRequest(BaseModel):
@@ -2047,6 +2055,30 @@ def _profile_owner(req):
 
 
 _PROFILE_FORBIDDEN = {"ok": False, "code": "profile_forbidden"}
+
+
+class DictionarySourcesRequest(ProfileRequest):
+    """Body of POST /api/dictionary/sources: the searched word and language,
+    with the player's credentials for their own dictionaries (a body, not a
+    query string, so the secret word never reaches a request log)."""
+    q: str
+    lang: str = "fr"
+
+
+@app.post("/api/dictionary/sources")
+async def dictionary_sources(req: DictionarySourcesRequest):
+    """Where a word the Dictionnaire found no definition for exists: `{"sources":
+    [{"id"}, ..., {"id", "name"}]}`, the Falcon wordlists (`dictionary_lookup.
+    word_sources`: freq, scrabble, hunspell, multi) then the dictionaries of
+    the player, when their pseudo and secret word match."""
+    if req.lang not in WORDLISTS:
+        raise HTTPException(status_code=400, detail=f"langue inconnue : {req.lang!r}")
+    sources = [{"id": name} for name in await asyncio.to_thread(word_sources, req.q, req.lang)]
+    mot = dictionary_grid_form(req.q)
+    pseudo = await asyncio.to_thread(_profile_owner, req)
+    if pseudo is not None and mot:
+        sources += await asyncio.to_thread(user_profiles.dictionaries_holding, pseudo, req.lang, mot)
+    return {"sources": sources}
 
 
 @app.post("/api/profile/get")
@@ -4231,6 +4263,17 @@ def _glossary_cells(grid, glossary, scrabble_words):
     return [list(c) for c in sorted(scrabble)], {gid: cells[gid] for gid in sorted(cells)}
 
 
+def _reload_word_cells(grid, challenge_words, priority_words, scrabble_words, glossary):
+    """The colours of a reloaded Interactive grid (`reload_word_cells`):
+    `{challenge, theme, scrabble: cells, user: {user dictionary id: cells}}`,
+    the "others" glossary's cells left plain."""
+    index, names = glossary if glossary is not None else (None, None)
+    cells = reload_word_cells(grid, challenge_words, priority_words, scrabble_words, index, names)
+    fixed = {name: cells.pop(name, []) for name in ("challenge", "theme", user_profiles.SCRABBLE_ID)}
+    cells.pop(user_profiles.OTHERS_ID, None)
+    return {**fixed, "user": {gid: cells[gid] for gid in sorted(cells)}}
+
+
 def _for_direction(words, direction):
     if isinstance(words, DualSet):
         return words.for_direction(direction) or frozenset()
@@ -5656,7 +5699,8 @@ async def _run_interactive_job(job_id, req):
             # _load_interactive_index), saved with its drafts and grids so
             # a resumed session keeps it.
             "generation_params": {"pattern_style": req.pattern_style,
-                                  "pattern_mix": req.pattern_mix},
+                                  "pattern_mix": req.pattern_mix,
+                                  "symmetry": req.symmetry},
         }
         job["result"] = {
             "width": req.width,
@@ -6106,7 +6150,9 @@ async def interactive_step(req: InteractiveStepRequest):
         if w and (grid_form := challenge_word_grid_form(w))
     )
     _validate_fill_method(req.fill_method)
-    if req.fill_method == "ingrid":
+    _validate_symmetry(req.symmetry)
+    _validate_pattern_style(req.pattern_style)
+    if resolve_fill_method(req.fill_method, req.grid) == "ingrid":
         placed = await asyncio.to_thread(
             interactive_place_word_ingrid,
             [list(row) for row in req.grid], rows, cols,
@@ -6120,7 +6166,7 @@ async def interactive_step(req: InteractiveStepRequest):
             [list(row) for row in req.grid], rows, cols,
             sess["index"], sess["rng"], sess["priority_words"],
             challenge_words, req.last_placed_cells, sess.get("scrabble_words"),
-            req.multi_word_percent, req.selected_cells, req.zone_cells,
+            req.multi_word_percent, req.selected_cells, req.zone_cells, req.symmetry, req.pattern_style,
         )
     _add_placed_breaks(placed.get("placed"), sess.get("multi_breaks"))
     if placed.get("placed"):
@@ -6342,9 +6388,8 @@ async def interactive_impossible(req: InteractiveImpossibleRequest):
         _interactive_fill_diagnostics, [list(row) for row in req.grid], rows, cols, sess["index"],
         challenge_words,
     )
-    if req.fill_method is not None:
-        _validate_fill_method(req.fill_method)
-    if req.fill_method == "ingrid":
+    _validate_fill_method(req.fill_method)
+    if resolve_fill_method(req.fill_method, req.grid) == "ingrid":
         blocked = await asyncio.to_thread(
             interactive_ingrid_blocked_cells, [list(row) for row in req.grid], rows, cols, sess["index"],
             challenge_words,
@@ -6849,6 +6894,12 @@ async def _run_interactive_resume_job(job_id, record, profile_pseudo=None):
             "grid": grid,
             # The draft's word breaks (grid_store.save_grid_work's `breaks`).
             "breaks": _clean_breaks(record.get("breaks"), rows, cols),
+            # Which glossary each complete word belongs to, for its colour.
+            "word_cells": _reload_word_cells(
+                grid, challenge_words, priority_words,
+                INTERACTIVE_SESSIONS[job_id]["scrabble_words"],
+                INTERACTIVE_SESSIONS[job_id]["glossary"],
+            ),
             "placed": None,
             "impossible": False,
             "has_theme": bool(priority_words),
