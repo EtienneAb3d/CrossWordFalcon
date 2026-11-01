@@ -749,8 +749,10 @@ public final class App {
         Path wordlist = WORDLISTS.get(language);
         if (wordlist == null) return lines;
         // A word only in the Scrabble wordlist (merged into every grid's lexicon) gets that file's line, then a
-        // multi-word expression (MOT written without its separators) the multi-word wordlist's.
-        for (Path p : List.of(wordlist, Words.scrabbleWordlistPath(language), Words.multiWordlistPath(language))) {
+        // Hunspell word that wordlist's, then a multi-word expression (MOT written without its separators) the
+        // multi-word wordlist's.
+        for (Path p : List.of(wordlist, Words.scrabbleWordlistPath(language), Words.hunspellWordlistPath(language),
+                Words.multiWordlistPath(language))) {
             try (BufferedReader r = Files.newBufferedReader(p, StandardCharsets.UTF_8)) {
                 String line;
                 while ((line = r.readLine()) != null) {

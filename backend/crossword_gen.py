@@ -486,11 +486,12 @@ def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_noun
 # wordlist row shifted left by `ROW_SOURCE_BITS` bits, the low bits naming its
 # wordlist — the index of its path in a lexicon's `sources`: 0 the freq
 # wordlist, 1 the Scrabble wordlist, 2 the multi-word wordlist
-# (`data/wordlist_<lang>_multi.tsv`), then from `ROW_SOURCE_USER` one per user
+# (`data/wordlist_<lang>_multi.tsv`), 3 the Hunspell wordlist
+# (`data/wordlist_<lang>_hunspell.tsv`), then from `ROW_SOURCE_USER` one per user
 # dictionary of the lexicon, in rank order (`dict_<id>.tsv`,
 # `backend/user_profiles.py`'s `lexicon_spec`). An index keeps the two apart,
 # 4 bytes of offset (`refs`) and 1 byte of source (`ref_sources`) per word.
-ROW_SOURCE_FREQ, ROW_SOURCE_SCRABBLE, ROW_SOURCE_MULTI, ROW_SOURCE_USER = 0, 1, 2, 3
+ROW_SOURCE_FREQ, ROW_SOURCE_SCRABBLE, ROW_SOURCE_MULTI, ROW_SOURCE_HUNSPELL, ROW_SOURCE_USER = 0, 1, 2, 3, 4
 ROW_SOURCE_BITS = 8
 ROW_SOURCE_MASK = (1 << ROW_SOURCE_BITS) - 1
 
@@ -510,6 +511,11 @@ def _multi_row_ref(offset):
     return offset << ROW_SOURCE_BITS | ROW_SOURCE_MULTI
 
 
+def _hunspell_row_ref(offset):
+    """Row reference of a Hunspell-wordlist row starting at byte `offset`."""
+    return offset << ROW_SOURCE_BITS | ROW_SOURCE_HUNSPELL
+
+
 def _user_row_ref(offset, position):
     """Row reference of a row starting at byte `offset` of the user
     dictionary at `position` in the lexicon's user dictionaries."""
@@ -522,7 +528,7 @@ def _row_forms(line, word, source):
     `load_wordlist` (freq wordlist) or `merge_scrabble_lexicon` (Scrabble
     wordlist, whose ACCENTUE column lists every possible spelling,
     `;`-separated, the main one first: `accented` is that one; the
-    multi-word wordlist has the same format). A user dictionary's row
+    multi-word and Hunspell wordlists have the same format). A user dictionary's row
     (`MOT<TAB>ACCENTUE<TAB>SCORE`) has no lemma: the main spelling is its
     own."""
     parts = line.split("\t")
@@ -3174,8 +3180,8 @@ def usage_score_path(language):
 
 
 def usage_score_out_path(language):
-    """The usage scores of the freq-wordlist words absent from the Scrabble
-    wordlist (`build_usage_scores.py --source out`)."""
+    """The usage scores of the freq-wordlist and Hunspell-wordlist words
+    absent from the Scrabble wordlist (`build_usage_scores.py --source out`)."""
     return os.path.join(DATA_DIR, f"usage_score_{language}_scrabble_out.tsv")
 
 
@@ -3186,18 +3192,22 @@ def usage_score_multi_path(language):
 
 
 def _read_usage_file(path, result):
+    """Adds the scores of `path` to `result`; a MOT `result` already rates
+    keeps its score."""
     with open(path, encoding="utf-8") as f:
         for line in f:
             parts = line.rstrip("\n").split("\t")
             if len(parts) >= 3 and parts[2].isdigit():
-                result[parts[0].upper()] = int(parts[2])
+                result.setdefault(parts[0].upper(), int(parts[2]))
 
 
 def load_usage_scores(language):
-    """{MOT: usage score} of `language`'s usage-score file, plus those of
-    its file for the freq words absent from the Scrabble wordlist (`usage_score_out_path`) and of its
-    multi-word expressions (`usage_score_multi_path`), when they exist;
-    `None` when the language has no usage-score file. Transient: only read
+    """{MOT: usage score} of `language`'s usage-score file, then of its file
+    for the words absent from the Scrabble wordlist (`usage_score_out_path`),
+    then of its multi-word expressions (`usage_score_multi_path`), when they
+    exist; a MOT keeps the score of the first file rating it, so an expression
+    never overwrites the single word of the same grid form. `None` when the
+    language has no usage-score file. Transient: only read
     while a lexicon is being indexed (`build_index` keeps the values as an
     `array('b')`)."""
     if not language:
@@ -3447,8 +3457,8 @@ def scrabble_word_cells(grid, scrabble_words):
 # ("arc-en-ciel", "screw cap") under their grid form (ARCENCIEL). A lexicon
 # selected by usage score merges them in (`merge_multi_lexicon`), selected
 # like every other word (`_select_lexicon`), their frequency read from
-# `data/wordlist_<lang>_freq_multi.tsv`; a grid form the freq or Scrabble
-# wordlist already holds stays a single word. A placed expression's word
+# `data/wordlist_<lang>_freq_multi.tsv`; a grid form the freq, Scrabble or
+# Hunspell wordlist already holds stays a single word. A placed expression's word
 # breaks (`word_breaks`) are drawn as a thicker line between its words.
 
 # Characters that separate the words of an expression's spelling.
@@ -3462,13 +3472,17 @@ def multi_wordlist_path(language):
     return os.path.join(DATA_DIR, f"wordlist_{language}_multi.tsv")
 
 
+def hunspell_wordlist_path(language):
+    return os.path.join(DATA_DIR, f"wordlist_{language}_hunspell.tsv")
+
+
 _GLOSSARY_ENTRY_COUNTS = {}
 
 
 def glossary_entry_counts(language):
     """{"scrabble": n, "others": n}, the entries of `language`'s two Falcon
     glossaries, every difficulty included: the distinct grid words of its
-    Scrabble wordlist and of its freq + multi-word wordlists (a word of both
+    Scrabble wordlist and of its freq + Hunspell + multi-word wordlists (a word of both
     glossaries counts in both). Read once per language and process."""
     counts = _GLOSSARY_ENTRY_COUNTS.get(language)
     if counts is not None:
@@ -3487,7 +3501,8 @@ def glossary_entry_counts(language):
     freq_path = os.path.join(DATA_DIR, f"wordlist_{language}_freq.tsv")
     counts = {
         "scrabble": len(_words(scrabble_wordlist_path(language))),
-        "others": len(_words(freq_path) | _words(multi_wordlist_path(language))),
+        "others": len(_words(freq_path) | _words(hunspell_wordlist_path(language))
+                      | _words(multi_wordlist_path(language))),
     }
     _GLOSSARY_ENTRY_COUNTS[language] = counts
     return counts
@@ -3513,10 +3528,10 @@ def word_breaks(spelling):
 
 
 def _single_word_mots(language):
-    """MOTs of `language`'s freq and Scrabble wordlists — transient."""
+    """MOTs of `language`'s freq, Scrabble and Hunspell wordlists — transient."""
     mots = set()
     for path in (os.path.join(DATA_DIR, f"wordlist_{language}_freq.tsv"),
-                 scrabble_wordlist_path(language)):
+                 scrabble_wordlist_path(language), hunspell_wordlist_path(language)):
         if os.path.exists(path):
             with open(path, encoding="utf-8") as f:
                 mots.update(line.split("\t", 1)[0] for line in f)
@@ -3525,7 +3540,7 @@ def _single_word_mots(language):
 
 def load_multi_breaks(language):
     """{MOT: word breaks} of every expression of `language`'s multi-word
-    wordlist whose grid form no freq or Scrabble word has (`word_breaks`
+    wordlist whose grid form no single word has (`_single_word_mots`, `word_breaks`
     of its main spelling), once per language and process; {} when the
     language has none."""
     if not language:
@@ -3561,14 +3576,29 @@ def multi_breaks_for_languages(language, bilingual_language=None):
 
 
 def merge_multi_lexicon(language, by_length, refs, frequencies, proper_nouns, non_gloss):
-    """Adds `language`'s multi-word wordlist to a lexicon (in place): every
-    expression whose grid form is not in it yet joins `by_length` with the
-    reference of its own row (`_multi_row_ref`), a frequency of at least
+    """Adds `language`'s multi-word wordlist to a lexicon (in place), see
+    `_merge_wordlist_rows`."""
+    if language:
+        _merge_wordlist_rows(language, multi_wordlist_path(language), _multi_row_ref,
+                             by_length, refs, frequencies, proper_nouns, non_gloss)
+
+
+def merge_hunspell_lexicon(language, by_length, refs, frequencies, proper_nouns, non_gloss):
+    """Adds `language`'s Hunspell wordlist to a lexicon (in place), see
+    `_merge_wordlist_rows`."""
+    if language:
+        _merge_wordlist_rows(language, hunspell_wordlist_path(language), _hunspell_row_ref,
+                             by_length, refs, frequencies, proper_nouns, non_gloss)
+
+
+def _merge_wordlist_rows(language, path, row_ref, by_length, refs, frequencies, proper_nouns, non_gloss):
+    """Adds the wordlist `path` (MOT<TAB>ACCENTUE<TAB>CANONIQUE) to a lexicon,
+    in place: every word whose grid form is not in it yet joins `by_length`
+    with the reference of its own row (`row_ref`), a frequency of at least
     `NOISE_FREQUENCY_THRESHOLD`, `proper_nouns` when it is a likely proper
     noun (`_proper_noun_check`) and `non_gloss` when
     no gloss-dictionary entry defines it or its lemmas."""
-    path = multi_wordlist_path(language) if language else None
-    if not path or not os.path.exists(path):
+    if not os.path.exists(path):
         return
     has_any_gloss, has_gloss_dictionary = _try_import_gloss_lookup()
     gloss_available = bool(has_any_gloss and has_gloss_dictionary(language))
@@ -3578,7 +3608,7 @@ def merge_multi_lexicon(language, by_length, refs, frequencies, proper_nouns, no
         word = parts[0]
         if len(parts) < 3 or not _is_grid_word(word) or word in refs:
             continue
-        refs[word] = _multi_row_ref(offset)
+        refs[word] = row_ref(offset)
         by_length.setdefault(len(word), []).append(word)
         frequencies[word] = max(frequencies.get(word, 0.0), float(NOISE_FREQUENCY_THRESHOLD))
         accented = parts[1].split(";")[0] or word
@@ -3856,8 +3886,9 @@ def _select_lexicon(wordlist_path, max_words, difficulty, user=None):
     `user` is `None`, see `_merge_user_lexicon`).
 
     With no explicit `max_words` and a language that has a usage-score
-    file (`usage_lexicon_active`), the whole freq, Scrabble and multi-word
-    wordlists are loaded (`merge_multi_lexicon`) and cut to the union of
+    file (`usage_lexicon_active`), the whole freq, Scrabble, Hunspell and
+    multi-word wordlists are loaded (`merge_hunspell_lexicon`,
+    `merge_multi_lexicon`, in that order) and cut to the union of
     two criteria: the words rated at least
     `USAGE_DIFFICULTY_MIN_SCORE[difficulty]`, and the words kept by the
     freq wordlist's own `DIFFICULTY_PRESETS[difficulty]` cut, or by the
@@ -3893,6 +3924,7 @@ def _select_lexicon(wordlist_path, max_words, difficulty, user=None):
     usage_scores = load_usage_scores(language)
     if by_usage:
         proper_nouns, non_gloss = set(proper_nouns), set(non_gloss)
+        merge_hunspell_lexicon(language, by_length, refs, frequencies, proper_nouns, non_gloss)
         merge_multi_lexicon(language, by_length, refs, frequencies, proper_nouns, non_gloss)
         min_score = USAGE_DIFFICULTY_MIN_SCORE[difficulty]
         if min_score is not None:
@@ -3949,8 +3981,8 @@ def _merge_user_lexicon(user, difficulty, by_length, refs, frequencies, usage_sc
 
     The Falcon dictionary is split in two ranked glossaries: the Scrabble
     dictionary (the words of `scrabble`) and the others (the words whose
-    row is in the freq or multi-word wordlist, `ROW_SOURCE_FREQ`/
-    `ROW_SOURCE_MULTI`); a word only in a disabled one (rank `None`) leaves
+    row is in the freq, Hunspell or multi-word wordlist, `ROW_SOURCE_FREQ`/
+    `ROW_SOURCE_HUNSPELL`/`ROW_SOURCE_MULTI`); a word only in a disabled one (rank `None`) leaves
     the lexicon. A word of the user dictionaries, read in rank order and
     counting only in the first holding it, absent from the lexicon is added
     with its own row reference (`_user_row_ref`), a frequency of at least
@@ -3972,7 +4004,7 @@ def _merge_user_lexicon(user, difficulty, by_length, refs, frequencies, usage_sc
             ranks = []
             if scrabble_rank is not None and w in scrabble:
                 ranks.append(scrabble_rank)
-            if others_rank is not None and (refs.get(w, 0) & ROW_SOURCE_MASK) in (ROW_SOURCE_FREQ, ROW_SOURCE_MULTI):
+            if others_rank is not None and (refs.get(w, 0) & ROW_SOURCE_MASK) in (ROW_SOURCE_FREQ, ROW_SOURCE_HUNSPELL, ROW_SOURCE_MULTI):
                 ranks.append(others_rank)
             if ranks:
                 falcon_ranks[w] = min(ranks)
@@ -4044,6 +4076,7 @@ def load_lexicon(wordlist_path, max_words, difficulty, user=None):
          usage_scores, glossary_keys) = _select_lexicon(wordlist_path, max_words, difficulty, user)
         sources = (str(wordlist_path), scrabble_wordlist_path(language) if language else None,
                    multi_wordlist_path(language) if language else None,
+                   hunspell_wordlist_path(language) if language else None,
                    *(path for path, _rank in (user[0] if user is not None else ())))
         dictionary_frequencies = load_dictionary_frequencies(wordlist_path)
         freq_multi = freq_multi_wordlist_path(language) if language else None
@@ -4156,7 +4189,7 @@ _MULTI_LEXICON_COUNTS = {}
 
 def multi_only_mots(language):
     """(number of distinct MOTs of `language`'s multi-word wordlist, frozenset
-    of those no freq or Scrabble word has — the expressions
+    of those no single word has (`_single_word_mots`) — the expressions
     `merge_multi_lexicon` can add to a lexicon), once per language and
     process; `None` when the language has no multi-word wordlist."""
     with _MULTI_ONLY_MOTS_LOCK:

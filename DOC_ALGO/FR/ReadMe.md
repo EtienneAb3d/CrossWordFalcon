@@ -149,9 +149,12 @@ coupe de fréquence du niveau (`DIFFICULTY_PRESETS`, 75 % avec définition
 exigée et noms propres probables exclus en facile, 85 % en moyen) noté au
 moins `FREQ_CUT_USAGE_LENIENCY` (1) point de moins (2 en facile, 1 en
 moyen). Le score vient de l'un ou l'autre fichier de
-scores (le mot du corpus absent du Scrabble est noté dans
-`data/usage_score_<langue>_scrabble_out.tsv`). Le niveau difficile garde
-tous les mots, Scrabble et corpus (`backend/crossword_gen.py`,
+scores (le mot du corpus ou de la liste Hunspell absent du Scrabble est noté dans
+`data/usage_score_<langue>_scrabble_out.tsv`) ; un mot garde la note du premier
+fichier qui le note, dans l'ordre Scrabble, `_scrabble_out`, `_multi`
+(`load_usage_scores`), si bien qu'une expression n'écrase jamais la note du mot
+simple de même forme grille. Le niveau difficile garde
+tous les mots, Scrabble, corpus et Hunspell (`backend/crossword_gen.py`,
 `_select_lexicon`, `usage_lexicon_active`, `load_lexicon`). Un mot sans
 score est retiré aux niveaux facile et moyen. Le filtre des formes
 fléchies et le quota de mots sans définition du niveau facile ne
@@ -166,11 +169,19 @@ celles de ses lemmes) n'ont que le type « name », sans autre type possible
 n'est alors jamais restreint aux formes fléchies connues
 (`scrabble_easy_filter`, `scrabble_words_for_languages`).
 
-Une telle langue y verse aussi ses **expressions de plusieurs mots**,
+Une telle langue y verse aussi les **mots de sa liste Hunspell**, quand elle en a
+une (`data/wordlist_<langue>_hunspell.tsv`, anglais, français, espagnol ;
+`merge_hunspell_lexicon`, appelé par `_select_lexicon`) : ils suivent la même
+sélection, leur score venant de `data/usage_score_<langue>_scrabble_out.tsv`.
+N'ayant pas de fréquence, ils n'ont pas de coupe de fréquence et n'entrent en
+facile et en moyen que par leur note. Contrairement à un mot Scrabble, ils
+comptent dans les quotas de noms propres et de mots sans définition.
+
+Elle y verse enfin ses **expressions de plusieurs mots**,
 quand elle en a la liste (`data/wordlist_<langue>_multi.tsv`, « arc-en-
 ciel », « screw cap », écrites sans séparateurs : ARCENCIEL ;
 `merge_multi_lexicon`, appelé par `_select_lexicon`) : une expression dont
-la forme grille n'est pas déjà un mot du lexique y entre avec la référence
+la forme grille n'est pas déjà un mot du lexique, mot simple compris, y entre avec la référence
 de sa ligne, et suit la même sélection — son score dans
 `data/usage_score_<langue>_multi.tsv`, sa coupe de fréquence dans
 `data/wordlist_<langue>_freq_multi.tsv` (sans score, elle n'entre donc

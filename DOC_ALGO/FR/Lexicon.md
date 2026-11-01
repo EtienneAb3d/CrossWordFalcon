@@ -355,12 +355,14 @@ plusieurs signaux) :
   (`backend/crossword_gen.py`, `Filler._crossing_letter_counts`,
   `Filler._candidate_score`).
 
-- **Score d'usage** : note de 0 à 5 donnée par le LLM local à chaque mot du
-  dictionnaire Scrabble d'une langue (`data/usage_score_<langue>_scrabble.tsv`,
-  `data_builder/build_usage_scores.py`) : 5 vocabulaire courant, 4 soutenu
+- **Score d'usage** : note de 0 à 5 donnée par le LLM local à chaque mot d'une
+  langue : dictionnaire Scrabble (`data/usage_score_<langue>_scrabble.tsv`),
+  mots du corpus et de la liste Hunspell absents du Scrabble
+  (`_scrabble_out.tsv`), expressions (`_multi.tsv`), un mot gardant la note du
+  premier de ces fichiers qui le note (`data_builder/build_usage_scores.py`) : 5 vocabulaire courant, 4 soutenu
   ou littéraire, 3 forme rare d'un mot courant (subjonctif imparfait, passé
   simple aux 1re et 2e personnes…), 2 terme technique, 1 mot vieilli,
-  0 mot pratiquement inconnu. Un mot hors de ce fichier n'a pas de score
+  0 mot pratiquement inconnu. Un mot hors de ces fichiers n'a pas de score
   connu. Il sert à quatre endroits : la **sélection du lexique** par
   niveau de difficulté (un mot, Scrabble ou non, noté au moins 3 en facile, 2 en
   moyen, ou un mot de la coupe de fréquence du niveau noté un point de
@@ -393,8 +395,9 @@ plusieurs signaux) :
   depuis le panneau Paramètres, rangée dans `USER_PROFILES/<pseudo>/` et
   convertie en notes d'usage Falcon (0-5). Avec les deux glossaires du
   lexique Falcon — le **dictionnaire Scrabble** et les **autres** mots
-  (« Autres (Statistiques, Wiktionnaire) » : dictionnaire de fréquences
-  du corpus, vérifié par Hunspell, et expressions du Wiktionnaire) —, il
+  (« Autres (Statistiques, Hunspell, Wiktionnaire) » : dictionnaire de
+  fréquences du corpus, vérifié par Hunspell, mots de la liste Hunspell et
+  expressions du Wiktionnaire) —, il
   forme la liste ordonnée des glossaires de ce joueur, après les Mots Défi
   et le glossaire thématique : chaque élément coché est une famille de
   candidats, dans cet ordre de priorité, ses mots tentés tant qu'ils

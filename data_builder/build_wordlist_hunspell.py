@@ -7,8 +7,10 @@ build_wordlist_freq.py's `_fetch_hunspell`) that fits a crossword grid
 and is absent from both data/wordlist_<lang>_freq.tsv and
 data/wordlist_<lang>_scrabble.tsv. Its words get dictionary definitions
 (build_gloss_dictionary.py), grammatical analyses (build_inflections.py)
-and usage scores (build_usage_scores.py --source out); they do not join
-any grid lexicon.
+and usage scores (build_usage_scores.py --source out), and join a grid's
+lexicon under its difficulty's rules (backend/crossword_gen.py's
+`merge_hunspell_lexicon`) and the Qdrant "words" collection
+(qdrant_populate.py).
 
 - Every form of the dictionary is listed by Hunspell's `unmunch` (stem x
   affix expansion). `unmunch` misreads some affix files (multi-character

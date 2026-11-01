@@ -122,8 +122,10 @@ Each of the six languages has its own dictionary, built independently by
    plain uncompressed.
 6. **`qdrant_populate.py`** (`WordEmbeddingIndexer`) — embeds and upserts
    every word of the language's lexicon — the freq wordlist, then every
-   Scrabble-dictionary word it lacks (`--source all`, the default; `freq`
-   or `scrabble` restrict the stream, `--offset` counts words of it) —
+   Scrabble-dictionary word it lacks, then every Hunspell-wordlist word they
+   both lack (`--source all`, the default; `freq`, `scrabble` or `hunspell`
+   restrict the stream, `--offset` counts words of it), so every word of a
+   usage-score file is in Qdrant, the expressions in "words_multi" —
    into a local Qdrant vector collection (optional; only needed for the
    "Thématique"/"Similaires" features and the theme glossary). With
    `--multi` (English and French, the languages with a multi-word
@@ -202,7 +204,8 @@ each spelling accepted by `hunspell -G` as-is or title-cased —
 affix files) whose grid form (`build_wordlist_scrabble.grid_form`) is in
 neither the freq nor the Scrabble wordlist. ACCENTUE lists every spelling
 of the MOT, a lowercase one first; CANONIQUE the union of their `hunspell
--m` stems, else the main spelling. Its words join no grid lexicon: the
+-m` stems, else the main spelling. A lexicon selected by usage score merges
+it in (see "Lexicon selected by usage score and frequency" below). The
 gloss dictionary (`build_gloss_dictionary._target_lemmas`, its CANONIQUE
 column), the inflection table (`build_inflections._wordlist_forms`, its
 ACCENTUE column) and the out usage scores (`build_usage_scores.py --source
@@ -261,8 +264,8 @@ multi.py`'s counting); `--dropped FILE` lists every headword left out
 with its filter. ACCENTUE lists
 every headword with that MOT, the main one first (a lemma entry, then
 lowercase, then alphabetical); CANONIQUE the union of their lemmas (a lemma
-entry is its own). A MOT the freq or Scrabble wordlist already holds is
-kept. A lexicon selected by usage score merges it in (see "Multi-word
+entry is its own). A MOT the freq, Scrabble or Hunspell wordlist already
+holds is kept. A lexicon selected by usage score merges it in (see "Multi-word
 expressions and word breaks" below). Three companion files cover it,
 built by the same `build_<lang>.sh` steps: `data/wordlist_<lang>_freq_
 multi.tsv` (`build_wordlist_freq_multi.py`, the freq wordlist's format:
@@ -323,9 +326,11 @@ exists (`_load_hunspell_entries`), into `data/usage_score_<lang>_scrabble_
 out.tsv`, same format, same prompt; `build_<lang>.sh`'s usage-score step
 runs both. The lookup tables are loaded once
 before the worker threads start (their lazy caches are unlocked). The
-grid engine reads both files when a lexicon is loaded (`load_usage_scores`
-merges the out file in, only when the Scrabble one exists; Java `Words.
-loadUsageScores`) (see "What a lexicon
+grid engine reads the Scrabble file, then the out file, then the multi-word
+file when a lexicon is loaded (`load_usage_scores`, only when the Scrabble
+one exists, a MOT keeping the score of the first file rating it, so an
+expression never overwrites the single word of the same grid form; Java
+`Words.loadUsageScores`) (see "What a lexicon
 keeps in memory", the candidate order and "Content scoring"); the
 Dictionnaire panel through `backend/usage_scores.py` (Java `UsageScores`,
 both files plus `usage_score_<lang>_multi.tsv`). A language without
@@ -370,8 +375,12 @@ Not applied to a language whose lexicon is selected by usage score (below).
 given (`usage_lexicon_active`, Java `Words.usageLexiconActive`),
 `load_lexicon(path, max_words, difficulty)` (Java `Generator.load(path,
 maxWords, difficulty)`), through `_select_lexicon` (Java `Generator.
-select`), loads the whole freq, Scrabble and multi-word wordlists
-(`merge_multi_lexicon`), then keeps the union of two criteria (a word with
+select`), loads the whole freq, Scrabble, Hunspell and multi-word wordlists
+(`merge_hunspell_lexicon`, `merge_multi_lexicon`, in that order, both through
+`_merge_wordlist_rows`: a word not yet in the lexicon joins with its own row
+reference, a frequency of at least `NOISE_FREQUENCY_THRESHOLD`, and counts
+against the proper-noun and no-gloss quotas; Java `Words.mergeHunspellLexicon`,
+`mergeMultiLexicon`, `mergeWordlistRows`), then keeps the union of two criteria (a word with
 no usage score is dropped at easy/medium): a word rated at least
 `USAGE_DIFFICULTY_MIN_SCORE[difficulty]` in a usage-score file (easy 3,
 medium 2, hard `None` = every word), or a word kept by the freq
@@ -408,9 +417,10 @@ row reference per word: the byte offset of the word's row in its wordlist
 (`refs`, `array('I')`, Java unsigned `int[]`) and that wordlist's index in
 `sources` (`ref_sources`, `array('B')`, Java `LenIndex.refSources` unsigned
 `byte[]`) — `ROW_SOURCE_FREQ` 0, `ROW_SOURCE_SCRABBLE` 1, `ROW_SOURCE_MULTI`
-2, from `ROW_SOURCE_USER` 3 one per user dictionary of the lexicon, in rank
-order; while loading, both are packed in one integer (`ROW_SOURCE_BITS` 8,
-`_freq_row_ref`/`_scrabble_row_ref`/`_multi_row_ref`/`_user_row_ref`, Java
+2, `ROW_SOURCE_HUNSPELL` 3, from `ROW_SOURCE_USER` 4 one per user dictionary of
+the lexicon, in rank order; while loading, both are packed in one integer
+(`ROW_SOURCE_BITS` 8, `_freq_row_ref`/`_scrabble_row_ref`/`_multi_row_ref`/
+`_hunspell_row_ref`/`_user_row_ref`, Java
 `long`) —, the glossary-key column (`gloss`,
 `array('b')`, Java `LenIndex.gloss` `byte[]`, `None`/null unless user
 dictionaries are merged in, see "User dictionaries" below), the
@@ -423,7 +433,7 @@ word and their inverse (`lemma_off`/`lemma_ids`, `lemma_keys`/
 `int[]`, set by `_attach_lemmas`/Java `Words.attachLemmas` from each
 word's own row: its CANONIQUE lemmas, lowercased, else its accented form,
 interned to ids unique per process so two languages never share one), plus
-the wordlist paths (`sources`: freq, Scrabble, multi-word, then each user
+the wordlist paths (`sources`: freq, Scrabble, multi-word, Hunspell, then each user
 dictionary's `dict_<id>.tsv`). The accented form and the lemmas are
 read back from that row only when a grid's words get their `accented`/
 `canonical` fields (`word_forms`, Java `Words.wordForms`). Besides the
@@ -703,8 +713,8 @@ json`. Holds all server-side state in plain module dicts/lists:
   expressions of `usage_score_<lang>_multi.tsv` (all / rated 3 or more,
   `usage_scores._load_multi`, Java `UsageScores.loadMulti`),
   `multi_level_totals` the expressions of each difficulty's lexicon —
-  its words among `crossword_gen.multi_only_mots` (the multi MOTs no freq
-  or Scrabble word has; Java `Words.multiOnlyMots`), counted per length by
+  its words among `crossword_gen.multi_only_mots` (the multi MOTs no freq,
+  Scrabble or Hunspell word has; Java `Words.multiOnlyMots`), counted per length by
   `multi_lexicon_length_counts`, Java `Generator.multiLexiconLengthCounts`,
   once per pair and process —, `multi_length_counts`/`multi_easy_length_
   counts` per length of `lengths` (which covers them too): the expressions
@@ -2098,8 +2108,8 @@ order above). Its
 word breaks — the letter counts after which its main spelling separates
 two words (`word_breaks`: space, hyphen, apostrophe; "arc-en-ciel" -> (3,
 5)) — are kept per language (`load_multi_breaks`, Java `Words.
-loadMultiBreaks`: {MOT: breaks} of every expression whose grid form no freq
-or Scrabble word has, once per process; `multi_breaks_for_languages`, a
+loadMultiBreaks`: {MOT: breaks} of every expression whose grid form no freq,
+Scrabble or Hunspell word has, once per process; `multi_breaks_for_languages`, a
 dict or a `DualSet`, Java `Words.Breaks`). A break is written
 `[row, col, direction]`: the line between that cell and the next one in
 `direction`. `word_break_edges(grid, multi_breaks)` (Java `Words.
@@ -3625,8 +3635,8 @@ Words.UserLexicon)`) passes `user` to `_select_lexicon`, which calls
 selection — or on an empty lexicon when both Falcon ranks are `None` (no
 Falcon word, no Scrabble set, empty quota sets): a selected word belongs
 to the Scrabble glossary when it is in the Scrabble set, to "others" when
-its row is in the freq or multi-word wordlist (`ROW_SOURCE_FREQ`/
-`ROW_SOURCE_MULTI`), and leaves the lexicon when every glossary it
+its row is in the freq, Hunspell or multi-word wordlist (`ROW_SOURCE_FREQ`/
+`ROW_SOURCE_HUNSPELL`/`ROW_SOURCE_MULTI`), and leaves the lexicon when every glossary it
 belongs to is disabled; the user dictionaries are read in rank order, a MOT
 counting only in the first holding it; such a word not selected joins with
 `_user_row_ref`, its lemma being its main spelling (`_row_forms`, Java
@@ -3848,12 +3858,12 @@ cookie also holds the secret word, which is never logged.
   button for a user dictionary, the last enabled item kept checked
   client-side; a user dictionary shown as "name (language)",
   `glossaryUserName`, the Falcon glossaries as "Dictionnaire Scrabble" and
-  "Autres (Statistiques, Wiktionnaire)", each dictionary of the form's
+  "Autres (Statistiques, Hunspell, Wiktionnaire)", each dictionary of the form's
   language(s) showing its entries for that language (`glossaryEntryCount`;
   the Falcon glossaries' from `GET /api/glossary/counts?language=`,
   `{scrabble, others}`, `crossword_gen.glossary_entry_counts`, Java `Words.
   glossaryEntryCounts`: distinct grid words of the Scrabble wordlist and of
-  the freq + multi-word wordlists, every difficulty included, once per
+  the freq + Hunspell + multi-word wordlists, every difficulty included, once per
   language and process), `glossaryOthers` with the known
   sources of the other words) — each with
   a colour square (`<input type="color">`, saved through `POST /api/

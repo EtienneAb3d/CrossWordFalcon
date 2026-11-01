@@ -471,10 +471,11 @@ expressions de plusieurs mots » plus bas) — puis, en dernière étape, alimen
 vectorielle Qdrant avec tout le lexique de la langue (la note d'usage de
 chaque mot, voir « Scores d'usage », est calculée juste avant) : les mots de
 `data/wordlist_<lang>_freq.tsv`, puis ceux de
-`data/wordlist_<lang>_scrabble.tsv` qu'il ne contient pas
+`data/wordlist_<lang>_scrabble.tsv` qu'il ne contient pas, puis ceux de
+`data/wordlist_<lang>_hunspell.tsv` qu'aucun des deux ne contient
 (`python -m data_builder.qdrant_populate <lang> --recreate` — voir la
-classe `WordEmbeddingIndexer` ; `--source scrabble` n'envoie que ces
-derniers, sans réencoder le reste) et, en anglais et en français, la
+classe `WordEmbeddingIndexer` ; `--source scrabble` ou `--source hunspell`
+n'envoie que les seconds ou les troisièmes, sans réencoder le reste) et, en anglais et en français, la
 collection `words_multi` avec toutes les expressions de
 `data/wordlist_<lang>_multi.tsv` (`python -m data_builder.qdrant_populate
 <lang> --multi --recreate`, voir « Expressions dans Qdrant » plus bas).
@@ -604,7 +605,9 @@ trait d'union ou chiffre est écartée) ; ACCENTUE liste toutes les graphies
 de ce MOT, une graphie en minuscules en tête ; CANONIQUE réunit leurs
 lemmes donnés par `hunspell -m`, la graphie principale à défaut.
 
-Ces mots n'entrent dans aucun lexique de grille : ils reçoivent des
+Ces mots entrent dans le lexique d'une grille selon les règles de son niveau
+(`backend/crossword_gen.py`, `merge_hunspell_lexicon`) et dans la collection
+Qdrant `words` (`data_builder/qdrant_populate.py`) ; ils reçoivent des
 définitions (le dictionnaire de définitions cherche aussi les lemmes de la
 colonne CANONIQUE, `build_gloss_dictionary.py`, `_target_lemmas`), des
 analyses grammaticales (`build_inflections.py`, `_wordlist_forms`) et un
@@ -835,8 +838,9 @@ mot.
 
 ### Utilisation
 
-Le générateur de grille lit ces deux fichiers en chargeant le lexique
-(`backend/crossword_gen.py`, `load_usage_scores`, le second seulement en
+Le générateur de grille lit ces fichiers en chargeant le lexique, un mot gardant
+la note du premier qui le note : Scrabble, `_scrabble_out`, puis `_multi`
+(`backend/crossword_gen.py`, `load_usage_scores`, les autres seulement en
 présence du premier) : il choisit les mots de chaque difficulté (voir
 « Utilisation » du dictionnaire Scrabble plus haut), et il ne garde, pour
 chaque emplacement, que les 60 % de candidats les mieux notés parmi ceux

@@ -35,7 +35,7 @@ def _load(language):
                     for line in f:
                         parts = line.rstrip("\n").split("\t")
                         if len(parts) >= 3 and parts[2].isdigit():
-                            scores[parts[0].upper()] = int(parts[2])
+                            scores.setdefault(parts[0].upper(), int(parts[2]))
             _cache[language] = scores
         return _cache[language]
 

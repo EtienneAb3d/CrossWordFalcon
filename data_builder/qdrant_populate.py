@@ -2,13 +2,14 @@
 """
 Populate the Qdrant "words" collection with an embedding for every word of
 a language's lexicon: `data/wordlist_<lang>_freq.tsv`, then every word of
-`data/wordlist_<lang>_scrabble.tsv` it lacks (the Scrabble dictionary is
-merged whole into every grid's lexicon, see backend/crossword_gen.py's
-`merge_scrabble_lexicon`).
+`data/wordlist_<lang>_scrabble.tsv` it lacks, then every word of
+`data/wordlist_<lang>_hunspell.tsv` (English, French and Spanish) they both
+lack — all merged into a grid's lexicon, see backend/crossword_gen.py's
+`_select_lexicon`.
 
 `WordEmbeddingIndexer` reads the TSVs (columns
 `MOT<TAB>ACCENTUE<TAB>FREQUENCE<TAB>CANONIQUE`, and
-`MOT<TAB>ACCENTUE<TAB>CANONIQUE` for the Scrabble one), embeds the natural
+`MOT<TAB>ACCENTUE<TAB>CANONIQUE` for the Scrabble and Hunspell ones), embeds the natural
 accented spelling of each word via `backend/embedder.py`'s `Embedder`
 (batched), and upserts one point per word into Qdrant via
 `backend/qdrant_store.py`'s `QdrantStore` — one tenant per language
@@ -28,12 +29,15 @@ CLI (run from the repo root):
   python -m data_builder.qdrant_populate fr --limit 5000 --recreate
   python -m data_builder.qdrant_populate de --batch 128 --offset 800000
   python -m data_builder.qdrant_populate fr --source scrabble
+  python -m data_builder.qdrant_populate fr --source hunspell
   python -m data_builder.qdrant_populate --init-only
   python -m data_builder.qdrant_populate fr --multi --recreate
 
 `--source` picks the words sent: `all` (default: the freq wordlist, then
-the Scrabble words it lacks), `freq` or `scrabble` (only the Scrabble words
-the freq wordlist lacks — adds them without re-embedding the rest).
+the Scrabble words it lacks, then the Hunspell words they both lack), `freq`,
+`scrabble` (only the Scrabble words the freq wordlist lacks) or `hunspell`
+(only the Hunspell words both lack) — the last two add them without
+re-embedding the rest.
 `--offset` counts words of that stream.
 
 `--multi` fills the "words_multi" collection instead
@@ -62,9 +66,10 @@ LANGUAGES = ("fr", "en", "de", "es", "it", "pt")
 DATA_DIR = _REPO_ROOT / "data"
 WORDLIST_TEMPLATE = "wordlist_{lang}_freq.tsv"
 SCRABBLE_TEMPLATE = "wordlist_{lang}_scrabble.tsv"
+HUNSPELL_TEMPLATE = "wordlist_{lang}_hunspell.tsv"
 MULTI_TEMPLATE = "wordlist_{lang}_multi.tsv"
 FREQ_MULTI_TEMPLATE = "wordlist_{lang}_freq_multi.tsv"
-SOURCES = ("all", "freq", "scrabble")
+SOURCES = ("all", "freq", "scrabble", "hunspell")
 
 
 class WordEmbeddingIndexer:
@@ -99,6 +104,9 @@ class WordEmbeddingIndexer:
 
     def scrabble_path(self, lang):
         return self.data_dir / SCRABBLE_TEMPLATE.format(lang=lang)
+
+    def hunspell_path(self, lang):
+        return self.data_dir / HUNSPELL_TEMPLATE.format(lang=lang)
 
     def source_path(self, lang):
         """The wordlist this indexer mirrors for `lang`."""
@@ -149,6 +157,7 @@ class WordEmbeddingIndexer:
         if not path.exists():
             raise FileNotFoundError(path)
         scrabble = self.scrabble_path(lang)
+        hunspell = self.hunspell_path(lang)
 
         def multi_rows():
             freq_path = self.data_dir / FREQ_MULTI_TEMPLATE.format(lang=lang)
@@ -163,9 +172,15 @@ class WordEmbeddingIndexer:
                 return
             if source in ("all", "freq"):
                 yield from self._freq_rows(path)
+            known = {row[0] for row in self._freq_rows(path)}
             if source in ("all", "scrabble") and scrabble.exists():
-                known = {row[0] for row in self._freq_rows(path)}
                 for row in self._scrabble_rows(scrabble):
+                    if row[0] not in known:
+                        yield row
+            if source in ("all", "hunspell") and hunspell.exists():
+                if scrabble.exists():
+                    known.update(row[0] for row in self._scrabble_rows(scrabble))
+                for row in self._scrabble_rows(hunspell):
                     if row[0] not in known:
                         yield row
 
@@ -237,8 +252,9 @@ def main(argv=None):
     parser.add_argument("--offset", type=int, default=0,
                         help="skip the first N words of the stream (resume an interrupted run)")
     parser.add_argument("--source", choices=SOURCES, default="all",
-                        help="words to send: all (default), freq, or scrabble "
-                             "(only the Scrabble words the freq wordlist lacks)")
+                        help="words to send: all (default), freq, scrabble (only the "
+                             "Scrabble words the freq wordlist lacks) or hunspell "
+                             "(only the Hunspell words both lack)")
     parser.add_argument("--batch", type=int, default=64,
                         help="embedding / upsert batch size (default 64)")
     parser.add_argument("--recreate", action="store_true",

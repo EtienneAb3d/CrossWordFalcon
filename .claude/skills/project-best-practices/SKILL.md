@@ -665,7 +665,8 @@ project's engineering language.
     only set `QDRANT_ON_DISK=1` on SSD storage). Deterministic point ids
     (`uuid5("<lang>:<word>")`) make the populator idempotent/resumable.
   - `data_builder/qdrant_populate.py` (`WordEmbeddingIndexer`) fills the
-    collection from `data/wordlist_<lang>_freq.tsv` — embeds, via
+    collection from `data/wordlist_<lang>_freq.tsv`, then the words of the
+    Scrabble and Hunspell wordlists it lacks — embeds, via
     `Embedder` (batched), the compiled text `backend/qdrant_store.py`'s
     `_compose_embed_text` builds for each word (its accented/inflected
     spelling, bare uppercase MOT form, and canonical form(s), space-
@@ -2185,14 +2186,23 @@ the current defaults/behavior to know before touching this code.
   the shared local LLM, which also slows the public site's LLM calls
   while it runs) and resumable (`.partial`).
 - **Hunspell words outside both wordlists get definitions and a usage
-  score** — the user's rule: enrich the gloss dictionary with the
+  score, and fill grids** — the user's rule: enrich the gloss dictionary with the
   crossword-compatible Hunspell words missing from the usage-score files
   and rate them into `usage_score_<lang>_scrabble_out.tsv`, the step being
   part of the glossary preparation. `data_builder/build_wordlist_hunspell.py`
   writes `data/wordlist_<lang>_hunspell.tsv` (committed, Scrabble wordlist
   format) right after the Scrabble dictionary; the gloss dictionary, the
-  inflection table and `build_usage_scores.py --source out` read it. Its
-  words join no grid lexicon. The user's rule: only the low-volume
+  inflection table and `build_usage_scores.py --source out` read it. The
+  user's rule: every usage-score word counts in grid filling, under the
+  levels' filtering rules, and every one of them is in Qdrant, the expressions
+  in their own collection (`merge_hunspell_lexicon`, `qdrant_populate --source
+  hunspell`; Java `Words.mergeHunspellLexicon`). Choices made with it, to revisit
+  with the user: a Hunspell word has no frequency, so it enters at Easy/Medium by
+  its score alone and at Hard whatever its score; it counts against the
+  proper-noun and no-gloss quotas, like an expression and unlike a Scrabble word;
+  it belongs to the "Autres" glossary, shown "Autres (Statistiques, Hunspell,
+  Wiktionnaire)"; a grid form that is also an expression stays a single word, with
+  no word breaks and outside the "Multi-mots max" cap. The user's rule: only the low-volume
   languages, English, French and Spanish (~900, ~43 000, ~46 000 words);
   German (~275 000 compounds), Italian (~2.6 M enclitic verb forms) and
   Portuguese (~2.1 M derivations) stay out of the pipeline. Choices made
@@ -2412,6 +2422,10 @@ the current defaults/behavior to know before touching this code.
   both; "Mots Défi" and the theme glossary show no count; a user dictionary of
   another language keeps its plain word count, with no language named.
 
+- **A word's usage score is the first one read** — the user's rule: at
+  loading, `_scrabble_out` never overwrites `_scrabble`, and `_multi` overwrites
+  neither (`load_usage_scores`, `_read_usage_file`; Java `Words.loadUsageScores`,
+  also `backend/usage_scores.py`/`UsageScores` for the two single-word files).
 - **Usage scores steer word choice and grid scoring** — the user's rules:
   before the statistical ranking, keep only the 60 % (`USAGE_KEEP_PERCENT`)
   of a slot's candidates with the highest usage score, when it is known

@@ -71,11 +71,12 @@ public final class Words {
     }
 
     /** While a lexicon is loaded, a row reference is the byte offset of a word's wordlist row shifted left by
-     * ROW_SOURCE_BITS bits, the low bits naming its wordlist — the index of its path in a lexicon's sources: the freq, Scrabble or multi-word wordlist
-     * (mirrors ROW_SOURCE_FREQ/ROW_SOURCE_SCRABBLE/ROW_SOURCE_MULTI), then from ROW_SOURCE_USER one per user dictionary
+     * ROW_SOURCE_BITS bits, the low bits naming its wordlist — the index of its path in a lexicon's sources: the freq, Scrabble, multi-word or Hunspell wordlist
+     * (mirrors ROW_SOURCE_FREQ/ROW_SOURCE_SCRABBLE/ROW_SOURCE_MULTI/ROW_SOURCE_HUNSPELL), then from ROW_SOURCE_USER one per user dictionary
      * of the lexicon, in rank order (dict_&lt;id&gt;.tsv, UserProfiles.lexiconSpec). A LenIndex keeps the two apart, 4 bytes
      * of offset (refs) and 1 byte of source (refSources) per word. */
-    public static final int ROW_SOURCE_FREQ = 0, ROW_SOURCE_SCRABBLE = 1, ROW_SOURCE_MULTI = 2, ROW_SOURCE_USER = 3;
+    public static final int ROW_SOURCE_FREQ = 0, ROW_SOURCE_SCRABBLE = 1, ROW_SOURCE_MULTI = 2, ROW_SOURCE_HUNSPELL = 3,
+            ROW_SOURCE_USER = 4;
     public static final int ROW_SOURCE_BITS = 8;
     public static final long ROW_SOURCE_MASK = (1L << ROW_SOURCE_BITS) - 1;
 
@@ -135,7 +136,7 @@ public final class Words {
                 if (scrabbleRank != null && scrabble.contains(w)) best = scrabbleRank;
                 Long ref = refs.get(w);
                 int source = ref == null ? 0 : (int) (ref & ROW_SOURCE_MASK);
-                if (othersRank != null && (source == ROW_SOURCE_FREQ || source == ROW_SOURCE_MULTI)) {
+                if (othersRank != null && (source == ROW_SOURCE_FREQ || source == ROW_SOURCE_HUNSPELL || source == ROW_SOURCE_MULTI)) {
                     best = Math.min(best, othersRank);
                 }
                 if (best != Integer.MAX_VALUE) {
@@ -195,6 +196,11 @@ public final class Words {
     /** Row reference of a multi-word-wordlist row starting at byte {@code offset} (mirrors _multi_row_ref). */
     static long multiRowRef(long offset) {
         return offset << ROW_SOURCE_BITS | ROW_SOURCE_MULTI;
+    }
+
+    /** Row reference of a Hunspell-wordlist row starting at byte {@code offset} (mirrors _hunspell_row_ref). */
+    static long hunspellRowRef(long offset) {
+        return offset << ROW_SOURCE_BITS | ROW_SOURCE_HUNSPELL;
     }
 
     public static Lexicon loadWordlist(String path, Number maxWords, boolean requireGloss, boolean excludeProperNouns)
@@ -492,9 +498,10 @@ public final class Words {
         return falcon.Env.ROOT.resolve("data").resolve("usage_score_" + language + "_scrabble.tsv");
     }
 
-    /** {MOT: usage score} of {@code language}'s usage-score file plus its file for the freq words absent from the
-     * Scrabble wordlist and its multi-word expressions' file (when they exist), null when the language has no
-     * usage-score file. Transient: only read while a lexicon is being indexed (mirrors load_usage_scores). */
+    /** {MOT: usage score} of {@code language}'s usage-score file, then of its file for the words absent from the
+     * Scrabble wordlist, then of its multi-word expressions' file (when they exist); a MOT keeps the score of the first
+     * file rating it, so an expression never overwrites the single word of the same grid form. Null when the language
+     * has no usage-score file. Transient: only read while a lexicon is being indexed (mirrors load_usage_scores). */
     public static Map<String, Integer> loadUsageScores(String language) throws IOException {
         if (language == null || language.isEmpty()) return null;
         Path path = usageScorePath(language);
@@ -512,7 +519,7 @@ public final class Words {
         return falcon.Env.ROOT.resolve("data").resolve("usage_score_" + language + "_multi.tsv");
     }
 
-    /** The usage scores of the freq-wordlist words absent from the Scrabble wordlist (mirrors
+    /** The usage scores of the freq-wordlist and Hunspell-wordlist words absent from the Scrabble wordlist (mirrors
      * usage_score_out_path). */
     public static Path usageScoreOutPath(String language) {
         return falcon.Env.ROOT.resolve("data").resolve("usage_score_" + language + "_scrabble_out.tsv");
@@ -524,7 +531,7 @@ public final class Words {
             while ((line = r.readLine()) != null) {
                 String[] parts = line.split("\t", -1);
                 if (parts.length >= 3 && !parts[2].isEmpty() && parts[2].chars().allMatch(Character::isDigit)) {
-                    result.put(parts[0].toUpperCase(Locale.ROOT), Integer.parseInt(parts[2]));
+                    result.putIfAbsent(parts[0].toUpperCase(Locale.ROOT), Integer.parseInt(parts[2]));
                 }
             }
         }
@@ -1014,6 +1021,10 @@ public final class Words {
         return falcon.Env.ROOT.resolve("data").resolve("wordlist_" + language + "_multi.tsv");
     }
 
+    public static Path hunspellWordlistPath(String language) {
+        return falcon.Env.ROOT.resolve("data").resolve("wordlist_" + language + "_hunspell.tsv");
+    }
+
     private static final Map<String, int[]> GLOSSARY_ENTRY_COUNTS = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** {Scrabble glossary, others glossary} entries of {@code language}, once per language and process (mirrors
@@ -1021,6 +1032,7 @@ public final class Words {
     public static int[] glossaryEntryCounts(String language) {
         return GLOSSARY_ENTRY_COUNTS.computeIfAbsent(language, l -> {
             Set<String> others = gridWordsOf(falcon.Env.ROOT.resolve("data").resolve("wordlist_" + l + "_freq.tsv"));
+            others.addAll(gridWordsOf(hunspellWordlistPath(l)));
             others.addAll(gridWordsOf(multiWordlistPath(l)));
             return new int[]{gridWordsOf(scrabbleWordlistPath(l)).size(), others.size()};
         });
@@ -1062,7 +1074,7 @@ public final class Words {
         return breaks.stream().mapToInt(Integer::intValue).filter(b -> b < total).toArray();
     }
 
-    /** A language's multi-word wordlist: its number of distinct MOTs and those no freq or Scrabble word has (the
+    /** A language's multi-word wordlist: its number of distinct MOTs and those no single word has (the
      * expressions mergeMultiLexicon can add to a lexicon). */
     public record MultiOnly(int total, Set<String> mots) {}
 
@@ -1095,11 +1107,11 @@ public final class Words {
         }
     }
 
-    /** MOTs of the language's freq and Scrabble wordlists — transient (mirrors _single_word_mots). */
+    /** MOTs of the language's freq, Scrabble and Hunspell wordlists — transient (mirrors _single_word_mots). */
     private static Set<String> singleWordMots(String language) throws IOException {
         Set<String> mots = new HashSet<>();
         for (Path path : new Path[]{falcon.Env.ROOT.resolve("data").resolve("wordlist_" + language + "_freq.tsv"),
-                scrabbleWordlistPath(language)}) {
+                scrabbleWordlistPath(language), hunspellWordlistPath(language)}) {
             if (!Files.exists(path)) continue;
             try (BufferedReader r = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
                 String line;
@@ -1112,8 +1124,8 @@ public final class Words {
         return mots;
     }
 
-    /** {MOT: word breaks} of every expression of the language's multi-word wordlist whose grid form no freq or
-     * Scrabble word has, once per language and process; empty when the language has none (mirrors
+    /** {MOT: word breaks} of every expression of the language's multi-word wordlist whose grid form no single
+     * word has (singleWordMots), once per language and process; empty when the language has none (mirrors
      * load_multi_breaks). */
     public static synchronized Map<String, int[]> loadMultiBreaks(String language) {
         if (language == null || language.isEmpty()) return Map.of();
@@ -1162,14 +1174,27 @@ public final class Words {
         return new Breaks(across, across);
     }
 
-    /** Adds the language's multi-word wordlist to a lexicon, in place: every expression whose grid form is not in it
-     * yet joins byLength with the reference of its own row, a frequency of at least {@code noiseThreshold},
-     * {@code properNouns} when it is a likely proper noun (properNounCheck) and {@code nonGloss} when no gloss-dictionary entry
-     * defines it or its lemmas (mirrors merge_multi_lexicon). */
+    /** Adds the language's multi-word wordlist to a lexicon, in place (mirrors merge_multi_lexicon). */
     public static void mergeMultiLexicon(String language, Lexicon lex, double noiseThreshold, Set<String> properNouns,
                                          Set<String> nonGloss) throws IOException {
         if (language == null || language.isEmpty()) return;
-        Path path = multiWordlistPath(language);
+        mergeWordlistRows(language, multiWordlistPath(language), Words::multiRowRef, lex, noiseThreshold, properNouns, nonGloss);
+    }
+
+    /** Adds the language's Hunspell wordlist to a lexicon, in place (mirrors merge_hunspell_lexicon). */
+    public static void mergeHunspellLexicon(String language, Lexicon lex, double noiseThreshold, Set<String> properNouns,
+                                            Set<String> nonGloss) throws IOException {
+        if (language == null || language.isEmpty()) return;
+        mergeWordlistRows(language, hunspellWordlistPath(language), Words::hunspellRowRef, lex, noiseThreshold, properNouns, nonGloss);
+    }
+
+    /** Adds the wordlist {@code path} (MOT TAB ACCENTUE TAB CANONIQUE) to a lexicon, in place: every word whose grid
+     * form is not in it yet joins byLength with the reference of its own row, a frequency of at least
+     * {@code noiseThreshold}, {@code properNouns} when it is a likely proper noun (properNounCheck) and {@code nonGloss}
+     * when no gloss-dictionary entry defines it or its lemmas (mirrors _merge_wordlist_rows). */
+    private static void mergeWordlistRows(String language, Path path, java.util.function.LongUnaryOperator rowRef, Lexicon lex,
+                                          double noiseThreshold, Set<String> properNouns, Set<String> nonGloss)
+            throws IOException {
         if (!Files.exists(path)) return;
         boolean glossAvailable = GlossLookup.hasGlossDictionary(language);
         java.util.function.BiPredicate<String, List<String>> isProper = properNounCheck(language);
@@ -1177,7 +1202,7 @@ public final class Words {
             String[] parts = line.split("\t", -1);
             String word = parts[0];
             if (parts.length < 3 || !isGridWord(word) || lex.refs().containsKey(word)) return;
-            lex.refs().put(word, multiRowRef(offset));
+            lex.refs().put(word, rowRef.applyAsLong(offset));
             lex.byLength().computeIfAbsent(word.length(), k -> new ArrayList<>()).add(word);
             lex.frequencies().put(word, Math.max(lex.frequencies().getOrDefault(word, 0.0), noiseThreshold));
             String accented = parts[1].split(";", -1)[0];

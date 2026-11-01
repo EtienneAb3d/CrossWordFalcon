@@ -45,7 +45,7 @@ public final class UsageScores {
                         String[] parts = line.split("\t", -1);
                         if (parts.length >= 3 && !parts[2].isEmpty()
                                 && parts[2].chars().allMatch(Character::isDigit)) {
-                            scores.put(parts[0].toUpperCase(Locale.ROOT), Integer.parseInt(parts[2]));
+                            scores.putIfAbsent(parts[0].toUpperCase(Locale.ROOT), Integer.parseInt(parts[2]));
                         }
                     }
                 } catch (IOException e) {

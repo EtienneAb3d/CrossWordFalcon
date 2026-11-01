@@ -68,7 +68,7 @@ from .crossword_gen import (
     multi_lexicon_length_counts, multi_only_mots,
     load_lexicon,
     make_pattern,
-    scrabble_word_cells, scrabble_wordlist_path, multi_wordlist_path,
+    scrabble_word_cells, scrabble_wordlist_path, multi_wordlist_path, hunspell_wordlist_path,
     scrabble_words_for_languages,
     multi_breaks_for_languages, word_break_edges, placed_word_break_edges,
 )
@@ -3744,13 +3744,15 @@ def _load_wordlist_raw_lines(language):
     diagnostic table (this file is not re-sorted here). A word only in
     the language's Scrabble wordlist (data/wordlist_<language>_scrabble.
     tsv, merged into every grid's lexicon) gets that file's line, then a
+    Hunspell word (data/wordlist_<language>_hunspell.tsv) that file's, then a
     multi-word expression (data/wordlist_<language>_multi.tsv, MOT written
     without its separators: SEHATER) that file's."""
     wordlist_path = WORDLISTS.get(language)
     lines = {}
     if not wordlist_path:
         return lines
-    for path in (wordlist_path, scrabble_wordlist_path(language), multi_wordlist_path(language)):
+    for path in (wordlist_path, scrabble_wordlist_path(language), hunspell_wordlist_path(language),
+                 multi_wordlist_path(language)):
         try:
             with open(path, encoding="utf-8") as f:
                 for line in f:

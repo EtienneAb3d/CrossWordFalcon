@@ -111,9 +111,9 @@ long as they remain possible:
    the form holds theme keywords (shown under it);
 3. then, in the order the player chooses, the player's own dictionaries,
    the **Dictionnaire Scrabble** (the language's official Scrabble list)
-   and **Autres (Statistiques, Wiktionnaire)** — the app's other words:
-   the corpus-frequency list (checked by Hunspell) and the Wiktionary
-   expressions. By default the Scrabble dictionary comes before the
+   and **Autres (Statistiques, Hunspell, Wiktionnaire)** — the app's other
+   words: the corpus-frequency list (checked by Hunspell), the Hunspell
+   dictionary's words and the Wiktionary expressions. By default the Scrabble dictionary comes before the
    others and an uploaded dictionary goes right before them. Each
    dictionary serving the language selected in the form, or its bilingual
    language, shows its number of entries for that language

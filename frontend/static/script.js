@@ -4129,7 +4129,7 @@ function renderGlossaryList() {
       detail = falconCounts("scrabble");
     } else if (item.id === "others") {
       // The known sources of the Falcon lexicon's other words.
-      name = t.glossaryOthers([t.glossarySourceStatistics, t.glossarySourceWiktionary].join(", "));
+      name = t.glossaryOthers([t.glossarySourceStatistics, t.glossarySourceHunspell, t.glossarySourceWiktionary].join(", "));
       detail = [t.glossaryOthersDetail, falconCounts("others")].filter(Boolean).join(" · ");
     } else {
       // A user dictionary only serves the words of its own language.

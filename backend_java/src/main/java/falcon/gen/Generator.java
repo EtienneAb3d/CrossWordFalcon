@@ -199,7 +199,9 @@ public final class Generator {
         Set<String> proper = new HashSet<>(lex.properNouns());
         Set<String> nonGloss = new HashSet<>(lex.nonGloss());
         if (byUsage) {
-            // The multi-word expressions join the lexicon (merge_multi_lexicon).
+            // The Hunspell words, then the multi-word expressions, join the lexicon (merge_hunspell_lexicon,
+            // merge_multi_lexicon).
+            Words.mergeHunspellLexicon(lang, lex, Grids.NOISE_FREQUENCY_THRESHOLD, proper, nonGloss);
             Words.mergeMultiLexicon(lang, lex, Grids.NOISE_FREQUENCY_THRESHOLD, proper, nonGloss);
             Integer minScore = Words.USAGE_DIFFICULTY_MIN_SCORE.get(difficulty);
             if (minScore != null) {
@@ -274,7 +276,8 @@ public final class Generator {
             Selection sel = select(path, maxWords, difficulty, user);
             List<String> sourceList = new ArrayList<>(java.util.Arrays.asList(path,
                     lang == null ? null : Words.scrabbleWordlistPath(lang).toString(),
-                    lang == null ? null : Words.multiWordlistPath(lang).toString()));
+                    lang == null ? null : Words.multiWordlistPath(lang).toString(),
+                    lang == null ? null : Words.hunspellWordlistPath(lang).toString()));
             if (user != null) for (Words.UserDictionary dictionary : user.dictionaries()) sourceList.add(dictionary.path());
             String[] sources = sourceList.toArray(new String[0]);
             Map<String, Double> dictionaryFrequencies = Words.loadDictionaryFrequencies(path);
