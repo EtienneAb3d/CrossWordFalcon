@@ -823,7 +823,7 @@ public final class Fill {
                                                 Set<String> challengeWords) {
         return minimizeBlackSquares(grid, result, rows, cols, index, rng, deadlineChecks, cancelEvent, properNounWords,
                 maxProperNouns, nonGlossWords, maxNonGloss, priorityWords, permanentLocked, permanentBlack,
-                challengeWords, null, null, null);
+                challengeWords, null, null, null, null);
     }
 
     /** How long the optimization of finished grids may run (mirrors MINIMIZE_TIME_LIMIT_S), in seconds: past this
@@ -869,7 +869,8 @@ public final class Fill {
     /** symmetry: a black cell is only removed together with every black image of it, none of them permanent, the
      * whole group tried at once; multiWordPercent (null = no limit): the cap every trial's tryFill applies;
      * timeLimitNanos (System.nanoTime() value, null = MINIMIZE_TIME_LIMIT_S from now): past it no further removal is
-     * tried and the grid is returned as it stands. Every trial is a local repair by the Ingrid-like method, whatever
+     * tried and the grid is returned as it stands; patternStyle (null = no rule): under "grouped", a removal leaving a
+     * white run of 1 or 2 cells is refused (Grids.removalLeavesShortRun). Every trial is a local repair by the Ingrid-like method, whatever
      * the grid was filled with: only the slots through the removed cell and the slots crossing them may change
      * (minimizeFreeCells), every other letter stays locked. A refused cell is tried again only after an accepted
      * removal changed a letter of the runs it bounds (blackCellRuns). Mirrors minimize_black_squares. */
@@ -879,7 +880,7 @@ public final class Fill {
                                                 Set<String> nonGlossWords, Integer maxNonGloss, PW priorityWords,
                                                 Map<Integer, Character> permanentLocked, Set<Integer> permanentBlack,
                                                 Set<String> challengeWords, String symmetry,
-                                                Integer multiWordPercent, Long timeLimitNanos) {
+                                                Integer multiWordPercent, Long timeLimitNanos, String patternStyle) {
         List<int[]> slots = result.slots();
         String[] assignment = result.assignment();
         long limit = timeLimitNanos != null ? timeLimitNanos : System.nanoTime() + MINIMIZE_TIME_LIMIT_S * 1_000_000_000L;
@@ -904,7 +905,8 @@ public final class Fill {
                 }
                 if (blocked) continue;
                 for (int g : group) grid[Cells.r(g)][Cells.c(g)] = WHITE;
-                if (Grids.isStructurallyValid(grid, rows, cols, 1)) {
+                if (Grids.isStructurallyValid(grid, rows, cols, 1)
+                        && !Grids.removalLeavesShortRun(grid, rows, cols, group, patternStyle)) {
                     Map<Integer, Character> merged = new LinkedHashMap<>(permanentLocked == null ? Map.of() : permanentLocked);
                     for (int i = 0; i < slots.size(); i++) {
                         String w = assignment[i];

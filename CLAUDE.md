@@ -1313,8 +1313,11 @@ own rng drawn from the parent's in candidate order:
    minimizeBlackSquares`) — once a fill succeeds, iteratively removes black
    cells one at a time, even below the "Taux noir" objective, keeping a
    removal only if the grid stays valid (at the loosest structural bound,
-   `min_interior_free=1`, since this phase only ever lengthens slots), a
-   local repair fills it and every resulting word is a genuine dictionary
+   `min_interior_free=1`, since this phase only ever lengthens slots), under
+   the "grouped" style no white run of 1 or 2 cells appears through a removed
+   cell (`_removal_leaves_short_run`, Java `Grids.removalLeavesShortRun`; also
+   applied by `_optimize_before_cleanup`'s removals: a single cell is no slot,
+   so no word check would refuse it), a local repair fills it and every resulting word is a genuine dictionary
    entry. The repair is a `try_fill(fill_method="ingrid")` of 6,000 checks,
    whatever method filled the grid, where only the slots through the removed
    cell and the slots crossing them may change (`_minimize_free_cells`, Java

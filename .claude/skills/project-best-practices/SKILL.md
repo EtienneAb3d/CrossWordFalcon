@@ -1412,7 +1412,11 @@ the current defaults/behavior to know before touching this code.
   mattered: that window leaves 1-2 cells per draw); the single-cell rule
   binds the black-cell mechanisms the 2-letter rule binds (ratio draw,
   pre-fill, de-clumping, short-slot reopening, end-of-palier cleanup
-  guard) and every black-cell reshape, not the minimization or hand editing, and
+  guard), every black-cell reshape and, the user's rule (an optimization may
+  not create a single-cell slot in the American style), both optimizations'
+  removals (`_removal_leaves_short_run`; choice made with it, to revisit with
+  the user: the pre-cleanup optimization too, since the cleanup's guard does not
+  undo a run already in its input), not hand editing, and
   pre-fill can therefore no longer cut a 2-letter slot (blackening one of
   its cells leaves the other alone). Measured on 20 patterns 30/40/30 at
   18 %: single-cell runs drop from 7.8 to 0 per 15x15 and 12.6 to 0 per

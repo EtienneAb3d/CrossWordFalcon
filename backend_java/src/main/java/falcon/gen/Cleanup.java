@@ -1082,16 +1082,18 @@ public final class Cleanup {
                                                  Map<Integer, Character> permanentLocked, Set<Integer> permanentBlack,
                                                  Set<String> challenge) {
         return optimizeBeforeCleanup(candGrid, candDiag, rows, cols, index, rng, deadlineChecks, cancelEvent,
-                permanentLocked, permanentBlack, challenge, null, null);
+                permanentLocked, permanentBlack, challenge, null, null, null);
     }
 
     /** symmetry: a black cell is only removed together with every black image of it, each of them removable on its
      * own, the whole group tried at once; multiWordPercent (null = no limit): the cap both of its tryFill calls
-     * apply. Mirrors _optimize_before_cleanup. */
+     * apply; patternStyle (null = no rule): under "grouped", a removal leaving a white run of 1 or 2 cells is refused
+     * (Grids.removalLeavesShortRun). Mirrors _optimize_before_cleanup. */
     public static Object[] optimizeBeforeCleanup(char[][] candGrid, Diag candDiag, int rows, int cols, DualIndex index,
                                                  Rng rng, long deadlineChecks, AtomicBoolean cancelEvent,
                                                  Map<Integer, Character> permanentLocked, Set<Integer> permanentBlack,
-                                                 Set<String> challenge, String symmetry, Integer multiWordPercent) {
+                                                 Set<String> challenge, String symmetry, Integer multiWordPercent,
+                                                 String patternStyle) {
         List<int[]> candSlots = Grids.extractSlots(candGrid, rows, cols);
         char[][] example = candDiag.exampleGrid;
         Set<Cells.Key> emptyTuples = new HashSet<>();
@@ -1178,7 +1180,8 @@ public final class Cleanup {
                 }
                 if (blocked) continue;
                 for (int g : group) grid[Cells.r(g)][Cells.c(g)] = WHITE;
-                if (Grids.isStructurallyValid(grid, rows, cols, 1)) {
+                if (Grids.isStructurallyValid(grid, rows, cols, 1)
+                        && !Grids.removalLeavesShortRun(grid, rows, cols, group, patternStyle)) {
                     Fill.Result res = tryComplete.apply(grid);
                     if (res != null) {
                         absorb.accept(res);

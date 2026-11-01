@@ -435,6 +435,20 @@ public final class Grids {
     }
 
     /** Length of the run of non-black cells through (r, c) along (dr, dc). */
+    /** Under the "grouped" pattern style, whether a run through one of {@code cells} — black cells just turned white
+     * in {@code grid} — is shorter than {@link #GROUPED_MIN_SLOT_LENGTH}: a removal only lengthens the runs it joins, so
+     * such a run is the only short one it can create. Always false otherwise. Mirrors _removal_leaves_short_run. */
+    static boolean removalLeavesShortRun(char[][] grid, int rows, int cols, List<Integer> cells, String patternStyle) {
+        if (!"grouped".equals(patternStyle)) return false;
+        for (int cell : cells) {
+            if (runThrough(grid, rows, cols, Cells.r(cell), Cells.c(cell), 0, 1) < GROUPED_MIN_SLOT_LENGTH
+                    || runThrough(grid, rows, cols, Cells.r(cell), Cells.c(cell), 1, 0) < GROUPED_MIN_SLOT_LENGTH) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static int runThrough(char[][] grid, int rows, int cols, int r, int c, int dr, int dc) {
         int length = 1;
         for (int sign = 1; sign >= -1; sign -= 2) {

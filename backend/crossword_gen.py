@@ -1128,6 +1128,16 @@ def _run_through(grid, rows, cols, r, c, dr, dc):
     return length
 
 
+def _removal_leaves_short_run(grid, rows, cols, cells, pattern_style):
+    """Under the "grouped" pattern style, whether a run through one of `cells`
+    — black cells just turned white in `grid` — is shorter than
+    `GROUPED_MIN_SLOT_LENGTH`: a removal only lengthens the runs it joins, so
+    such a run is the only short one it can create. Always false otherwise."""
+    return pattern_style == "grouped" and any(
+        _run_through(grid, rows, cols, r, c, dr, dc) < GROUPED_MIN_SLOT_LENGTH
+        for r, c in cells for dr, dc in ((0, 1), (1, 0)))
+
+
 def _declump_black_cells(grid, rows, cols, row_black, col_black, drawn, symmetry):
     """The "grouped" pattern style's de-clumping (`make_pattern`): every
     black cell of `drawn` (the cells the ratio draw placed) with more than
@@ -11578,9 +11588,14 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
                             non_gloss_words=None, max_non_gloss=None, priority_words=None,
                             permanent_locked_letters=None, permanent_black_cells=None,
                             challenge_words=None, symmetry=None, multi_word_percent=None,
-                            time_limit_at=None):
+                            time_limit_at=None, pattern_style=None):
     """`multi_word_percent` (see MULTI_WORD_PERCENT, `None` = no limit):
     the cap every trial's `try_fill` applies.
+
+    `pattern_style` (`PATTERN_STYLES`, `None` = no rule): under "grouped", a
+    removal leaving a white run of 1 or 2 cells is refused
+    (`_removal_leaves_short_run`) — a single cell is no slot, so no word check
+    below would catch it.
 
     `time_limit_at` (`time.monotonic()` value, `None` = MINIMIZE_TIME_LIMIT_S
     from now): past it no further removal is tried and the grid is returned
@@ -11749,7 +11764,8 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
                 continue
             for gr, gc in group:
                 grid[gr][gc] = WHITE
-            if is_structurally_valid(grid, rows, cols, min_interior_free=1):
+            if (is_structurally_valid(grid, rows, cols, min_interior_free=1)
+                    and not _removal_leaves_short_run(grid, rows, cols, group, pattern_style)):
                 # `permanent_locked_letters` (see the docstring above) must
                 # also constrain the search itself, not just the after-the-
                 # fact validation — otherwise this step's `try_fill` would be
@@ -15374,9 +15390,15 @@ PER_CYCLE_OPTIMIZATION_SAMPLE_SIZE = 50
 def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
                               deadline_checks=6_000, cancel_event=None,
                               permanent_locked_letters=None, permanent_black_cells=None,
-                              challenge_words=None, symmetry=None, multi_word_percent=None):
+                              challenge_words=None, symmetry=None, multi_word_percent=None,
+                              pattern_style=None):
     """`multi_word_percent` (see MULTI_WORD_PERCENT, `None` = no limit):
     the cap both of its `try_fill` calls apply.
+
+    `pattern_style` (`PATTERN_STYLES`, `None` = no rule): under "grouped", a
+    removal leaving a white run of 1 or 2 cells is refused
+    (`_removal_leaves_short_run`): the cleanup that follows takes this step's
+    grid as its reference, so it would not undo such a run.
 
     A new step inserted BEFORE even `_shorten_impossible_zones`/
     `_clean_blocked_slots` (so before any cleanup at all), at the user's
@@ -15564,7 +15586,8 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
             for gr, gc in group:
                 grid[gr][gc] = WHITE
             if is_structurally_valid(grid, rows, cols, min_interior_free=1):
-                result = _try_complete(grid)
+                result = None if _removal_leaves_short_run(
+                    grid, rows, cols, group, pattern_style) else _try_complete(grid)
                 if result is not None:
                     _absorb(result)
                     improved = True
@@ -18205,6 +18228,7 @@ def _minimize_trial(grid, result, rows, cols, seed, permanent_locked_letters,
         symmetry=_worker_black_symmetry,
         multi_word_percent=_worker_multi_word_percent,
         time_limit_at=time_limit_at,
+        pattern_style=_worker_pattern_style,
     )
 
 
@@ -18964,6 +18988,7 @@ def _optimize_before_cleanup_task(cand_grid, cand_diag, rows, cols, rng_seed,
         challenge_words=challenge_words,
         symmetry=_worker_black_symmetry,
         multi_word_percent=_worker_multi_word_percent,
+        pattern_style=_worker_pattern_style,
     )
 
 
@@ -22050,6 +22075,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             priority_words=priority_words, permanent_locked_letters=permanent_locked_letters,
             permanent_black_cells=permanent_black_cells, challenge_words=challenge_words,
             symmetry=black_symmetry, multi_word_percent=multi_word_percent,
+            pattern_style=pattern_style,
         )
 
     def _final_result(grid, slots, assignment, process_number):

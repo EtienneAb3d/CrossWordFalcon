@@ -1631,7 +1631,7 @@ public final class Generator {
                         trials.add(executor.submit(() -> Fill.minimizeBlackSquares(gcopy, o.result(), rows, cols, index,
                                 new Rng(ts), 6000, p.cancelEvent, properNouns, maxProperNouns, nonGloss, maxNonGloss,
                                 priority, permanentLocked, permanentBlack, challenge, ctx.blackSymmetry,
-                                ctx.multiWordPercent, minimizeLimit)));
+                                ctx.multiWordPercent, minimizeLimit, ctx.patternStyle)));
                     }
                     Object[] bestScored = null;
                     for (int k = 0; k < accumulatedSuccesses.size(); k++) {
@@ -1787,7 +1787,7 @@ public final class Generator {
                     final Rng taskRng = new Rng(rng.seed31());
                     optimizing.add(executor.submit(() -> Cleanup.optimizeBeforeCleanup(o.grid(), o.diag(), rows, cols,
                             index, taskRng, 6000, p.cancelEvent, permanentLocked, permanentBlack, challenge,
-                            ctx.blackSymmetry, ctx.multiWordPercent)));
+                            ctx.blackSymmetry, ctx.multiWordPercent, ctx.patternStyle)));
                 }
                 List<Object[]> optimized = new ArrayList<>();
                 for (Future<Object[]> f : optimizing) optimized.add(await(f));
@@ -2001,7 +2001,7 @@ public final class Generator {
                     Fill.challengeWordCellsFromAssignment(bs, ba, challenge), winningProcess, true))));
             Object[] m = Fill.minimizeBlackSquares(best, bestResult, rows, cols, index, rng, 6000, p.cancelEvent,
                     properNouns, maxProperNouns, nonGloss, maxNonGloss, priority, permanentLocked, permanentBlack,
-                    challenge, ctx.blackSymmetry, ctx.multiWordPercent, null);
+                    challenge, ctx.blackSymmetry, ctx.multiWordPercent, null, ctx.patternStyle);
             grid = (char[][]) m[0];
             @SuppressWarnings("unchecked")
             List<int[]> s = (List<int[]>) m[1];

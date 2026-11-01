@@ -726,10 +726,13 @@ réussie ne peut contenir — `minimize_black_squares` refuse lui aussi
 tout retrait qui en ferait apparaître un, chaque mot devant exister dans
 le dictionnaire. En mode Interactif, « Suivant » n'y pose jamais de mot
 et un mot de 2 lettres tapé à la main est signalé invalide. Une case
-n'appartenant qu'à un seul mot n'est en revanche interdite qu'aux
-mécanismes de cases noires du motif et du nettoyage ci-dessus : les
-optimisations, les réaménagements en cours de recherche et l'édition à
-la main peuvent encore en créer.
+n'appartenant qu'à un seul mot n'est pas un emplacement, donc aucun contrôle
+de mot ne la refuse : les mécanismes de cases noires du motif et du nettoyage
+ci-dessus l'interdisent, ainsi que les réaménagements (`_reshape_keeps_style`)
+et les deux optimisations, qui refusent tout retrait de case noire laissant
+une suite de 1 ou 2 cases (`_removal_leaves_short_run`,
+`_optimize_before_cleanup`, `minimize_black_squares`). Seule l'édition à la
+main peut encore en créer, et l'interface la signale alors en rouge.
 
 Dans l'interface, choisir le français comme langue règle le mélange sur
 100/0/0, toute autre langue sur 30/40/30 ; l'anglais sélectionne en plus
@@ -3170,12 +3173,13 @@ demandé. Deux issues :
   `min_interior_free=1` : seules comptent encore l'absence de case
   orpheline et la connexité — la préférence esthétique pour des zones d'au
   moins 6 cases ne s'applique qu'à la *pose* des cases noires, jamais à ce
-  retrait) **et** qu'un remplissage complet réussit **et** que chacun des
-  mots du résultat existe bien dans le dictionnaire, le retrait est
-  conservé ;
-- sinon (grille invalide, remplissage échoué, ou au moins un mot absent du
-  dictionnaire), la case noire est remise en place et on passe à la
-  suivante.
+  retrait), **que**, en style Groupé/aligné, aucune suite de 1 ou 2 cases
+  n'apparaît (`_removal_leaves_short_run`), **qu'**un remplissage complet
+  réussit **et** que chacun des mots du résultat existe bien dans le
+  dictionnaire, le retrait est conservé ;
+- sinon (grille invalide, suite trop courte, remplissage échoué, ou au moins
+  un mot absent du dictionnaire), la case noire est remise en place et on
+  passe à la suivante.
 
 L'ordre dans lequel les cases noires sont essayées est mélangé à chaque
 passage, pour ne jamais favoriser systématiquement une case parce qu'elle
