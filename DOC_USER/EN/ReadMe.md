@@ -468,6 +468,14 @@ main form (`#run-actions`); "Continuer" sits above the "Générer les mots crois
   necessarily instantly. The last known grids stay on screen as the last
   entry of the attempt history, the attempts still running framed as
   interrupted (`backend/app.py`, `_record_search_final`).
+- **Revenir à la grille non modifiée / Back to the unmodified grid**
+  (`#finish-revert-btn`, `frontend/static/script.js`,
+  `revertInteractiveFinish`) — next to **Stop** during a **Finir la
+  grille / Finish the grid** or **Finir la zone / Finish the zone** run,
+  and still there after it was stopped or failed. It stops the run if it
+  is still going, then reopens Interactive mode on the grid exactly as it
+  was before the click: letters, black cells, word breaks, definitions,
+  title, colours, selected zone and the **Précédent / Previous** history.
 - **Gold medal counter** (`#success-medal`, `frontend/static/script.js`,
   `runGeneration`/`pollJob`) — while an automatic generation runs, a gold
   medal sits fixed in the page's left margin, vertically centered, showing
@@ -1387,6 +1395,9 @@ to the left of **Mots / Words** to open it as an overlay panel.
 - Click **Finir la grille / Finish the grid** so Falcon fills in the cells
   that are still empty. It writes no definition: use **Définitions /
   Definitions** afterwards for the new words.
+- While it runs, or after stopping it, **Revenir à la grille non modifiée
+  / Back to the unmodified grid** brings back the grid exactly as it was
+  before the click.
 - At the end of the automatic process, delete any words you don't like,
   then go back to placing letters, black cells and definitions. You can run
   **Finir la grille / Finish the grid** again as many times as needed.
@@ -1479,7 +1490,11 @@ real letter. Both update after every edit.
   (otherwise — edit it or step back, then try again).
 - **Précédent / Back** (`#interactive-prev-btn`) — undoes the last change
   one step at a time: a typed letter, a black-cell toggle, or a whole
-  "Suivant" placement. Disabled once there is nothing left to undo.
+  "Suivant" placement. After **Finir la grille / Finish the grid** or
+  **Finir la zone / Finish the zone**, the filled grid counts as one more
+  change: **Précédent** first goes back to the grid as it was before the
+  click, then on through the earlier changes (`chainFinishUndoHistory`).
+  Disabled once there is nothing left to undo.
 - The grid is fully editable, black cells included. Click any cell, then:
   type a letter to fill it; press **.** or any other punctuation mark (or
   the **■** key on the virtual keyboard) to turn it black or white — with

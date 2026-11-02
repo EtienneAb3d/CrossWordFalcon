@@ -3948,8 +3948,21 @@ cookie also holds the secret word, which is never logged.
   Below the form, `#run-actions` (centered, collapsed while empty) holds
   "Voir les mots (spoiler)" (`#attempt-preview-reveal-btn`, hidden until
   `runGeneration` starts an automatic generation, hidden again by
-  `displayFinalGrid`/Interactive mode) and "Stop" (`#stop-btn`, while a
-  job runs).
+  `displayFinalGrid`/Interactive mode), "Stop" (`#stop-btn`, while a
+  job runs) and "Revenir à la grille non modifiée" (`#finish-revert-btn`:
+  during a "Finir la grille"/"Finir la zone" run, its "Continuer", and
+  after it stopped or failed; `runInteractiveFinish` stores
+  `interactiveFinishSnapshot`, `captureInteractiveFinishSnapshot`, the
+  Interactive client state; `revertInteractiveFinish` cancels the job if
+  it runs — `revertedGenerationRun` then keeps that run's `runGeneration`
+  from touching the screen — and restores the session through
+  `enterInteractiveMode` plus the snapshot; the server session was never
+  changed by `POST /api/interactive/finish`; the snapshot is dropped by
+  `displayFinalGrid`, `runInteractive`, a new automatic generation, or the
+  run ending with a grid; when it ends with a grid, the reopened
+  draft's undo stack becomes the snapshot's plus the pre-click grid,
+  `chainFinishUndoHistory`, so "Précédent" walks back through the filled
+  grid as one more state).
 - **`script.js`** — all client logic in one file. Major areas: grid
   rendering/keyboard input/solution-checking; the grid zoom, play and
   Interactive modes (`#grid` sits in `#grid-viewport`, sized by

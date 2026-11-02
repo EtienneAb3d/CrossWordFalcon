@@ -380,13 +380,15 @@
 
     <!-- Running-generation buttons, on their own centered row below the
          main form: "Voir les mots (spoiler)" (shown only once an automatic
-         generation is launched) and "Stop" (while a job runs). The row
+         generation is launched), "Stop" (while a job runs) and, for "Finir la
+         grille"/"Finir la zone", "Revenir à la grille non modifiée". The row
          collapses entirely while both are hidden (see #run-actions in
          style.css). -->
     <div id="run-actions">
       <button type="button" id="attempt-preview-reveal-btn" class="toggle-btn"
               data-i18n="attemptPreviewRevealBtn" hidden>Voir les mots (spoiler)</button>
       <button type="button" id="stop-btn" data-i18n="stopBtn" hidden>Stop</button>
+      <button type="button" id="finish-revert-btn" data-i18n="finishRevertBtn" hidden>Revenir à la grille non modifiée</button>
     </div>
 
     <!-- Play-mode buttons, on their own row below the main form (above

@@ -162,6 +162,7 @@ const checkBtn = document.getElementById("check-btn");
 const definitionsBtn = document.getElementById("definitions-btn");
 const recomputeBtn = document.getElementById("recompute-btn");
 const stopBtn = document.getElementById("stop-btn");
+const finishRevertBtn = document.getElementById("finish-revert-btn");
 // Gold-medal counter of genuinely successful grids, shown in the left
 // margin while an automatic generation runs (job["success_count"]).
 const successMedal = document.getElementById("success-medal");
@@ -1094,6 +1095,18 @@ let interactiveSuppressNextClick = false;
 // plain form submit handler), never by "Continuer" (which resumes THIS
 // SAME finish job) nor by runGeneration()'s own generic reset.
 let finishLockedCells = null;
+// The Interactive session as it stood when "Finir la grille"/"Finir la
+// zone" was clicked (captureInteractiveFinishSnapshot()), so
+// "Revenir à la grille non modifiée" (#finish-revert-btn) can bring it back
+// untouched. Kept while that job runs, after a "Stop" or a failure, and
+// across "Continuer"; dropped by anything else that replaces the screen
+// (a new generation or Interactive session, a library grid).
+let interactiveFinishSnapshot = null;
+// Incremented by every runGeneration() call; `revertedGenerationRun` is the
+// run "Revenir à la grille non modifiée" abandoned, whose remaining polling
+// must no longer touch the screen.
+let generationRunCounter = 0;
+let revertedGenerationRun = 0;
 // "row,col" keys for the backend-computed fill diagnostics of the LAST
 // auto-placement (start / "Suivant") — impossible slots (no candidate word
 // left at all) and slots below the fill-option threshold — shown in
@@ -5442,6 +5455,8 @@ function renderGridDifficulty() {
 // easily-drifting rendering logic for the two cases.
 function displayFinalGrid(gridData) {
   puzzle = gridData;
+  interactiveFinishSnapshot = null;
+  finishRevertBtn.hidden = true;
   // A newly loaded bilingual grid must immediately offer (and select by
   // default, at the user's explicit request) its own "<lang1>/<lang2>"
   // combination in both the Dictionnaire and the Paraphraseur, without
@@ -11188,6 +11203,8 @@ async function runInteractive(body, endpoint = "/api/interactive/start") {
   recomputeBtn.hidden = true;
   attemptPreviewRevealBtn.hidden = true;
   continueBtn.hidden = true;
+  interactiveFinishSnapshot = null;
+  finishRevertBtn.hidden = true;
   stopBtn.hidden = false;
   stopBtn.disabled = false;
   currentJobId = null;
@@ -12122,6 +12139,122 @@ async function generateInteractiveDefinitions(overwrite) {
 interactiveDefinitionsBtn.addEventListener("click", () => generateInteractiveDefinitions(false));
 interactiveRecomputeBtn.addEventListener("click", () => generateInteractiveDefinitions(true));
 
+// Everything the Interactive panel shows that enterInteractiveMode() would
+// otherwise rebuild from scratch. References, not copies: nothing mutates
+// them while the panel is hidden, and enterInteractiveMode() assigns new
+// objects rather than editing these.
+function captureInteractiveFinishSnapshot() {
+  return {
+    jobId: interactiveJobId,
+    grid: interactiveGrid,
+    undoStack: interactiveUndoStack,
+    placedHistory: interactivePlacedHistory,
+    breaks: interactiveBreaks,
+    defs: interactiveDefs,
+    themeCells: interactiveThemeCells,
+    challengeCells: interactiveChallengeCells,
+    scrabbleCells: interactiveScrabbleCells,
+    userCells: interactiveUserCells,
+    challengeWords: interactiveChallengeWords,
+    generateChallengeWords,
+    themeKeywords: themeKeywords.slice(),
+    hasTheme: interactiveHasTheme,
+    theme: interactiveTheme,
+    language: interactiveLanguage,
+    bilingualLanguage: interactiveBilingualLanguage,
+    difficulty: interactiveDifficulty,
+    patternStyle: interactivePatternStyle,
+    title: interactiveTitleInput.value,
+    zone: interactiveZoneSelection,
+    selected: selected ? { ...selected } : null,
+    direction: activeDirection,
+  };
+}
+
+// "Revenir à la grille non modifiée": stops the "Finir la grille"/"Finir
+// la zone" job if it still runs, then reopens the Interactive session
+// exactly as it was before the click. The session itself was never changed
+// by POST /api/interactive/finish, so the restored grid keeps working with
+// the same job id.
+async function revertInteractiveFinish() {
+  const snap = interactiveFinishSnapshot;
+  if (!snap) return;
+  const t = I18N[uiLanguage];
+  interactiveFinishSnapshot = null;
+  finishRevertBtn.hidden = true;
+  if (generationInProgress) {
+    revertedGenerationRun = generationRunCounter;
+    stopBtn.hidden = true;
+    continueBtn.hidden = true;
+    const jobId = currentJobId;
+    // The abandoned run's polling loop keeps going until the job stops, but
+    // with currentJobId cleared it no longer updates the status or previews,
+    // and runGeneration() leaves its own cleanup to this function.
+    currentJobId = null;
+    generationInProgress = false;
+    setGenerateButtonsDisabled(false);
+    if (jobId) {
+      fetchWithTimeout(`/api/generate/cancel/${jobId}`, { method: "POST" }, FETCH_TIMEOUT_MS)
+        .catch(() => {});
+    }
+  }
+  continueBtn.hidden = true;
+  finishLockedCells = null;
+  hideAttemptPreview();
+  const gridSize = snap.grid.length;
+  enterInteractiveMode({
+    grid: snap.grid.map((row) => row.map((ch) => (ch === "" ? "." : ch))),
+    has_theme: snap.hasTheme,
+    theme: snap.theme,
+    language: snap.language,
+    bilingual_language: snap.bilingualLanguage,
+    difficulty: snap.difficulty,
+    width: gridSize ? snap.grid[0].length : 0,
+    height: gridSize,
+    title: snap.title,
+    challenge_words: snap.challengeWords,
+  });
+  interactiveJobId = snap.jobId;
+  interactivePatternStyle = snap.patternStyle;
+  interactiveGrid = snap.grid;
+  interactiveUndoStack = snap.undoStack;
+  interactivePlacedHistory = snap.placedHistory;
+  interactiveBreaks = snap.breaks;
+  interactiveDefs = snap.defs;
+  interactiveThemeCells = snap.themeCells;
+  interactiveChallengeCells = snap.challengeCells;
+  interactiveScrabbleCells = snap.scrabbleCells;
+  interactiveUserCells = snap.userCells;
+  interactiveZoneSelection = snap.zone;
+  // enterInteractiveMode() re-fills both form lists from the session; the
+  // author may have changed them before the click.
+  setThemeWords(snap.themeKeywords.join(" "));
+  generateChallengeWords = snap.generateChallengeWords;
+  renderGenerateChallengeList();
+  if (snap.selected) selected = snap.selected;
+  setInteractiveMessage(t.finishReverted);
+  setStatus(t.finishReverted, false);
+  setActiveDirection(snap.direction);
+}
+
+// The undo stack holds, above its bottom entry (the session's first state),
+// the state before each change; "Précédent" pops the top one back. The grid
+// "Finir…" filled becomes the change made on top of the pre-click history:
+// that history, then the pre-click grid itself.
+function chainFinishUndoHistory(snap) {
+  const before = snap.grid.map((row) => row.slice());
+  before.breaks = new Set(snap.breaks);
+  interactiveUndoStack = [...snap.undoStack, before];
+  if (interactiveUndoStack.length > 500) {
+    interactiveUndoStack = interactiveUndoStack.slice(-500);
+  }
+  renderInteractive(); // enables "Précédent"
+}
+
+finishRevertBtn.addEventListener("click", () => {
+  revertInteractiveFinish();
+});
+
 // Shared by "Finir la grille" and "Finir la zone" (see both click
 // handlers below) — the two only differ in whether `zoneCells` is `null`
 // (whole grid, "Finir la grille") or the current drag-selected zone's own
@@ -12141,6 +12274,7 @@ async function runInteractiveFinish(zoneCells) {
   // outside the selection green-framed too, not just already-lettered
   // ones — see computeFinishLockedCells()'s own docstring.
   finishLockedCells = computeFinishLockedCells(zoneCells);
+  interactiveFinishSnapshot = captureInteractiveFinishSnapshot();
   // The author is about to see this grid in Interactive mode anyway: nothing
   // to hide. It stays on afterwards, like any other choice of this toggle.
   setPreviewLetters(true);
@@ -12377,6 +12511,8 @@ interactiveSaveBtn.addEventListener("click", async () => {
 // else here is identical either way.
 async function runGeneration(startJob) {
   const t = I18N[uiLanguage];
+  const run = ++generationRunCounter;
+  const reverted = () => revertedGenerationRun === run;
   setGenerateFormCollapsed(false);
 
   generationInProgress = true;
@@ -12394,6 +12530,8 @@ async function runGeneration(startJob) {
   attemptPreviewRevealBtn.hidden = false;
   stopBtn.hidden = false;
   stopBtn.disabled = false;
+  // Only for a "Finir la grille"/"Finir la zone" run (or its "Continuer").
+  finishRevertBtn.hidden = !interactiveFinishSnapshot;
   // Hidden on every fresh attempt (a new form submission or a "Continuer"
   // click alike) — only shown again if *this* run itself ends in the
   // specific "no_fillable_grid" failure the button exists for (see the
@@ -12409,8 +12547,18 @@ async function runGeneration(startJob) {
 
   try {
     const jobId = await startJob(t);
+    if (reverted()) {
+      // Reverted before the job id was known: stop it now.
+      fetchWithTimeout(`/api/generate/cancel/${jobId}`, { method: "POST" }, FETCH_TIMEOUT_MS)
+        .catch(() => {});
+      return;
+    }
     currentJobId = jobId;
     const gridData = await pollJob(jobId, t, { timed: true });
+    if (reverted()) return;
+    const finishSnapshot = interactiveFinishSnapshot;
+    interactiveFinishSnapshot = null;
+    finishRevertBtn.hidden = true;
     if (gridData.grid_work_id) {
       // "Finir la grille" (see POST /api/interactive/finish) never
       // publishes to the Bibliothèque — the finished grid is a brand-new
@@ -12434,11 +12582,15 @@ async function runGeneration(startJob) {
       // was clicked (see runInteractiveFinish()), and stays that way until
       // the player reopens it by hand.
       await resumeInteractiveWork(gridData.grid_work_id);
+      // The filled grid is one more state of the same authoring: "Précédent"
+      // goes back to the grid "Finir…" started from, then further back.
+      if (interactiveMode && finishSnapshot) chainFinishUndoHistory(finishSnapshot);
     } else {
       displayFinalGrid(gridData);
       setStatus(t.statusGenerated, false);
     }
   } catch (err) {
+    if (reverted()) return;
     // A user-requested stop isn't an error — no red #status.error styling
     // for it (see CancelledError above).
     setStatus(err.message, !(err instanceof CancelledError));
@@ -12456,6 +12608,9 @@ async function runGeneration(startJob) {
       continueBtn.hidden = false;
     }
   } finally {
+    // revertInteractiveFinish() already reset everything below, and the
+    // screen may belong to a newer run by now.
+    if (reverted()) return;
     // The poll gave up (connection lost) with a choice still pending.
     if (pendingGridChoiceJobId !== null) {
       setPendingGridChoice(null);
@@ -12568,6 +12723,7 @@ form.addEventListener("submit", async (event) => {
   // never resets this, since it resumes THIS SAME job, whatever started
   // it.
   finishLockedCells = null;
+  interactiveFinishSnapshot = null;
   await runGeneration(async (t) => {
     let response;
     try {

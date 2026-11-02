@@ -513,6 +513,26 @@ project's engineering language.
   from `.locked` (a cell merely confirmed by the search itself, which a
   later cleanup can still revert) — see the `style-guide` SKILL.
 
+- **"Finir la grille"/"Finir la zone" can be undone** — the user's rule: a
+  "Revenir à la grille non modifiée" button next to "Stop", during the whole
+  automatic process and after a stop, which stops the process if it still
+  runs and goes back to the grid as it was before, unmodified
+  (`revertInteractiveFinish`, frontend only). Choices made with it, to
+  revisit with the user: also offered after a failure and across
+  "Continuer"; the restore is client-side (the server's Interactive session
+  is left untouched by the finish job) and covers letters, black cells,
+  breaks, definitions, title, colours, zone, undo history and the form's
+  "Thématique"/"Mots Défi" lists; the button disappears once the run ends
+  with a grid (the new draft reopens), or when another grid or generation
+  replaces the screen. The user's further rule: after a partial or total
+  automatic fill, "Précédent" goes back through the earlier states, the
+  new grid being just one more state (`chainFinishUndoHistory`). Choices
+  made with it, to revisit with the user: "partial" means "Finir la zone",
+  "total" "Finir la grille" (a stopped run reopened from an attempt
+  snapshot starts a fresh history); undo restores letters, black cells and
+  word breaks as for any change, not definitions or colours; the reopened
+  draft keeps its new session, the earlier states being posted grids like
+  any other.
 - **A user-launched automatic generation lets the player choose the
   grid before any clue is written.** When the parallel minimization
   compared several successes, `generate_grid` returns them all as
