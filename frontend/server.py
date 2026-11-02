@@ -1045,6 +1045,24 @@ async def proxy_interactive_candidates(request: Request):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+@app.post("/api/interactive/proximity")
+async def proxy_interactive_proximity(request: Request):
+    """Proximity sorts of the "Mots"/"Croisés"/"Début"/"Fin" results of the
+    "Interactif" mode — each word's best similarity with the theme or the
+    "Mots Défi" words."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/interactive/proximity",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError as exc:
+        raise _backend_failure(exc)
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 @app.post("/api/interactive/crossing")
 async def proxy_interactive_crossing(request: Request):
     """"Croisés" button of the "Interactif" mode — for the selected cell,

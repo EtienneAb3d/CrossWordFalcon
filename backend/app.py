@@ -1201,6 +1201,20 @@ class InteractiveBoundaryRequest(BaseModel):
     challenge_words: list[str] = []
 
 
+class InteractiveProximityRequest(BaseModel):
+    """Body of POST /api/interactive/proximity — the "Proximité avec le thème"/
+    "Proximité avec les Mots Défi" sort of the "Mots"/"Croisés"/"Début"/"Fin"
+    results. `words` are grid forms of `language`; the references are the
+    words of `theme` plus `challenge_words` (as typed). With no `words`, only
+    resolves the references' vectors, kept in the session, which the client
+    does as soon as a "Mots Défi" word is defined."""
+    job_id: str
+    language: str
+    words: list[str] = []
+    theme: str = ""
+    challenge_words: list[str] = []
+
+
 class InteractiveImpossibleRequest(BaseModel):
     """Body of POST /api/interactive/impossible — the "Impossibles" button
     of the "Interactif" authoring mode, at the user's explicit request:
@@ -3346,6 +3360,50 @@ def _whole_theme_proximity_scores(words: list[str], theme_text: str,
         )
         for word, vec in word_vecs.items()
     }
+
+
+def _reference_vector(text: str, lang: str, cache: dict):
+    """The vector of a reference word of a proximity sort, kept in `cache` (the
+    Interactive session's): its grid form's point in the language's "words"
+    collection, else in "words_multi", else — a word in neither, typically a
+    "Mots Défi" word outside the glossaries — the embedding of `text` as typed."""
+    key = (lang, text)
+    if key in cache:
+        return cache[key]
+    grid_form = challenge_word_grid_form(text)
+    vec = None
+    if grid_form:
+        vec = _similar_qdrant.retrieve_word_vectors(lang, [grid_form]).get(grid_form)
+        if vec is None:
+            try:
+                vec = _similar_qdrant_multi.retrieve_word_vectors(lang, [grid_form]).get(grid_form)
+            except QdrantStoreError:
+                pass
+    if vec is None:
+        vec = _similar_embedder.embed(text)
+    cache[key] = vec
+    return vec
+
+
+def _reference_proximity_scores(words: list[str], references: list[str], lang: str,
+                                cache: dict) -> dict[str, float]:
+    """`{word: best similarity with any of `references`}`, read from the words'
+    points in Qdrant ("words", else "words_multi"); a word with no point is
+    absent."""
+    vectors = [_reference_vector(ref, lang, cache) for ref in references]
+    out: dict[str, float] = {}
+    for vec in vectors:
+        scores = _similar_qdrant.score_words(vec, lang, words)
+        missing = [w for w in words if w not in scores]
+        if missing:
+            try:
+                scores.update(_similar_qdrant_multi.score_words(vec, lang, missing))
+            except QdrantStoreError:
+                pass
+        for word, score in scores.items():
+            if word not in out or score > out[word]:
+                out[word] = score
+    return out
 
 
 @app.get("/api/similar_words")
@@ -6379,6 +6437,35 @@ async def interactive_boundary(req: InteractiveBoundaryRequest):
         sess["index"], cells, req.side, sess["priority_words"], challenge_words,
     )
     return {"theme_words": theme_words, "other_words": other_words}
+
+
+@app.post("/api/interactive/proximity")
+async def interactive_proximity(req: InteractiveProximityRequest):
+    """The proximity sorts of the "Mots"/"Croisés"/"Début"/"Fin" results: each of
+    `req.words`' best similarity with the references — see
+    InteractiveProximityRequest. 503 `similar_unavailable` when Qdrant or the
+    embedding server does not answer."""
+    sess = INTERACTIVE_SESSIONS.get(req.job_id)
+    if sess is None:
+        raise HTTPException(status_code=404, detail="session interactive inconnue (expirée ?)")
+    if req.language not in WORDLISTS:
+        raise HTTPException(status_code=400, detail=f"langue inconnue : {req.language!r}")
+    references = _theme_tokens(req.theme) or ([req.theme] if req.theme.strip() else [])
+    references += [w for w in req.challenge_words if w.strip()]
+    started = time.monotonic()
+    try:
+        scores = await asyncio.to_thread(
+            _reference_proximity_scores, req.words, references, req.language,
+            sess.setdefault("reference_vectors", {}),
+        )
+    except (QdrantStoreError, EmbedderError) as exc:
+        logger.warning("interactive proximity unavailable after %.1fs: %s",
+                       time.monotonic() - started, exc)
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "similar_unavailable", "message": str(exc)},
+        )
+    return {"scores": scores}
 
 
 @app.post("/api/interactive/impossible")

@@ -1160,6 +1160,9 @@ public final class Interactive {
             entry.put("accented", Words.wordForms(lengthIndex.get(w.length()), w)[0]);
             entry.put("unsafe", new ArrayList<>(unsafeLetterPositions(cells, w, crossingMap, index, known, used, challenge)));
             entry.put("score", scores.get(w));
+            LenIndex li = lengthIndex.get(w.length());
+            int usage = li == null ? Words.USAGE_SCORE_UNKNOWN : li.usageOf(w);
+            entry.put("usage", usage == Words.USAGE_SCORE_UNKNOWN ? null : usage);
             out.add(entry);
         }
         return out;

@@ -5025,6 +5025,20 @@ end through the real running API (interactive start/step/save,
   the heartbeat's version changes, not again for the same version, again
   for a newer one, no page reload.
 
+- **Dictionnaire form column** (`.dictionary-form-cell`): 25 % wide, at least
+  10rem, wrapping anywhere, so a form with many lemmas never pushes the definitions
+  out of view. **Visually confirmed** with Playwright/Chromium at 1400×1000.
+
+- **Results sort selector** (`#interactive-sort`), at the user's explicit
+  request: label + `<select>` at 0.8rem, absolutely positioned left of the
+  sponge (`right: 2rem`, 1.6rem tall like it), shown only while
+  `#interactive-answers` holds a list; the zone then gets a 2rem top padding,
+  so it covers neither a block's "eye" button nor the message. Greyed options
+  are the native disabled state. The value after each word keeps
+  `.interactive-word-score`. `.results-tool` marks a child of a
+  `.clearable-results` that does not count as content for its sponge. No new
+  token. **Visually confirmed** with Playwright/Chromium at 1400×1000.
+
 - **"Ajouter une liste personnelle" heading in the settings panel**
   (`glossaryUploadTitle`), at the user's explicit request: an `<h3>` right
   above `#glossary-upload-row`, styled by the existing `#glossary-settings

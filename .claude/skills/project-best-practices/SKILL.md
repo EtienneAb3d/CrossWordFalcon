@@ -1191,6 +1191,24 @@ the current defaults/behavior to know before touching this code.
   Falcon way if it fails); Falcon's slot cascade picks the slot; the blue
   window of such a click is Falcon's level-6 window. Measured (French
   Ristretto, 4 seeds): 16-22 distinct grids offered instead of 28-39.
+- **The "Mots"/"Croisés"/"Début"/"Fin" results can be sorted by fill ease,
+  usage score, or proximity to the theme or the "Mots Défi"** — the user's rule:
+  a selector left of the sponge; proximity is the best vector score with each
+  reference word, greyed with no theme or "Mots Défi"; every vector comes from
+  Qdrant, except possibly a "Mots Défi" word outside the glossaries, computed
+  when it is defined (`applyInteractiveWordListSort`, `POST /api/interactive/
+  proximity`, `_reference_proximity_scores`, `_reference_vector`; Java mirror).
+  Choices made with it, to revisit with the user: one selector for the whole
+  results zone, stacked blocks included; the value in parentheses follows the
+  criterion; fill keeps the theme words first, the other criteria sort theme
+  words and the others together; "Mots Défi" matches stay first; the sort only
+  reorders the lists the backend sent, so the 300-word cap per list still keeps
+  the best fill scores; the theme is the form's current "Thématique" list, not
+  the session's glossary; a reference is looked up in the tenant of the words'
+  language, so on a bilingual grid it is embedded as typed when that language
+  lacks it; a theme word Qdrant lacks is embedded too; proximities are fetched
+  only once a proximity criterion is selected (measured, 300 French words: a
+  search filtered on the point ids 3 ms, fetching the vectors 127 ms).
 - **The "Mots"/"Croisés"/"Début"/"Fin" candidates are scored the Ingrid
   way** — the user's rule: score the possible words with the Ingrid
   method, sort by decreasing score, show the score in parentheses after
@@ -2556,6 +2574,12 @@ the current defaults/behavior to know before touching this code.
   `œ`/`æ` (and their capitals) as two plain letters (`fold_ligatures`,
   "Œdipe" -> "Oedipe"), and every lookup folds its key the same way; a new
   builder or lookup must do the same.
+- **A verb's auxiliary is not one of its forms** — the Kaikki dumps list it among
+  a verb's `forms` (tags `auxiliary`, `multiword-construction`), which made AVERE,
+  ESSERE, HABEN, SEIN, AVOIR and AYANT share a lemma with thousands of verbs, so
+  placing AVERE forbade OSARE in a grid (`build_wordlist_scrabble._not_a_word_form`).
+  Those six rows of the committed freq and Scrabble wordlists were repaired in
+  place, without rebuilding the rest of the pipeline.
 - **A loaded lexicon keeps only what grid construction uses.** Per word:
   its bare A-Z form, its index entries, two float32 frequencies and the
   byte position of its wordlist row (`build_index`, Java `LenIndex`). The

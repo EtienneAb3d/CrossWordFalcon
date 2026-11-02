@@ -495,6 +495,15 @@ plusieurs signaux) :
   `frontend/static/script.js`, `appendWordBreaks`,
   `interactiveToggleBreak`, `interactiveClearBreaksAt`.)
 
+- **Proximité (d'un mot avec le thème ou les Mots Défi)** : meilleur score de
+  similarité entre le vecteur Qdrant du mot et celui de chaque mot du champ
+  « Thématique » ou de la liste des Mots Défi. Le vecteur d'une référence vient
+  de Qdrant, ou est calculé à partir du mot saisi s'il n'y figure pas — cas
+  typique d'un Mot Défi hors glossaires, calculé dès sa définition. Sert de
+  critère au sélecteur « Trier par » des résultats de **Mots**, **Croisés**,
+  **Début** et **Fin** (`backend/app.py`, `_reference_proximity_scores`,
+  `_reference_vector`).
+
 ## Retour en arrière
 
 - **Descente** : candidat qui a passé le contrôle de croisement et dans

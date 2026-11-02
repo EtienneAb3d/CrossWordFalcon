@@ -500,6 +500,7 @@ const interactiveRecomputeBtn = document.getElementById("interactive-recompute-b
 const interactiveFinishZoneBtn = document.getElementById("interactive-finish-zone-btn");
 const interactiveFinishBtn = document.getElementById("interactive-finish-btn");
 const interactiveResultsClearBtn = document.getElementById("interactive-results-clear-btn");
+const interactiveSortSelect = document.getElementById("interactive-sort-select");
 const interactiveHelpBtn = document.getElementById("interactive-help-btn");
 const interactiveHelpOverlay = document.getElementById("interactive-help-overlay");
 const interactiveHelpCloseBtn = document.getElementById("interactive-help-close-btn");
@@ -990,6 +991,14 @@ let interactivePlacedHistory = [];
 // autosave/"Sauvegarder" (autosaveInteractiveWork()) and restored on
 // resume (see enterInteractiveMode()).
 let interactiveChallengeWords = [];
+// The results' sort criterion (#interactive-sort-select), and the best
+// similarity of each word with the criterion's references, keyed by
+// `${language}:${word}`, `null` for a word with no vector; valid for
+// `interactiveProximityKey` (the criterion and its references) only.
+let interactiveSortCriterion = "fill";
+let interactiveProximity = new Map();
+let interactiveProximityKey = "";
+let interactiveProximityRequest = 0;
 let interactiveHasTheme = false;
 let interactiveLanguage = "fr";
 // The Interactive session's "Style de motif" (its generation_params):
@@ -9423,6 +9432,8 @@ function syncChallengeWordLists(source) {
   renderGenerateChallengeList();
   renderInteractiveChallengeList();
   scheduleInteractiveDiagnosticsRefresh();
+  updateInteractiveSortOptions();
+  resolveInteractiveChallengeVectors();
 }
 
 generateChallengeAddBtn.addEventListener("click", addGenerateChallengeWord);
@@ -9479,6 +9490,7 @@ function renderThemeList() {
     li.appendChild(removeBtn);
     themeList.appendChild(li);
   }
+  updateInteractiveSortOptions();
 }
 
 function addThemeWord() {
@@ -9590,9 +9602,12 @@ function spellingCharGridLetters(ch) {
 // `unsafe` field) land on the right character, independently or together.
 // A character needing neither stays a plain text node; a space is written
 // as a non-breaking one, so an expression never wraps inside the list.
-// `score` (the backend's Ingrid score, `null` for minus infinity) follows
-// in parentheses; `undefined` (a client-side "Mots Défi" match) shows none.
-function appendWordLetters(item, word, highlightPos, unsafeSet, accented, score) {
+// `score` (the backend's Ingrid score, `null` for minus infinity) and `usage`
+// (its usage score, `null` when unknown) are kept on `item`, a parenthesized
+// value following the word according to the sort criterion
+// (applyInteractiveWordSort); `score === undefined` (a client-side "Mots Défi"
+// match) shows none.
+function appendWordLetters(item, word, highlightPos, unsafeSet, accented, score, usage) {
   let chars = Array.from(word).map((ch, pos) => ({ ch, positions: [pos] }));
   if (accented && accented !== word) {
     let pos = 0;
@@ -9619,11 +9634,164 @@ function appendWordLetters(item, word, highlightPos, unsafeSet, accented, score)
       item.appendChild(document.createTextNode(ch));
     }
   }
+  item.dataset.word = word;
   if (score !== undefined) {
+    item.dataset.fill = score === null ? "" : score;
+    item.dataset.usage = usage === null || usage === undefined ? "" : usage;
     const scoreEl = document.createElement("span");
     scoreEl.className = "interactive-word-score";
-    scoreEl.textContent = `\u00a0(${score === null ? "\u2212\u221e" : score})`;
     item.appendChild(scoreEl);
+  }
+}
+
+// One of the results' word lists is complete: remembers its order (the
+// backend's, by decreasing fill score) and the language of its words.
+function prepareInteractiveWordList(list, direction) {
+  list.classList.add("interactive-word-list");
+  list.dataset.language = direction === "down" && interactiveBilingualLanguage
+    ? interactiveBilingualLanguage : interactiveLanguage;
+  Array.from(list.children)
+    .filter((el) => el.classList.contains("interactive-word-item"))
+    .forEach((item, rank) => { item.dataset.rank = rank; });
+  applyInteractiveWordListSort(list);
+}
+
+// `item`'s value for the sort criterion: a number, `null` when it has none,
+// `undefined` for a proximity not fetched yet.
+function interactiveWordSortValue(item, language) {
+  if (interactiveSortCriterion === "fill" || interactiveSortCriterion === "usage") {
+    const raw = interactiveSortCriterion === "fill" ? item.dataset.fill : item.dataset.usage;
+    return raw === "" || raw === undefined ? null : Number(raw);
+  }
+  return interactiveProximity.get(`${language}:${item.dataset.word}`);
+}
+
+function interactiveWordValueText(value) {
+  if (value === undefined) return "\u2026";
+  if (interactiveSortCriterion === "fill") return value === null ? "\u2212\u221e" : String(value);
+  if (value === null) return "?";
+  return interactiveSortCriterion === "usage" ? `${value}/5` : value.toFixed(2);
+}
+
+// Orders `list` by the sort criterion and shows each word's value. With the
+// fill score the list keeps the backend's order, its theme words first; with
+// another criterion the words are sorted together, highest first, a word with
+// no value last, ties in the backend's order. "Mots Défi" matches always come
+// first and carry no value.
+function applyInteractiveWordListSort(list) {
+  const language = list.dataset.language;
+  const toggle = Array.from(list.children).find((el) => el.classList.contains("interactive-words-more-btn"));
+  const entries = Array.from(list.children)
+    .filter((el) => el.classList.contains("interactive-word-item"))
+    .map((item) => ({ item, value: interactiveWordSortValue(item, language) }));
+  const rank = (entry) => Number(entry.item.dataset.rank);
+  if (interactiveSortCriterion === "fill") {
+    entries.sort((a, b) => rank(a) - rank(b));
+  } else {
+    const key = ({ item, value }) => {
+      if (item.dataset.fill === undefined) return Infinity;
+      return value === null || value === undefined ? -Infinity : value;
+    };
+    entries.sort((a, b) => (key(b) - key(a) || 0) || rank(a) - rank(b));
+  }
+  for (const { item, value } of entries) {
+    list.insertBefore(item, toggle || null);
+    const scoreEl = item.querySelector(".interactive-word-score");
+    if (scoreEl) scoreEl.textContent = `\u00a0(${interactiveWordValueText(value)})`;
+  }
+  applyWordListLimit(list);
+}
+
+// The references of a proximity criterion, as POST /api/interactive/proximity
+// takes them.
+function interactiveProximityReferences(criterion) {
+  return criterion === "theme"
+    ? { theme: themeKeywords.join(" "), challenge_words: [] }
+    : { theme: "", challenge_words: interactiveChallengeWords };
+}
+
+// Sorts every list of the results, first fetching the proximities still
+// missing when the criterion is one. A proximity that cannot be fetched stays
+// unknown (shown "…", sorted last), with a message.
+async function refreshInteractiveWordSort() {
+  const lists = interactiveAnswers.querySelectorAll(".interactive-word-list");
+  const criterion = interactiveSortCriterion;
+  if (criterion === "theme" || criterion === "challenge") {
+    const references = interactiveProximityReferences(criterion);
+    const key = JSON.stringify([criterion, references]);
+    if (key !== interactiveProximityKey) {
+      interactiveProximityKey = key;
+      interactiveProximity = new Map();
+    }
+  }
+  lists.forEach(applyInteractiveWordListSort);
+  if (criterion !== "theme" && criterion !== "challenge") return;
+  const missing = new Map();
+  lists.forEach((list) => {
+    const language = list.dataset.language;
+    list.querySelectorAll(".interactive-word-item").forEach((item) => {
+      if (item.dataset.fill === undefined) return;
+      if (interactiveProximity.has(`${language}:${item.dataset.word}`)) return;
+      if (!missing.has(language)) missing.set(language, new Set());
+      missing.get(language).add(item.dataset.word);
+    });
+  });
+  if (!missing.size) return;
+  const request = ++interactiveProximityRequest;
+  const references = interactiveProximityReferences(criterion);
+  const proximity = interactiveProximity;
+  try {
+    await Promise.all(Array.from(missing, async ([language, words]) => {
+      const resp = await fetchWithTimeout("/api/interactive/proximity", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: interactiveJobId, language, words: Array.from(words), ...references }),
+      }, FETCH_TIMEOUT_MS);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const { scores } = await resp.json();
+      for (const word of words) {
+        const score = scores[word];
+        proximity.set(`${language}:${word}`, score === undefined ? null : score);
+      }
+    }));
+  } catch (err) {
+    if (request === interactiveProximityRequest) setInteractiveMessage(I18N[uiLanguage].interactiveSortError, true);
+    return;
+  }
+  if (request === interactiveProximityRequest && proximity === interactiveProximity) {
+    interactiveAnswers.querySelectorAll(".interactive-word-list").forEach(applyInteractiveWordListSort);
+  }
+}
+
+// Greys the proximity criteria without references, falling back on the fill
+// score when the current one becomes unavailable, then re-sorts.
+function updateInteractiveSortOptions() {
+  for (const option of interactiveSortSelect.options) {
+    if (option.value === "theme") option.disabled = themeKeywords.length === 0;
+    if (option.value === "challenge") option.disabled = interactiveChallengeWords.length === 0;
+  }
+  if (interactiveSortSelect.selectedOptions[0]?.disabled) interactiveSortSelect.value = "fill";
+  interactiveSortCriterion = interactiveSortSelect.value;
+  refreshInteractiveWordSort();
+}
+
+interactiveSortSelect.addEventListener("change", () => {
+  setInteractiveMessage("");
+  interactiveSortCriterion = interactiveSortSelect.value;
+  refreshInteractiveWordSort();
+});
+
+// Resolves the "Mots Défi" words' vectors as soon as they are defined, so a
+// word outside the glossaries is embedded once, then and there (best effort:
+// the first proximity sort does it otherwise).
+function resolveInteractiveChallengeVectors() {
+  if (!interactiveMode || !interactiveJobId || !interactiveChallengeWords.length) return;
+  for (const language of new Set([interactiveLanguage, interactiveBilingualLanguage || interactiveLanguage])) {
+    fetchWithTimeout("/api/interactive/proximity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id: interactiveJobId, language, challenge_words: interactiveChallengeWords }),
+    }, FETCH_TIMEOUT_MS).catch(() => {});
   }
 }
 
@@ -9755,9 +9923,9 @@ function renderInteractiveWords(themeWords, otherWords, slot, atCell) {
   const all = [
     ...challengeWords.map((word) => ({ word, cls: "interactive-word-challenge", unsafe: [] })),
     ...(themeWords || []).filter((entry) => !challengeSet.has(entry.word))
-      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "interactive-word-theme", unsafe: entry.unsafe, score: entry.score })),
+      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "interactive-word-theme", unsafe: entry.unsafe, score: entry.score, usage: entry.usage })),
     ...(otherWords || []).filter((entry) => !challengeSet.has(entry.word))
-      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "", unsafe: entry.unsafe, score: entry.score })),
+      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "", unsafe: entry.unsafe, score: entry.score, usage: entry.usage })),
   ];
   if (!all.length) return false;
   // Which position in `slot.cells` is the cell that was selected (shown
@@ -9791,13 +9959,13 @@ function renderInteractiveWords(themeWords, otherWords, slot, atCell) {
   header.appendChild(label);
   header.appendChild(createInteractiveWordsEyeToggle(block));
   block.appendChild(header);
-  all.forEach(({ word, accented, cls, unsafe, score }) => {
+  all.forEach(({ word, accented, cls, unsafe, score, usage }) => {
     const item = document.createElement("span");
     item.className = cls ? `interactive-word-item ${cls}` : "interactive-word-item";
     item.tabIndex = 0;
     const unsafeSet = new Set(unsafe);
     if (unsafeSet.size) item.classList.add("interactive-word-item-unsafe");
-    appendWordLetters(item, word, highlightIndex, unsafeSet, accented, score);
+    appendWordLetters(item, word, highlightIndex, unsafeSet, accented, score, usage);
     const pick = () => placeWord(word);
     item.addEventListener("click", pick);
     item.addEventListener("keydown", (e) => {
@@ -9808,10 +9976,10 @@ function renderInteractiveWords(themeWords, otherWords, slot, atCell) {
     });
     block.appendChild(item);
   });
-  block.classList.add("interactive-word-list");
-  applyWordListLimit(block);
+  prepareInteractiveWordList(block, slot.direction);
   interactiveAnswers.insertBefore(block, interactiveAnswers.firstChild);
   interactiveAnswers.hidden = false;
+  refreshInteractiveWordSort();
   return true;
 }
 
@@ -9909,7 +10077,7 @@ function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
     setInteractiveMessage("");
     renderInteractive();
   };
-  const appendWordList = (parent, words, cells, highlightPos, challengeWords) => {
+  const appendWordList = (parent, words, cells, highlightPos, challengeWords, direction) => {
     // "Mots Défi" matches shown first, in green — at the user's explicit
     // request. Any dictionary word already covered by a challenge-word
     // match is dropped from `words` to avoid listing it twice. `words`
@@ -9919,7 +10087,7 @@ function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
       ...challengeWords.map((word) => ({ word, unsafe: [], challenge: true })),
       ...words.filter((entry) => !challengeSet.has(entry.word)),
     ];
-    ordered.forEach(({ word, accented, unsafe, challenge, score }) => {
+    ordered.forEach(({ word, accented, unsafe, challenge, score, usage }) => {
       const item = document.createElement("span");
       item.className = challenge
         ? "interactive-word-item interactive-word-challenge"
@@ -9927,7 +10095,7 @@ function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
       item.tabIndex = 0;
       const unsafeSet = new Set(unsafe);
       if (unsafeSet.size) item.classList.add("interactive-word-item-unsafe");
-      appendWordLetters(item, word, highlightPos, unsafeSet, accented, score);
+      appendWordLetters(item, word, highlightPos, unsafeSet, accented, score, usage);
       const pick = () => placeWord(cells, word);
       item.addEventListener("click", pick);
       item.addEventListener("keydown", (e) => {
@@ -9938,8 +10106,7 @@ function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
       });
       parent.appendChild(item);
     });
-    parent.classList.add("interactive-word-list");
-    applyWordListLimit(parent);
+    prepareInteractiveWordList(parent, direction);
   };
   const block = document.createElement("div");
   block.className = "interactive-words-block";
@@ -9976,13 +10143,14 @@ function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
     letterMark.textContent = letter;
     letterCell.appendChild(letterMark);
     appendWordList(row.insertCell(), acrossWords, acrossCells, posAcross,
-      challengeWordsForCells(acrossCells, posAcross, letter));
+      challengeWordsForCells(acrossCells, posAcross, letter), "across");
     appendWordList(row.insertCell(), downWords, downCells, posDown,
-      challengeWordsForCells(downCells, posDown, letter));
+      challengeWordsForCells(downCells, posDown, letter), "down");
   }
   block.appendChild(table);
   interactiveAnswers.insertBefore(block, interactiveAnswers.firstChild);
   interactiveAnswers.hidden = false;
+  refreshInteractiveWordSort();
 }
 
 interactiveCrossingBtn.addEventListener("click", async () => {
@@ -10051,9 +10219,9 @@ function renderInteractiveBoundary(themeWords, otherWords, slot, side, label) {
   const all = [
     ...challengeWords.map((word) => ({ word, cls: "interactive-word-challenge", unsafe: [] })),
     ...(themeWords || []).filter((entry) => !challengeSet.has(entry.word))
-      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "interactive-word-theme", unsafe: entry.unsafe, score: entry.score })),
+      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "interactive-word-theme", unsafe: entry.unsafe, score: entry.score, usage: entry.usage })),
     ...(otherWords || []).filter((entry) => !challengeSet.has(entry.word))
-      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "", unsafe: entry.unsafe, score: entry.score })),
+      .map((entry) => ({ word: entry.word, accented: entry.accented, cls: "", unsafe: entry.unsafe, score: entry.score, usage: entry.usage })),
   ];
   if (!all.length) return false;
   const placeWord = (word) => {
@@ -10085,13 +10253,13 @@ function renderInteractiveBoundary(themeWords, otherWords, slot, side, label) {
   header.appendChild(labelEl);
   header.appendChild(createInteractiveWordsEyeToggle(block));
   block.appendChild(header);
-  all.forEach(({ word, accented, cls, unsafe, score }) => {
+  all.forEach(({ word, accented, cls, unsafe, score, usage }) => {
     const item = document.createElement("span");
     item.className = cls ? `interactive-word-item ${cls}` : "interactive-word-item";
     item.tabIndex = 0;
     const unsafeSet = new Set(unsafe);
     if (unsafeSet.size) item.classList.add("interactive-word-item-unsafe");
-    appendWordLetters(item, word, -1, unsafeSet, accented, score);
+    appendWordLetters(item, word, -1, unsafeSet, accented, score, usage);
     const pick = () => placeWord(word);
     item.addEventListener("click", pick);
     item.addEventListener("keydown", (e) => {
@@ -10102,10 +10270,10 @@ function renderInteractiveBoundary(themeWords, otherWords, slot, side, label) {
     });
     block.appendChild(item);
   });
-  block.classList.add("interactive-word-list");
-  applyWordListLimit(block);
+  prepareInteractiveWordList(block, slot.direction);
   interactiveAnswers.insertBefore(block, interactiveAnswers.firstChild);
   interactiveAnswers.hidden = false;
+  refreshInteractiveWordSort();
   return true;
 }
 
@@ -10366,6 +10534,8 @@ function enterInteractiveMode(state) {
   interactiveChallengeWords = Array.isArray(state.challenge_words)
     ? state.challenge_words.slice() : [];
   renderInteractiveChallengeList();
+  updateInteractiveSortOptions();
+  resolveInteractiveChallengeVectors();
   // Same restore onto the main generation form's own "Mots Défi
   // (personnalisation)" mini-form (#generate-challenge-panel), at the
   // user's explicit request — mirrors how `setThemeWords()` above
@@ -12084,7 +12254,7 @@ interactiveTitleProposeClearBtn.addEventListener("click", () => {
 function watchClearableResults() {
   document.querySelectorAll(".clearable-results").forEach((wrapper) => {
     const button = wrapper.querySelector(":scope > .results-clear-btn");
-    const zones = [...wrapper.children].filter((el) => el !== button);
+    const zones = [...wrapper.children].filter((el) => el !== button && !el.classList.contains("results-tool"));
     const sync = () => {
       const filled = zones.some((zone) => !zone.hidden
         && (zone.children.length > 0 || zone.textContent.trim() !== ""));

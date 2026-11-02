@@ -245,6 +245,27 @@ public final class QdrantStore {
         return out;
     }
 
+    /** {word: score} of `vector` against each of `words` in this language's tenant, a word
+     *  without a point being absent: an exact search restricted to their point ids
+     *  (backend/qdrant_store.py's score_words). */
+    public Map<String, Double> scoreWords(double[] vector, String lang, List<String> words) {
+        Map<String, Double> out = new LinkedHashMap<>();
+        if (words.isEmpty()) return out;
+        Map<String, String> idToWord = new LinkedHashMap<>();
+        for (String w : words) idToWord.put(wordPointId(lang, w), w);
+        List<Object> vec = new ArrayList<>(vector.length);
+        for (double d : vector) vec.add(d);
+        Map<String, Object> body = Json.obj("vector", vec, "limit", idToWord.size(), "with_payload", false,
+                "filter", Json.obj("must", Json.list(Json.obj("has_id", new ArrayList<>(idToWord.keySet())))),
+                "params", Json.obj("exact", true));
+        String p = "/collections/" + collection + "/points/search";
+        for (Object hit : Json.listOrEmpty(Json.get(ok(request("POST", p, body), "POST", p).json(), "result"))) {
+            String w = idToWord.get(String.valueOf(Json.get(hit, "id")));
+            if (w != null) out.put(w, ((Number) Json.get(hit, "score")).doubleValue());
+        }
+        return out;
+    }
+
     public List<Object> searchText(String text, String lang, int limit) {
         return search(new Embedder().embed(text), lang, limit, 0);
     }

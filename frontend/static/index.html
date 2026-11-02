@@ -1392,6 +1392,17 @@
                 data-i18n-aria="interactiveProposeClearBtn" data-i18n-title="interactiveProposeClearBtn">
           <span class="clear-icon" aria-hidden="true">🧽</span>
         </button>
+        <!-- Sort of the "Mots"/"Croisés"/"Début"/"Fin" results, left of the
+             sponge, shown only while #interactive-answers holds a list. -->
+        <label id="interactive-sort" class="results-tool">
+          <span data-i18n="interactiveSortLabel">Trier par :</span>
+          <select id="interactive-sort-select">
+            <option value="fill" data-i18n="interactiveSortFill">Facilité de remplissage</option>
+            <option value="usage" data-i18n="interactiveSortUsage">Score d'usage</option>
+            <option value="theme" data-i18n="interactiveSortTheme" disabled>Proximité avec le thème</option>
+            <option value="challenge" data-i18n="interactiveSortChallenge" disabled>Proximité avec les Mots Défi</option>
+          </select>
+        </label>
         <span id="interactive-message" role="status"></span>
         <div id="interactive-verify-report" hidden></div>
         <!-- Combined "Mots"/"Croisés" answer zone, at the user's explicit

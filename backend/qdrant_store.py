@@ -541,6 +541,23 @@ class QdrantStore:
                 out[id_to_word[point_id]] = vector
         return out
 
+    def score_words(self, vector, lang, words):
+        """`{word: score}` of `vector` against each of `words` in this language's
+        tenant, a word without a point being absent: an exact search restricted to
+        their point ids, far lighter than fetching their vectors, Qdrant computing
+        the similarities and sending neither vectors nor payloads."""
+        words = list(words)
+        if not words:
+            return {}
+        id_to_word = {word_point_id(lang, w): w for w in words}
+        resp = self._ok(self._request(
+            "POST", f"/collections/{self.collection}/points/search",
+            json={"vector": list(vector), "limit": len(id_to_word), "with_payload": False,
+                  "filter": {"must": [{"has_id": list(id_to_word)}]},
+                  "params": {"exact": True}},
+        ))
+        return {id_to_word[hit["id"]]: hit["score"] for hit in resp.json()["result"]}
+
     def search_text(self, text, lang=None, limit=10, embedder=None):
         own = embedder is None
         if own:

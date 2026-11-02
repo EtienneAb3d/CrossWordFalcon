@@ -268,6 +268,8 @@ public final class App {
         Glossary glossary;
         /** The "ingrid" fill method's state between "Suivant" clicks (Interactive.placeWordIngrid). */
         final Interactive.IngridState ingrid = new Interactive.IngridState();
+        /** The reference words' vectors of the proximity sorts (Themes.referenceVector). */
+        final Map<String, double[]> referenceVectors = new java.util.concurrent.ConcurrentHashMap<>();
 
         Session(DualIndex index, Set<String> priorityWords, Rng rng, Object seed, String resumedFrom, PW scrabbleWords) {
             this.scrabbleWords = scrabbleWords;
@@ -2863,6 +2865,27 @@ public final class App {
             if (!side.equals("start") && !side.equals("end")) throw http(400, "côté invalide");
             List<Object>[] res = Interactive.boundaryCandidates(gridOf(gridJson), d[0], d[1], s.index, cellsOf(cellsRaw), side, s.pw(), cw);
             return Json.obj("theme_words", res[0], "other_words", res[1]);
+        });
+        w.post("/api/interactive/proximity", r -> {
+            Body b = new Body(r.json());
+            String jobId = b.required("job_id");
+            String language = b.required("language");
+            List<String> words = b.strList("words");
+            String theme = b.str("theme", "");
+            List<String> challengeWords = b.strList("challenge_words");
+            Session s = session(jobId);
+            requireLang(language);
+            List<String> references = new ArrayList<>(Themes.themeTokens(theme));
+            if (references.isEmpty() && !Py.strip(theme).isEmpty()) references.add(theme);
+            for (String cw : challengeWords) if (!Py.strip(cw).isEmpty()) references.add(cw);
+            long started = System.nanoTime();
+            try {
+                return Json.obj("scores", Themes.referenceProximityScores(words, references, language, s.referenceVectors));
+            } catch (RuntimeException e) {
+                if (!Themes.isStoreError(e)) throw e;
+                Log.warning("interactive proximity unavailable after %.1fs: %s", (System.nanoTime() - started) / 1e9, e.getMessage());
+                throw http(503, Json.obj("code", "similar_unavailable", "message", e.getMessage()));
+            }
         });
         w.post("/api/interactive/impossible", r -> {
             Body b = new Body(r.json());

@@ -175,7 +175,8 @@ are combined: the spellings its accents alone tell apart from it
 (`accent_variant`; German: same MOT, any case) come from the freq
 wordlist's row (with its lemmas), the stage-5 English-Wiktionary Kaikki
 dump (headwords and their listed/form-of inflected forms with their
-lemma, `_kaikki_forms`), Hunspell as-is/title-cased (`-G`) and every
+lemma, `_kaikki_forms`, a form tagged `auxiliary` or `multiword-construction`
+being another word — a verb's auxiliary — and left out, `_not_a_word_form`), Hunspell as-is/title-cased (`-G`) and every
 Hunspell suggestion with the same MOT (`-a`, one process per CPU,
 `_hunspell_suggestions`), each spelling also getting its `-m` stems.
 ACCENTUE lists every spelling found, the main one first — the first
@@ -641,7 +642,8 @@ json`. Holds all server-side state in plain module dicts/lists:
   interactive/start` (the black-cell pattern alone, no word placed,
   `_run_interactive_job`), `/step` (place one word), `/clean` (remove/blacken
   impossible zones, optional deep mode), `/candidates` (dictionary words
-  for a slot), `/crossing` (letter/word options at one cell's crossing),
+  for a slot), `/proximity` (each word's best similarity with the theme or the
+  "Mots Défi" words, for the results' sort), `/crossing` (letter/word options at one cell's crossing),
   `/boundary` (dictionary words that can start or end a slot, even
   shorter than its full length), `/stats` (read-only statistical letter
   preview for every still-empty cell), `/impossible` (read-only diagnostic
@@ -2994,7 +2996,7 @@ index) all at once, 0 when that bound is 0; `None`/null (minus infinity,
 last) for a word carrying a letter no candidate of a crossing slot has;
 ties by word.
 All three of these candidate-listing functions return every word wrapped
-as `{"word", "accented", "unsafe", "score"}` (`_words_with_unsafe_positions`,
+as `{"word", "accented", "unsafe", "score", "usage"}` (`_words_with_unsafe_positions`,
 Java `Interactive.wordsWithUnsafe`) instead of a bare string — `accented`
 is the word's main spelling read from its wordlist row (`word_forms`,
 the word itself when it has none), `unsafe` the sorted list of 0-indexed positions within that
@@ -3019,9 +3021,33 @@ grid form, each character marked by the grid positions it stands for,
 adding `.interactive-word-unsafe-letter` (red
 underline, `--error`) to a flagged position — composing with the existing
 `.interactive-word-highlight-letter` (blue, the selected-cell letter) when
-both land on the same letter, then the word's `score` in parentheses
-(`.interactive-word-score`, grey, "−∞" for a null score; none for a
-client-side "Mots Défi" match). Each list (a "Mots"/"Début"/"Fin" block,
+both land on the same letter, then, in parentheses, its value for the sort
+criterion (`.interactive-word-score`, grey; none for a client-side "Mots Défi"
+match). `#interactive-sort-select`, left of the sponge of
+`#interactive-answers-zone`, shown only while `#interactive-answers` holds a
+list, sorts every list of the zone (`applyInteractiveWordListSort`,
+`refreshInteractiveWordSort`): "fill" (the default: the `score`, "−∞" for
+null, the backend's order, theme words first), "usage" (`usage`, "4/5", "?"
+when unknown), "theme" and "challenge" (the best similarity with the form's
+"Thématique" words or the "Mots Défi" list, 2 decimals, "?" for a word with no
+vector, "…" not fetched yet, greyed while they have no reference,
+`updateInteractiveSortOptions`, which falls back on "fill"). Outside "fill" the
+words of a list are sorted together, highest first, no value last, ties in the
+backend's order; "Mots Défi" matches stay first. The proximities are fetched
+on demand, only for the words missing from `interactiveProximity` (reset when
+the criterion's references change), through `POST /api/interactive/proximity`
+(`{job_id, language, words, theme, challenge_words}` -> `{scores}`, a word with
+no point absent; 503 `similar_unavailable`, shown as `interactiveSortError`).
+`_reference_proximity_scores` (Java `Themes.referenceProximityScores`) keeps
+each word's best score over the references, read from its point in "words",
+else "words_multi", by `QdrantStore.score_words` (Java `scoreWords`: an exact
+search filtered on the point ids, with no vector or payload sent back);
+`_reference_vector` (Java `Themes.referenceVector`) finds a reference's vector
+from its grid form in those two collections, in the words' language, else
+embeds it as typed, and keeps it in the session (`reference_vectors`, Java
+`Session.referenceVectors`). `resolveInteractiveChallengeVectors` resolves the
+"Mots Défi" words as soon as they are defined (or a session opens), through the
+same route with no `words`. Each list (a "Mots"/"Début"/"Fin" block,
 each "Croisés" word cell) shows its first `WORD_LIST_PREVIEW_SIZE` (20)
 words not hidden by the eye toggle, the rest `.interactive-word-item-
 overflow`; while the list holds more, a button at its end switches

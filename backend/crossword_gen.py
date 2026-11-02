@@ -13581,16 +13581,27 @@ def _ingrid_scored(words, cells, crossing_map, index, known, used_words, challen
     }
 
 
+def _known_usage_score(idx, word):
+    """`word`'s usage score in the length index `idx`, `None` when unrated, absent
+    from it, or in a language without usage scores."""
+    usage = idx.get("usage") if idx is not None else None
+    if usage is None:
+        return None
+    score = usage.get(word, USAGE_SCORE_UNKNOWN)
+    return None if score == USAGE_SCORE_UNKNOWN else score
+
+
 def _words_with_unsafe_positions(words, cells, crossing_map, index, known, used_words,
                                   challenge_words, scores):
     """Wraps a word list (in `_ingrid_scored`'s order, as returned by
     `interactive_slot_candidates`/`interactive_crossing_words`/
     `interactive_boundary_candidates`) into `{"word", "accented",
-    "unsafe", "score"}` dicts, `accented` being the word's main spelling
+    "unsafe", "score", "usage"}` dicts, `accented` being the word's main spelling
     read from its wordlist row (`word_forms`: accents, capitals, a
     multi-word expression's separators — the word itself when it has no
     row), `unsafe` the sorted list of `_unsafe_letter_positions` for that
-    candidate, `score` its Ingrid score (`scores`) — the shape the
+    candidate, `score` its Ingrid score (`scores`), `usage` its usage score
+    (`None` when unrated or in a language without usage scores) — the shape the
     "Mots"/"Croisés"/"Début"/"Fin" panels use to show each candidate in
     its own spelling with its score, and underline, in red, whichever of
     its letters would create a new impossible crossing slot if placed."""
@@ -13604,6 +13615,7 @@ def _words_with_unsafe_positions(words, cells, crossing_map, index, known, used_
                                           challenge_words)
             ),
             "score": scores.get(w),
+            "usage": _known_usage_score(length_index.get(len(w)), w),
         }
         for w in words
     ]

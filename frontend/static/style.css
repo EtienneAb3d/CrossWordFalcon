@@ -1754,6 +1754,30 @@ button:disabled {
 .results-clear-btn[hidden] {
   display: none;
 }
+/* The results' sort selector, left of the sponge (1.6rem wide, 0.4rem gap),
+   on a line of its own above the lists so it covers neither a block's "eye"
+   button nor the message; shown only while the answers zone holds a list. */
+#interactive-sort {
+  display: none;
+}
+#interactive-answers-zone:has(#interactive-answers:not([hidden]):not(:empty)) {
+  padding-top: 2rem;
+}
+#interactive-answers-zone:has(#interactive-answers:not([hidden]):not(:empty)) #interactive-sort {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.3rem;
+  position: absolute;
+  top: 0;
+  right: 2rem;
+  height: 1.6rem;
+  font-size: 0.8rem;
+}
+#interactive-sort select {
+  font-size: 0.8rem;
+  padding: 0.1rem 0.25rem;
+}
 
 /* Sponge character (U+1F9FD) replacing the "Effacer" text on every
    "Effacer" button of the app (Dictionnaire, Paraphraseur, Interactif
@@ -2373,8 +2397,12 @@ button:disabled {
   font-weight: 600;
 }
 
+/* A form with many lemmas wraps inside its column: the definitions keep
+   their place whatever the length of the lemma list. */
 .dictionary-form-cell {
-  white-space: nowrap;
+  width: 25%;
+  min-width: 10rem;
+  overflow-wrap: anywhere;
   font-weight: 600;
 }
 

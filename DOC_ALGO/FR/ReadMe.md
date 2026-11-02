@@ -2252,6 +2252,13 @@ machineries de tentatives parallèles :
   (déjà impossible) compte comme une case non croisée. Un mot portant une
   lettre qu'aucun candidat d'un croisement n'a reçoit « −∞ » et passe en
   dernier. Le plafond de 300 garde les mots les mieux notés.
+- Le sélecteur **Trier par**, en haut des résultats, classe autrement les
+  listes déjà renvoyées, sans changer les mots retenus par ce plafond
+  (`frontend/static/script.js`, `applyInteractiveWordListSort`) : par note
+  d'usage (`_known_usage_score`), ou par proximité avec le thème ou les Mots
+  Défi, le meilleur score de similarité entre le vecteur du mot et celui de
+  chacune de ces références (`backend/app.py`, `_reference_proximity_scores`,
+  `_reference_vector`).
 - Ces trois fonctions renvoient chaque mot avec ses **positions
   dangereuses** (`_words_with_unsafe_positions`) : les positions où écrire
   cette lettre rendrait **nouvellement** un emplacement croisé impossible à

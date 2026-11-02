@@ -97,6 +97,17 @@ def _freq_rows(lang):
     return rows
 
 
+# Tags of a listed "form" that is another word, not an inflection of the
+# entry: a verb's auxiliary ("haben", "avére") and the auxiliary of its
+# compound tenses ("ayant", "avoir").
+NOT_A_WORD_FORM_TAGS = {"auxiliary", "multiword-construction"}
+
+
+def _not_a_word_form(tags):
+    """True when a Kaikki form with these tags is no inflection of its entry."""
+    return not NOT_A_WORD_FORM_TAGS.isdisjoint(tags)
+
+
 def _kaikki_forms(lang, wanted):
     """{MOT: {spelling: set(lemmas)}} for the MOTs in `wanted`, read from
     the Kaikki dump: headwords (their own lemma, or the one their form-of
@@ -131,6 +142,8 @@ def _kaikki_forms(lang, wanted):
             for f in entry.get("forms") or []:
                 tags = f.get("tags") or []
                 if "table-tags" in tags or "inflection-template" in tags or "romanization" in tags:
+                    continue
+                if _not_a_word_form(tags):
                     continue
                 # A form listed under an inflected entry (an alternative
                 # spelling: "macèrerions" under "macérerions") shares

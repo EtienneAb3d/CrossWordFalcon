@@ -526,7 +526,7 @@ retirés ; en allemand, même MOT quelle que soit la casse), trouvées dans :
    lemmes) ;
 2. le dump Wiktionnaire anglais de la langue (celui de l'étape 5,
    `data/wiktionary/<Nom>-en.jsonl.gz`) : chaque entrée et chacune des
-   formes fléchies qu'elle liste, avec son lemme (`_kaikki_forms`) ;
+   formes fléchies qu'elle liste, avec son lemme, hors auxiliaire du verbe (`_kaikki_forms`, `_not_a_word_form`) ;
 3. Hunspell : l'entrée telle quelle ou avec une majuscule (noms allemands) ;
 4. les suggestions de Hunspell (`hunspell -a`, un processus par cœur) :
    toutes celles de même MOT (« macheriez » → « mâcheriez »)

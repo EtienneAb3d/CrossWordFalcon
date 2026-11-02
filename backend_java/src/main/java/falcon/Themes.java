@@ -305,6 +305,53 @@ public final class Themes {
         return out;
     }
 
+    /** The vector of a reference word of a proximity sort, kept in `cache` (the Interactive
+     *  session's): its grid form's point in "words", else in "words_multi", else the
+     *  embedding of `text` as typed (backend/app.py's _reference_vector). */
+    static double[] referenceVector(String text, String lang, Map<String, double[]> cache) {
+        String key = lang + "\n" + text;
+        double[] cached = cache.get(key);
+        if (cached != null) return cached;
+        String gridForm = falcon.gen.Words.challengeWordGridForm(text);
+        double[] vec = null;
+        if (gridForm != null && !gridForm.isEmpty()) {
+            vec = QDRANT.retrieveWordVectors(lang, List.of(gridForm), 2000).get(gridForm);
+            if (vec == null) {
+                try {
+                    vec = QDRANT_MULTI.retrieveWordVectors(lang, List.of(gridForm), 2000).get(gridForm);
+                } catch (QdrantStore.QdrantStoreError e) {
+                    // no expression vector
+                }
+            }
+        }
+        if (vec == null) vec = EMBEDDER.embed(text);
+        cache.put(key, vec);
+        return vec;
+    }
+
+    /** {word: best similarity with any of `references`}, a word with no point being absent
+     *  (backend/app.py's _reference_proximity_scores). */
+    public static Map<String, Double> referenceProximityScores(List<String> words, List<String> references, String lang,
+                                                               Map<String, double[]> cache) {
+        List<double[]> vectors = new ArrayList<>();
+        for (String ref : references) vectors.add(referenceVector(ref, lang, cache));
+        Map<String, Double> out = new LinkedHashMap<>();
+        for (double[] vec : vectors) {
+            Map<String, Double> scores = new LinkedHashMap<>(QDRANT.scoreWords(vec, lang, words));
+            List<String> missing = new ArrayList<>();
+            for (String w : words) if (!scores.containsKey(w)) missing.add(w);
+            if (!missing.isEmpty()) {
+                try {
+                    scores.putAll(QDRANT_MULTI.scoreWords(vec, lang, missing));
+                } catch (QdrantStore.QdrantStoreError e) {
+                    // no expression score
+                }
+            }
+            scores.forEach((w, s) -> out.merge(w, s, Math::max));
+        }
+        return out;
+    }
+
     static void writeThemeLog(String shortId, String theme, String description, List<Object[]> words, String language,
                               List<Object[]> keywordLists, List<String> searched, Double minScore, Double rejectThreshold,
                               Double requestedMinScore) {

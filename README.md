@@ -495,6 +495,11 @@ you enter this mode, so you can look up words while you fill in the grid:
   the **"Symmetry"** menu applies one. Any move is allowed: letters under
   the new black cells are overwritten, and whatever becomes impossible shows
   in color so you can fix it later.
+- The word lists of the **"Words"**, **"Crossings"**, **"Start"** and
+  **"End"** buttons can be sorted with the **"Sort by"** menu above them:
+  ease of filling, how common the word is, or closeness in meaning to the
+  theme or to your Challenge Words (these last two are greyed out until you
+  have a theme or Challenge Words).
 - A **"Challenge Words"** box beside the grid lets you list words you
   want to see in the finished puzzle: type one and click **+** (or just
   type a space or other punctuation right after it) to add it, or **−**

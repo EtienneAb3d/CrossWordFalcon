@@ -1552,6 +1552,19 @@ real letter. Both update after every edit.
   highest usage rating and the highest frequency of its length. "(−∞)"
   marks a word with a letter no word of a crossing emplacement can take;
   such words come last (`backend/crossword_gen.py`, `_ingrid_scored`).
+- The **Trier par / Sort by** selector, at the top of the results, left of
+  their sponge button, sorts all these lists by one of four criteria, the
+  value in parentheses following it: **Facilité de remplissage / Ease of
+  filling** (the score above, the default, theme words first); **Score d'usage
+  / Usage score** ("4/5"); **Proximité avec le thème / Proximity to the theme**
+  and **Proximité avec les Mots Défi / Proximity to the Challenge Words** (the
+  word's best similarity, from 0 to 1, with any word of the "Thématique" field
+  or of the "Mots Défi" list; greyed while that field or list is empty). With
+  the last three, theme words and the others are sorted together, and "?" marks
+  a word with no value, listed last. "Mots Défi" matches always stay first
+  (`frontend/static/script.js`, `applyInteractiveWordListSort`,
+  `refreshInteractiveWordSort`; `backend/app.py`,
+  `_reference_proximity_scores`).
 - Each list shows its first 20 words; a **Plus / More** button at the
   end of the list shows all of them, and then becomes **Moins / Less**,
   which goes back to the first 20. Words hidden by the eye button do
